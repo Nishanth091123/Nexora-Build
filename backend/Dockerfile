@@ -6,6 +6,8 @@ WORKDIR /home/user/app
 COPY --chown=user requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY --chown=user app ./app
+# the app writes temp files / local backups here – owned by the app user (Render runs as "user")
+RUN mkdir -p /home/user/app/storage && chown -R user:user /home/user/app
 USER user
 # Render gives the port in $PORT (Hugging Face used 7860)
 EXPOSE 10000

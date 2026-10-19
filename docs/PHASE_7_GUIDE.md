@@ -117,7 +117,7 @@ You should see `[OK] Secret check passed` and then `[OK] PUSHED`. The first push
    - Paste everything from render_env.txt (Ctrl+A, Ctrl+C in Notepad) and add the variables.
 5. Open **Advanced** → **Health Check Path** → `/api/health`.
 6. Press **Deploy Web Service**. The first build takes 5–8 minutes. When the log shows `Ready`, your address appears at the top, for example `https://nexora-build-api.onrender.com`.
-7. Open `<address>/api/health` in the browser. It should show `"version":"1.7.5-phase7"` and `"storage":"hf"`.
+7. Open `<address>/api/health` in the browser. It should show `"version":"1.7.6-phase7"` and `"storage":"hf"`.
 8. **Delete render_env.txt** from the project folder.
 
 Notes:
@@ -218,7 +218,7 @@ Tick each item on your PC first, then on the online address.
 30. Backup Now → the backup appears → Download works.
 
 **Online**
-31. `<Render address>/api/health` shows `1.7.5-phase7` and `"storage":"hf"`.
+31. `<Render address>/api/health` shows `1.7.6-phase7` and `"storage":"hf"`.
 32. The Vercel address opens, login works, and you see the same projects.
 33. On the phone: install the app, take a camera photo, and open an invite link from another phone.
 

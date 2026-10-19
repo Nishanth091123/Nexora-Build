@@ -17,7 +17,12 @@ class LocalStorage:
 
     def __init__(self, root: Path):
         self.root = root
-        self.root.mkdir(parents=True, exist_ok=True)
+        try:
+            self.root.mkdir(parents=True, exist_ok=True)
+        except OSError:  # read-only app folder on a server – use the temp folder instead
+            import tempfile
+            self.root = Path(tempfile.gettempdir()) / "nexora_storage"
+            self.root.mkdir(parents=True, exist_ok=True)
 
     def _path(self, key: str) -> Path:
         p = (self.root / key).resolve()
