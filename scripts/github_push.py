@@ -53,6 +53,8 @@ def main() -> int:
     if not git("config", "user.email", check=False, capture=True).stdout.strip():
         git("config", "user.email", "Nishanth091123@users.noreply.github.com")  # keeps your real email private
 
+    git("config", "core.autocrlf", "false")  # no "LF will be replaced by CRLF" warnings
+    git("config", "http.postBuffer", "524288000")  # more stable pushes on slow connections
     # 1) .env must be ignored
     if git("check-ignore", "-q", ".env", check=False).returncode != 0:
         sys.exit("[STOP] .env is NOT ignored by git. .gitignore must contain the line  .env")
@@ -102,7 +104,11 @@ def main() -> int:
             print("[FAIL] GitHub has changes that clash with this PC. Send this message to Claude.")
             return 1
     print("Pushing to", REMOTE, "...")
-    r = git("push", "-u", "origin", "main", check=False)
+    for attempt in range(3):  # a dropped connection ("RPC failed", "hung up") is retried
+        r = git("push", "-u", "origin", "main", check=False)
+        if r.returncode == 0:
+            break
+        print(f"   connection dropped – trying again ({attempt + 2}/3)...")
     if r.returncode != 0:
         print("[FAIL] Push did not work. Check: the repository exists on GitHub and is EMPTY, and you logged in.")
         print("       If GitHub says 'rejected (fetch first)', the repo is not empty – make it again without README.")

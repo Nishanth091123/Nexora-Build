@@ -65,10 +65,6 @@ Cloudflare asks for a **card or PayPal** only to activate R2 (identity check; no
 
 👉 If you have **no card / PayPal**, tell me. The backend storage is S3-compatible, so I'll switch to another free provider without changing anything else.
 
-### 3.4 Hugging Face (backend hosting)
-1. https://huggingface.co/join
-2. Settings → **Access Tokens** → New token → type **Write** → name `nexora-deploy` → copy into `.env` as `HF_TOKEN`.
-3. Don't create the Space yet – I'll give exact steps in Phase 1.
 
 ### 3.5 Vercel (frontend hosting)
 1. https://vercel.com/signup → **Continue with GitHub**.
@@ -108,7 +104,6 @@ For me, just reply with which keys are ready (✅/❌), not the keys themselves.
 [ ] GitHub repo pushed
 [ ] Neon DATABASE_URL in .env
 [ ] R2 bucket + keys in .env   (or: "no card – use alternative")
-[ ] HF write token in .env
 [ ] Vercel account linked to GitHub
 [ ] Gemini / Groq / OpenRouter keys in .env
 ```

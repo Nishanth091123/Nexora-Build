@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 PROJECT_DIR = BACKEND_DIR.parent
 load_dotenv(PROJECT_DIR / ".env")
-load_dotenv(BACKEND_DIR / ".env")  # optional override (used on Hugging Face)
+load_dotenv(BACKEND_DIR / ".env")  # optional override
 
 
 def env(name: str, default: str = "") -> str:
@@ -15,7 +15,7 @@ def env(name: str, default: str = "") -> str:
 
 
 APP_NAME = env("APP_NAME", "Nexora Build")
-APP_VERSION = "1.7.9-phase7"
+APP_VERSION = "1.7.11-phase7"
 
 OWNER_USERNAME = env("OWNER_USERNAME", "nishanth_s").lower()
 OWNER_EMAIL = env("OWNER_EMAIL").lower()
@@ -27,14 +27,12 @@ JWT_ALGORITHM = "HS256"
 
 DATABASE_URL = env("DATABASE_URL")
 
-STORAGE_BACKEND = env("STORAGE_BACKEND", "auto")  # auto | local | r2 | hf
+STORAGE_BACKEND = env("STORAGE_BACKEND", "db")  # db (files inside the database) | local | r2
 LOCAL_STORAGE_DIR = Path(env("LOCAL_STORAGE_DIR", str(BACKEND_DIR / "storage")))
 R2_ACCOUNT_ID = env("R2_ACCOUNT_ID")
 R2_ACCESS_KEY_ID = env("R2_ACCESS_KEY_ID")
 R2_SECRET_ACCESS_KEY = env("R2_SECRET_ACCESS_KEY")
 R2_BUCKET = env("R2_BUCKET", "nexora-build-files")
-HF_TOKEN = env("HF_TOKEN")
-HF_FILES_REPO = env("HF_FILES_REPO")  # private dataset repo for files when STORAGE_BACKEND=hf (blank = <you>/nexora-build-files)
 
 FRONTEND_ORIGINS = [o.strip() for o in env(
     "FRONTEND_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",") if o.strip()]

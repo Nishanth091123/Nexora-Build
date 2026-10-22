@@ -78,8 +78,8 @@ export function PushCard() {
       {user?.role === "owner" && cronUrl && (
         <div className="mt-4 rounded-lg border border-line bg-slate-50 p-3 text-xs text-slate-600">
           <div className="mb-1 font-semibold text-navy-ink">{T(ta, "Daily check link (owner, set up once)", "Daily check link (owner, ஒரு தடவை setup)")}</div>
-          <p>{T(ta, "The free online server sleeps when nobody uses it. At cron-job.org (free) create a job that opens this link every day at 06:00 and 17:00 (India time) – it wakes the server and sends the alerts.",
-            "Free online server யாரும் use பண்ணலைனா தூங்கிடும். cron-job.org-ல் (free) இந்த link-ஐ தினமும் 06:00, 17:00 (India time) open பண்ற job create பண்ணுங்க – server எழுந்து alerts அனுப்பும்.")}</p>
+          <p>{T(ta, "The free online server sleeps after 15 minutes without use – then the app takes about a minute to open. At cron-job.org (free) set ONE job with this link to \"Every 10 minutes\". This keeps the server awake (the app opens fast) and sends the alerts at 6 AM / 5 PM. Each project is alerted only once a day, so running it often is safe.",
+            "Free online server 15 நிமிடம் யாரும் use பண்ணலைனா தூங்கிடும் – அப்புறம் app open ஆக ஒரு நிமிடம் ஆகும். cron-job.org-ல் (free) இந்த link-ஓட ஒரே job-ஐ \"Every 10 minutes\"-க்கு வையுங்க. Server எப்பவும் விழிச்சிருக்கும் (app வேகமா open ஆகும்), alerts காலை 6 / மாலை 5 மணிக்கு போகும். ஒரு project-க்கு ஒரு நாளைக்கு ஒரு தடவை தான் alert, அதனால அடிக்கடி ஓடினாலும் safe.")}</p>
           <div className="mt-2 flex items-center gap-2"><code className="min-w-0 flex-1 truncate rounded bg-white px-2 py-1">{cronUrl}</code>
             <button className="btn-outline btn-sm" onClick={copy}><Copy size={13} />{T(ta, "Copy", "Copy")}</button></div>
         </div>

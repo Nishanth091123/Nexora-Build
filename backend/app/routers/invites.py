@@ -161,19 +161,19 @@ def notifications(user: User = Depends(get_current_user),
         invites = {i.id: i.label for i in db.query(InviteLink).all()}
         for u in db.query(User).filter(User.status == "pending").order_by(User.created_at.desc()).all():
             via = f" via invite '{invites.get(u.invited_via, '')}'" if u.invited_via else ""
-            items.append({"kind": "user", "title": f"{u.full_name or u.username} wants to join{via}",
+            items.append({"key": f"user:{u.id}", "kind": "user", "title": f"{u.full_name or u.username} wants to join{via}",
                           "link": "/settings?tab=users", "at": u.created_at.isoformat()})
     live = {p.id: p.name for p in db.query(Project).filter(Project.is_hidden.is_(False), Project.status != "archived").all()}
     q = db.query(Approval).filter(Approval.status == "pending", Approval.is_hidden.is_(False))
     for a in q.all():
         if a.project_id in live and (a.approver_id == user.id or (user.role == "owner" and not a.approver_id)):
-            items.append({"kind": "approval", "title": f"Approval needed: {a.title} ({live[a.project_id]})",
+            items.append({"key": f"approval:{a.id}", "kind": "approval", "title": f"Approval needed: {a.title} ({live[a.project_id]})",
                           "link": "/projects?tab=approvals", "at": a.created_at.isoformat()})
     today = _date.today()
     for t in db.query(Task).filter(Task.status != "completed", Task.is_hidden.is_(False), Task.due_date.isnot(None),
                                    Task.due_date < today).all():
         if t.project_id in live and (t.assignee_id == user.id or (user.role == "owner" and not t.assignee_id)):
-            items.append({"kind": "task", "title": f"Overdue task: {t.title} ({live[t.project_id]})",
+            items.append({"key": f"task:{t.id}:{t.due_date}", "kind": "task", "title": f"Overdue task: {t.title} ({live[t.project_id]})",
                           "link": "/projects?tab=tasks", "at": t.due_date.isoformat()})
     items.sort(key=lambda x: x["at"], reverse=True)
     try:  # today's weather risks for my sites come first
@@ -181,4 +181,39 @@ def notifications(user: User = Depends(get_current_user),
         items = bell_items(db, user) + items
     except Exception:
         pass
-    return {"count": len(items), "items": items[:30]}
+    st = _notif_state(db, user)
+    items = [dict(i, read=i["key"] in st["read"]) for i in items if i["key"] not in st["dismissed"]]
+    return {"count": sum(1 for i in items if not i["read"]), "items": items[:30]}
+
+
+def _notif_state(db: Session, user: User) -> dict:
+    from ..models import AppSetting
+    s = db.get(AppSetting, f"notif:{user.id}")
+    v = (s.value if s else None) or {}
+    return {"read": set(v.get("read") or []), "dismissed": set(v.get("dismissed") or [])}
+
+
+class NotifKeys(BaseModel):
+    keys: list[str] = []
+    action: str = "read"  # read | unread | delete
+
+
+@notif_router.post("/mark")
+def mark(body: NotifKeys, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Mark notifications read / unread, or delete them (only for this user; the thing itself is not changed)."""
+    from ..models import AppSetting
+    st = _notif_state(db, user)
+    keys = {k[:120] for k in body.keys[:100]}
+    if body.action == "read":
+        st["read"] |= keys
+    elif body.action == "unread":
+        st["read"] -= keys
+    elif body.action == "delete":
+        st["dismissed"] |= keys
+    else:
+        raise HTTPException(400, "action must be read, unread or delete")
+    s = db.get(AppSetting, f"notif:{user.id}") or AppSetting(key=f"notif:{user.id}", value={})
+    s.value = {"read": sorted(st["read"])[-300:], "dismissed": sorted(st["dismissed"])[-300:]}
+    db.add(s)
+    db.commit()
+    return {"ok": True}

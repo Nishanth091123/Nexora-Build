@@ -2,7 +2,7 @@
    Pages / scripts / images: network first, cached copy when offline.
    API GET (data): network first, cached copy when offline (shown with the offline bar).
    API writes are never cached here – the app queues them itself (src/lib/outbox.ts). */
-const VERSION = "nexora-v9";
+const VERSION = "nexora-v11";
 const SHELL = ["/", "/manifest.webmanifest", "/favicon.svg", "/icons/icon-192.png", "/icons/icon-512.png"];
 
 self.addEventListener("install", (e) => {
@@ -61,8 +61,14 @@ self.addEventListener("push", (e) => {
 self.addEventListener("notificationclick", (e) => {
   e.notification.close();
   const url = new URL((e.notification.data && e.notification.data.url) || "/", self.location.origin).href;
-  e.waitUntil(self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
-    for (const c of list) { if (c.url.startsWith(self.location.origin)) { c.navigate(url); return c.focus(); } }
-    return self.clients.openWindow(url);
-  }));
+  e.waitUntil((async () => {
+    const list = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    for (const c of list) {
+      if (!c.url.startsWith(self.location.origin)) continue;
+      try { await c.focus(); } catch { /* ignore */ }
+      try { if (c.url !== url && "navigate" in c) await c.navigate(url); } catch { /* page not controlled yet – it is open anyway */ }
+      return;
+    }
+    await self.clients.openWindow(url);  // app closed – open it
+  })());
 });

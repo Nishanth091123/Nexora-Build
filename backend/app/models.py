@@ -2,7 +2,7 @@
 from datetime import date, datetime, timezone
 from typing import Optional
 
-from sqlalchemy import (JSON, BigInteger, Boolean, Date, DateTime, Float, ForeignKey,
+from sqlalchemy import (JSON, BigInteger, Boolean, Date, DateTime, Float, ForeignKey, LargeBinary,
                         Integer, String, Text, UniqueConstraint)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -589,4 +589,14 @@ class PushSubscription(Base):
     auth: Mapped[str] = mapped_column(String(100))
     device: Mapped[str] = mapped_column(String(200), default="")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class StoredBlob(Base):
+    """File contents kept inside the database (Phase 7.11) – drawings, photos, documents, backups.
+    Works the same on the PC and online; no extra service or card needed."""
+    __tablename__ = "stored_blobs"
+    key: Mapped[str] = mapped_column(String(400), primary_key=True)
+    data: Mapped[bytes] = mapped_column(LargeBinary)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

@@ -9,6 +9,6 @@ COPY --chown=user app ./app
 # the app writes temp files / local backups here – owned by the app user (Render runs as "user")
 RUN mkdir -p /home/user/app/storage && chown -R user:user /home/user/app
 USER user
-# Render gives the port in $PORT (Hugging Face used 7860)
+# Render gives the port in $PORT
 EXPOSE 10000
 CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-10000} --proxy-headers --forwarded-allow-ips '*' --timeout-keep-alive 75"]

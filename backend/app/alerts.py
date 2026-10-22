@@ -160,7 +160,8 @@ def bell_items(db: Session, user: User) -> list[dict]:
             missing.append(p)
             continue
         for r in found:
-            items.append({"kind": "weather", "title": f"⚠️ {p.name}: {r['title']} – {r['body']}", "link": "/",
+            items.append({"key": f"weather:{p.id}:{now.date()}:{r['kind']}", "kind": "weather",
+                          "title": f"⚠️ {p.name}: {r['title']}", "body": r["body"], "link": "/",
                           "at": now.isoformat()})
     if missing and not _refreshing.is_set():  # fetch in the background; the next bell check shows them
         _refreshing.set()

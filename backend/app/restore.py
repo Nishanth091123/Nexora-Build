@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from .models import Base
 
-SKIP = {"schema_migrations"}  # recreated by the app itself
+SKIP = {"schema_migrations", "stored_blobs"}  # recreated by the app itself / file contents (not in backups)
 LABELS = {
     "projects": "Projects", "files": "Documents / files", "designs": "Designs", "estimates": "Estimates",
     "drawing_analyses": "Drawing analyses", "vastu_reports": "Vastu reports", "schedule_stages": "Schedule stages",

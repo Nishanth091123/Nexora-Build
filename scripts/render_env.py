@@ -13,7 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 NEED = ["APP_NAME", "OWNER_USERNAME", "OWNER_EMAIL", "OWNER_FULL_NAME", "OWNER_INITIAL_PASSWORD", "JWT_SECRET",
         "DEFAULT_LANGUAGE", "DEFAULT_STATE", "DEFAULT_SPEC_LEVEL", "DATABASE_URL",
-        "STORAGE_BACKEND", "HF_TOKEN", "HF_FILES_REPO", "R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET",
+        "STORAGE_BACKEND", "R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET",
         "GEMINI_API_KEY", "GROQ_API_KEY", "OPENROUTER_API_KEY", "GEMINI_VISION_MODEL", "GROQ_VISION_MODEL", "OPENROUTER_VISION_MODEL",
         "GROQ_MODEL", "OPENROUTER_MODEL", "GEMINI_EMBED_MODEL", "GROQ_WHISPER_MODEL", "MAX_UPLOAD_MB", "AUTO_BACKUP_HOURS",
         "FRONTEND_ORIGINS"]
@@ -33,9 +33,7 @@ def main() -> int:
         if not env.get(k):
             print(f"[FAIL] {k} is empty in .env")
             return 1
-    if env.get("STORAGE_BACKEND", "auto").lower() not in ("hf", "r2"):
-        print("[FAIL] Files are still only on this PC. Run scripts\\go_online.bat (it sets up online storage first).")
-        return 1
+    env["STORAGE_BACKEND"] = "db"  # files are kept inside the database
     if env.get("JWT_SECRET", "").startswith("change-me"):
         print("[FAIL] JWT_SECRET is the default. Run: backend\\.venv\\Scripts\\python.exe scripts\\update_env.py")
         return 1

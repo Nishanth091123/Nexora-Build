@@ -1,10 +1,10 @@
 import { Suspense, useEffect, useRef, useState, type ReactNode } from "react";
-import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { api } from "../lib/api";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
 import OfflineBar from "./OfflineBar";
 import VersionBar from "./VersionBar";
+import NotifBell from "./NotifBell";
 import {
-  Bell, Calculator, ChevronDown, Compass, FolderKanban, HardHat, Home, LogOut, Menu, PenSquare,
+  Calculator, ChevronDown, Compass, FolderKanban, HardHat, Home, LogOut, Menu, PenSquare,
   Search, Settings as SettingsIcon, Languages, Trash2, X,
 } from "lucide-react";
 import { useAuth } from "../lib/auth";
@@ -29,37 +29,6 @@ const SIDEBAR_IMG: [string, string][] = [
 ];
 function sidebarImage(path: string) {
   return "/images/" + (SIDEBAR_IMG.find(([p]) => path.startsWith(p))?.[1] || "sidebar_main.jpg");
-}
-
-/** Bell: join requests (owner), approvals waiting for you, overdue tasks. Checked every minute. */
-function NotifBell() {
-  const [d, setD] = useState<{ count: number; items: { kind: string; title: string; link: string; at: string }[] }>({ count: 0, items: [] });
-  const [open, setOpen] = useState(false);
-  const nav = useNavigate();
-  useEffect(() => {
-    const load = () => api<any>("/api/notifications").then(setD).catch(() => {});
-    load();
-    const iv = window.setInterval(load, 60000);
-    return () => clearInterval(iv);
-  }, []);
-  return (
-    <div className="relative">
-      <button className="relative text-navy-ink" aria-label="Notifications" onClick={() => setOpen(!open)}>
-        <Bell size={26} />
-        {d.count > 0 && <span className="absolute -right-1.5 -top-1.5 flex h-5 min-w-5 items-center justify-center rounded-full bg-red-600 px-1 text-[11px] font-bold text-white">{d.count > 9 ? "9+" : d.count}</span>}
-      </button>
-      {open && (
-        <div className="absolute right-0 z-40 mt-2 w-80 rounded-xl border border-line bg-white p-2 shadow-xl" onMouseLeave={() => setOpen(false)}>
-          <div className="px-2 py-1 text-sm font-bold text-navy-ink">Notifications</div>
-          {!d.items.length ? <p className="px-2 py-3 text-sm text-slate-500">Nothing new.</p> : d.items.map((n, i) => (
-            <button key={i} className="block w-full rounded-lg px-2 py-2 text-left text-sm hover:bg-slate-50" onClick={() => { setOpen(false); nav(n.link); }}>
-              <span className="text-navy-ink">{n.title}</span>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
 }
 
 function Logo() {

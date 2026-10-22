@@ -151,7 +151,8 @@ check("project detail + activity", d["project"]["id"] == pid and len(d["activity
 r = c.get("/api/users/access/matrix")
 check("access matrix", r.status_code == 200, r.text[:200])
 
-before = len(c.get("/api/admin/backups").json().get("backups", []))
+_bk = c.get("/api/admin/backups").json().get("backups", [])
+before = _bk[0]["id"] if _bk else 0  # the list shows only the newest 60, so compare the newest id (not the count)
 r = c.post("/api/admin/backups")
 check("backup started", r.status_code == 200, r.text)
 print("       waiting for the backup to finish (runs in the background)...")
@@ -159,7 +160,8 @@ done = False
 for _ in range(100):
     time.sleep(3)
     bl = c.get("/api/admin/backups").json()
-    if not (bl.get("running") or {}).get("running") and len(bl.get("backups", [])) > before:
+    _new = bl.get("backups", [])
+    if not (bl.get("running") or {}).get("running") and _new and _new[0]["id"] != before:
         done = True
         break
 check("backup finished", done, str((bl.get("running") or {}).get("error", "")) if not done else "")
@@ -361,6 +363,10 @@ key = r.json().get("key") if r.status_code == 200 else ""
 check("daily alert link key", bool(key), r.text[:200])
 r = c.get("/api/alerts/run", params={"key": "wrong"})
 check("daily alert link refuses a wrong key", r.status_code == 403, r.text[:200])
+r = c.post("/api/notifications/mark", json={"keys": ["smoke:test"], "action": "read"})
+check("notification mark read", r.status_code == 200, r.text[:200])
+r = c.post("/api/notifications/mark", json={"keys": ["smoke:test"], "action": "delete"})
+check("notification delete", r.status_code == 200, r.text[:200])
 r = c.get("/api/alerts/today", timeout=60)
 check("today's weather alerts (bell)", r.status_code == 200 and "items" in r.json(), r.text[:200])
 

@@ -2,9 +2,8 @@
 title Nexora Build - prepare to go online
 cd /d %~dp0..
 echo ==== Nexora Build - prepare the online backend (Render.com, free) ====
-echo [1/2] Online file storage + copying files kept on this PC (safe to run again)...
-call backend\.venv\Scripts\python.exe -m pip install -q huggingface_hub || goto :fail
-backend\.venv\Scripts\python.exe scripts\setup_cloud_storage.py || goto :fail
+echo [1/2] Moving files kept on this PC into the online database (safe to run again)...
+backend\.venv\Scripts\python.exe scripts\move_files_to_db.py || goto :fail
 echo [2/2] Settings for Render (opens in Notepad)...
 backend\.venv\Scripts\python.exe scripts\render_env.py || goto :fail
 echo.

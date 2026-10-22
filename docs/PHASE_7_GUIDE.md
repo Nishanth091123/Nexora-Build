@@ -2,28 +2,36 @@
 
 Version **1.7.0-phase7**. This is the last phase. It also includes the two fixes you asked for. There is no separate fix file.
 
+## New in 7.11 – files inside the database, faster, no Hugging Face
+- Drawings, photos, documents and backups are now kept **inside your Neon database** (table `stored_blobs`). Nothing to set up; the PC app and the online app read the same files. Hugging Face is not used anywhere any more (no more upload lines in the CMD window).
+- Once, after this update: `scripts\move_files_to_db.bat` moves files already saved on this PC (and any old online copies) into the database. Safe to run again.
+- The newest 20 backup files are kept (older backups stay listed; download them from the list before they roll off if you need them). Neon's free plan holds about 0.5 GB.
+- Speed: cron-job.org job → **Every 10 minutes**. It keeps the free Render server awake, so the app opens at once instead of waiting about a minute.
+- Fixed: smoke test "backup finished" (the list shows the newest 60, so after 60 backups the count stopped growing).
+
 ## New in 7.5
-- The backend goes to **Render.com** (free, no card). Hugging Face now charges for Docker apps. Your files stay in the private Hugging Face repo, which is still free.
+- The backend goes to **Render.com** (free, no card). 
 - `scripts\go_online.bat` now prepares the online files and a **render_env.txt** settings file to paste into Render.
 - After any update, `scripts\github_push.bat` alone updates both online parts (Render + Vercel).
 
+## New in 7.10
+- Bell: tap a notification to open it (full text), then Open / Mark read or unread / Delete. "Mark all read" and "Clear all". Unread ones are highlighted with a dot; the red number counts only unread.
+- Phone notification tap now always opens the app (also when it was closed).
+- cron-job.org: one job (now "Every 10 minutes", see 7.11).
+
 ## New in 7.9 – speed
-- Files (drawings, photos, documents) are saved on the PC / server first and sent to the private Hugging Face storage in the background (several files in one go). Uploads and opening files are fast again; no Hugging Face progress bars in the CMD window.
+- Files (drawings, photos, documents) are saved on the PC / server first and (7.11: files now go straight into the database).
 - The bell never waits for the weather service (weather alerts load in the background).
-- Fixed: "DXF drawing read" test (the drawing was read back from Hugging Face before it had arrived).
 
 ## New in 7.8 – Weather safety alerts (bell + phone / PC notifications)
 - Bell 🔔 shows today's risks for your sites (thunderstorm, heavy rain, rain 70%+, strong wind, extreme heat) with what not to do.
 - Phone / PC notification at 6 AM (today) and 5 PM (tomorrow) – even when the app is closed. Turn it on: Home weather card → "Get these safety alerts on this phone / PC", or Settings → Notifications → "Turn on alerts on this device". Every person turns it on on their own device. iPhone: add the app to the Home Screen first.
-- Owner, once: Settings → Notifications (in the ONLINE app) → copy the "Daily check link" → cron-job.org (free) → Create cronjob → paste the link → schedule every day 06:00 and 17:00, time zone Asia/Kolkata. This wakes the free server and sends the alerts.
+- Owner, once: Settings → Notifications (in the ONLINE app) → copy the "Daily check link" → cron-job.org (free) → Create cronjob → paste the link → schedule "Every 10 minutes" (each project is alerted once a day, so this is safe; it also keeps the server awake). This wakes the free server and sends the alerts.
 - Fixes: "current location" on a PC (no GPS, ±hundreds of km) now silently uses the project site instead of a far town; the "older copy" bar shows only when the screen is really older than the server.
 
 ## New in 7.7
 - Vastu "Apply suggestions" now also tries a mirrored plan and a fresh arrangement of the same rooms in the same building – the best one is offered; a clear message when the plan is already the best possible.
 - github_push.bat first takes in changes made on the GitHub website (no more "rejected – fetch first").
-
-## New in 7.4
-- **Online file storage without a card:** files can be kept in a **private Hugging Face repo** (free, no card). `go_online.bat` sets it up and copies your PC files there. Settings → Backups → Storage then shows **Hugging Face (private)**. After this, the PC app and the online app read the same files.
 
 ## New in 7.3
 - **Weather location picker:** tap the town name (top right of the weather card) to choose:
@@ -85,24 +93,21 @@ The last line must read **`PHASE 1 - 7 API: ALL GOOD`**. Then run `scripts\start
 
 ## Going online – step by step (about 40 minutes, once)
 Online setup, all free with no card:
-- **Files** (drawings, photos, backups) → your **private Hugging Face repo**
+- **Files** (drawings, photos, backups) → inside the **Neon database**
 - **Backend (API)** → **Render.com**, builds from GitHub
 - **Screens** → **Vercel**, builds from GitHub
 - **Database** → Neon, the same one as now
 
-Hugging Face no longer hosts Docker apps for free (it now needs PRO), so the backend runs on Render instead.
+### Step 1 – (nothing to do: files are kept in the database)
 
-### Step 1 – Hugging Face token (done)
-`.env` has `HF_TOKEN=hf_...` (type **Write**).
-
-### Step 2 – Online files + Render settings
+### Step 2 – Move PC files + Render settings
 ```
 cd /d C:\PROJECTS\Nexora_Build
 scripts\go_online.bat
 ```
 What this does:
-- Copies the PC files to the private repo (safe to run again).
-- Sets `STORAGE_BACKEND=hf` in `.env`.
+- Moves the PC files into the database (safe to run again).
+- Sets `STORAGE_BACKEND=db` in `.env`.
 - Makes **render_env.txt** and opens it in Notepad. Keep it open for Step 4. It holds your keys and is never pushed to GitHub.
 
 ### Step 3 – Code to GitHub
@@ -132,11 +137,11 @@ You should see `[OK] Secret check passed` and then `[OK] PUSHED`. The first push
    - Paste everything from render_env.txt (Ctrl+A, Ctrl+C in Notepad) and add the variables.
 5. Open **Advanced** → **Health Check Path** → `/api/health`.
 6. Press **Deploy Web Service**. The first build takes 5–8 minutes. When the log shows `Ready`, your address appears at the top, for example `https://nexora-build-api.onrender.com`.
-7. Open `<address>/api/health` in the browser. It should show `"version":"1.7.6-phase7"` and `"storage":"hf"`.
+7. Open `<address>/api/health` in the browser. It should show `"version":"1.7.11-phase7"` and `"storage":"db"`.
 8. **Delete render_env.txt** from the project folder.
 
 Notes:
-- The free service sleeps after 15 minutes with no use. The next visit wakes it in about 1 minute; the app shows "it may be waking up – try again in a minute".
+- The free service sleeps after 15 minutes with no use (then the first visit takes about 1 minute). The cron-job.org job every 10 minutes keeps it awake.
 - 750 free hours a month is enough to stay on all month.
 
 ### Step 5 – Screens to Vercel
@@ -156,12 +161,12 @@ Notes:
 
 **Render and Vercel both rebuild by themselves** after the push. The backend takes about 5 minutes and the screens about 1 minute.
 
-The PC version and the online version use the **same database and the same online files**, so both always show the same data.
+The PC version and the online version use the **same database (files are inside it)**, so both always show the same data.
 
 ---
 
 ## Full restore into a new database (only if the database is lost)
-1. Settings → Backups → **Download** the newest backup. Automatic backups are also in your private Hugging Face files repo under `backups/`.
+1. Settings → Backups → **Download** the newest backup.
 2. Create a new empty Neon database (Neon → Branches → New branch, or a new project) and copy its connection string.
 3. In `.env`, set `DATABASE_URL=` to the NEW connection string. **Do not run start.bat yet.**
 4. Run:
@@ -233,7 +238,7 @@ Tick each item on your PC first, then on the online address.
 30. Backup Now → the backup appears → Download works.
 
 **Online**
-31. `<Render address>/api/health` shows `1.7.6-phase7` and `"storage":"hf"`.
+31. `<Render address>/api/health` shows `1.7.11-phase7` and `"storage":"db"`.
 32. The Vercel address opens, login works, and you see the same projects.
 33. On the phone: install the app, take a camera photo, and open an invite link from another phone.
 

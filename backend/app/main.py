@@ -29,11 +29,6 @@ async def lifespan(app: FastAPI):
     start_alerts()
     log.info("Ready. Storage backend: %s", storage.name)
     yield
-    if storage.name == "hf":  # send files still waiting for upload before the server stops
-        try:
-            storage.flush()
-        except Exception as e:
-            log.warning("Files still waiting for upload (sent on next start): %s", e)
 
 
 app = FastAPI(title="Nexora Build API", version=config.APP_VERSION, lifespan=lifespan)

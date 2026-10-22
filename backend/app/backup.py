@@ -54,7 +54,8 @@ def _run(kind: str, user_id: int | None) -> BackupRecord:
         with gzip.GzipFile(fileobj=buf, mode="wb", compresslevel=6) as gz:
             head = {"app": "Nexora Build", "created_at": datetime.now(timezone.utc).isoformat(), "kind": kind}
             gz.write(json.dumps(head, ensure_ascii=False)[:-1].encode("utf-8") + b', "tables": {')
-            for ti, table in enumerate(Base.metadata.sorted_tables):
+            tables = [t for t in Base.metadata.sorted_tables if t.name != "stored_blobs"]  # file contents: not in backups
+            for ti, table in enumerate(tables):
                 gz.write((", " if ti else "").encode() + json.dumps(table.name).encode() + b": [")
                 n = 0
                 res = db.execute(select(table).execution_options(yield_per=500))
@@ -73,7 +74,19 @@ def _run(kind: str, user_id: int | None) -> BackupRecord:
         db.add(rec)
         db.commit()
         log.info("Backup saved: %s (%d bytes)", key, len(data))
+        _trim(db)
         return rec
+
+
+def _trim(db, keep: int = 20) -> None:
+    """Backups are kept inside the database now – keep the newest 20 files (the list itself stays)."""
+    if storage.name != "db":
+        return
+    try:
+        for old in db.query(BackupRecord).order_by(BackupRecord.created_at.desc()).offset(keep).all():
+            storage.delete(old.storage_key)
+    except Exception as e:
+        log.info("old backup cleanup skipped: %s", e)
 
 
 def start_backup_thread(kind: str, user_id: int | None, after=None) -> bool:
