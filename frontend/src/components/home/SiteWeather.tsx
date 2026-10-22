@@ -4,6 +4,7 @@ import {
   ChevronDown, Droplets, HardHat, LocateFixed, MapPin, Plus, Search, Package, PaintRoller, Plug, RefreshCw, Ruler, Shovel, Sun, Sunrise, Umbrella, Users, Wind, X,
 } from "lucide-react";
 import { Card } from "../ui";
+import { PushNudge } from "../PushAlerts";
 import { api } from "../../lib/api";
 import { useAuth } from "../../lib/auth";
 import { useI18n, type Lang } from "../../lib/i18n";
@@ -91,9 +92,12 @@ export function useSiteWeather(): WeatherState {
       try {
         if (sel.kind === "gps") {
           const g = await gpsNow();
-          const name = await placeName(g.lat, g.lon);
-          setApprox(g.acc > 3000 ? Math.round(g.acc / 1000) : 0);
-          return await loadForecast(g.lat, g.lon, name || "My location");
+          if (g.acc <= 5000) {
+            const name = await placeName(g.lat, g.lon);
+            return await loadForecast(g.lat, g.lon, name || "My location");
+          }
+          // no real GPS (PC / laptop): the browser only guesses from the internet line, often a far town – use the project site
+          setApprox(Math.round(g.acc / 1000));
         }
         if (sel.kind === "place") return await loadForecast(sel.lat, sel.lon, sel.label);
         if (p?.latitude != null && p?.longitude != null) return await loadForecast(p.latitude, p.longitude, p.location || p.district || "Site");
@@ -179,7 +183,7 @@ function LocationPicker({ w }: { w: WeatherState }) {
             ) : (
               <div className="space-y-0.5">
                 {row(w.sel.kind === "project", <MapPin size={14} />, T(lang, "Project site", "திட்ட தளம்"), w.projectLabel, () => w.choose({ kind: "project" }))}
-                {row(w.sel.kind === "gps", <LocateFixed size={14} />, T(lang, "My current location", "என் தற்போதைய இடம்"), T(lang, "Uses this phone / PC location", "இந்த போன் / PC இருப்பிடம்"), () => w.choose({ kind: "gps" }))}
+                {row(w.sel.kind === "gps", <LocateFixed size={14} />, T(lang, "My current location", "என் தற்போதைய இடம்"), (w.approx ? T(lang, "No GPS on this device – showing the project site", "இந்த device-ல GPS இல்லை – project site காட்டப்படுகிறது") : T(lang, "Uses this phone / PC location", "இந்த போன் / PC இருப்பிடம்")), () => w.choose({ kind: "gps" }))}
                 {w.places.length > 0 && <div className="px-2 pt-2 text-[10px] font-bold uppercase tracking-wide text-slate-400">{T(lang, "Saved places", "சேமித்த இடங்கள்")}</div>}
                 {w.places.map((p) => row(isSel(p), <Search size={14} />, p.label.split(",")[0], p.label.split(",").slice(1).join(",").trim(), () => w.choose({ kind: "place", ...p }),
                   <button className="rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600" title={T(lang, "Remove", "நீக்கு")} onClick={() => w.removePlace(p)}><X size={13} /></button>))}
@@ -237,13 +241,6 @@ export function TodayWeatherCard({ w }: { w: WeatherState }) {
           <button className="btn-ghost btn-sm" onClick={w.reload}><RefreshCw size={14} /></button></div>
       ) : !w.fc || !d || !s ? <div className="h-48 animate-pulse rounded-xl bg-slate-100" /> : (
         <div className="space-y-3">
-          {w.sel.kind === "gps" && w.approx > 0 && (
-            <div className="flex items-start gap-2 rounded-xl bg-amber-50 p-2.5 text-[12px] text-amber-900 ring-1 ring-amber-200">
-              <MapPin size={15} className="mt-0.5 shrink-0" />
-              <span>{T(lang, `This device gave only an approximate location (±${w.approx} km, from the internet connection – PCs have no GPS). If the town is wrong, tap the place name above and search your town.`,
-                `இந்த device தோராயமான இடம் மட்டும் தருகிறது (±${w.approx} km). ஊர் தவறாக இருந்தால் மேலே உள்ள இடத்தின் பெயரை அழுத்தி உங்கள் ஊரை தேடுங்கள்.`)}</span>
-            </div>
-          )}
           {alert && (
             <div className={`flex items-start gap-2 rounded-xl p-2.5 text-[13px] font-semibold ${alert.tone === "bad" ? "bg-red-600 text-white" : "bg-amber-400 text-amber-950"}`}>
               <AlertTriangle size={18} className="mt-0.5 shrink-0" />{alert.text}
@@ -286,6 +283,7 @@ export function TodayWeatherCard({ w }: { w: WeatherState }) {
               </div>
             </div>
           )}
+          <PushNudge />
         </div>
       )}
     </Card>

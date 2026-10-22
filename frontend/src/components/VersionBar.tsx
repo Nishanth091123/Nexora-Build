@@ -3,6 +3,12 @@ import { RefreshCw } from "lucide-react";
 import { API_BASE } from "../lib/api";
 
 const BUILD = typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "";
+const nums = (v: string) => (v.match(/\d+/g) || []).slice(0, 3).map(Number);
+function isNewer(a: string, b: string) {
+  const x = nums(a), y = nums(b);
+  for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0);
+  return false;
+}
 
 /** After an update, an old copy of the app can stay in the browser. Compare with the backend and offer a clean reload. */
 export default function VersionBar() {
@@ -11,7 +17,9 @@ export default function VersionBar() {
     if (!BUILD) return;
     fetch(API_BASE + "/api/health", { cache: "no-store" }).then((r) => r.json()).then((d) => setServer(d.version || "")).catch(() => {});
   }, []);
-  if (!BUILD || !server || server === BUILD) return null;
+  // only when the SCREEN is older than the server (a stale browser copy). While the server is still updating
+  // (screen newer than server for a few minutes after a push), nothing is shown.
+  if (!BUILD || !server || !isNewer(server, BUILD)) return null;
   const reload = async () => {
     try {
       const regs = await navigator.serviceWorker?.getRegistrations?.();

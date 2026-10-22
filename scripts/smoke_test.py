@@ -353,6 +353,17 @@ check("delete permanently (backup taken first)", r.status_code == 200 and r.json
 r = c.get(f"/api/projects/{pid}/weather-context")
 check("home weather card data", r.status_code == 200 and "stages" in r.json() and "curing" in r.json(), r.text[:200])
 
+# ---------------- Phase 7.8: weather alerts (bell + phone push)
+r = c.get("/api/push/key")
+check("push key ready", r.status_code == 200 and len(r.json().get("public_key", "")) > 80, r.text[:200])
+r = c.get("/api/alerts/cron-key")
+key = r.json().get("key") if r.status_code == 200 else ""
+check("daily alert link key", bool(key), r.text[:200])
+r = c.get("/api/alerts/run", params={"key": "wrong"})
+check("daily alert link refuses a wrong key", r.status_code == 403, r.text[:200])
+r = c.get("/api/alerts/today", timeout=60)
+check("today's weather alerts (bell)", r.status_code == 200 and "items" in r.json(), r.text[:200])
+
 # ---------------- Phase 7: recover a permanently deleted item from its "predelete" backup
 bk = [b for b in c.get("/api/admin/backups").json()["backups"] if b["kind"] == "predelete"]
 check("predelete backup exists", bool(bk))

@@ -8,6 +8,7 @@ import RateLibrary from "../components/RateLibrary";
 import InviteLinks from "../components/admin/InviteLinks";
 import RecycleBin from "../components/admin/RecycleBin";
 import RecoverBackup from "../components/admin/RecoverBackup";
+import { PushCard } from "../components/PushAlerts";
 import { Avatar, Badge, Card, Empty, Field, Modal, PillTabs, SegTabs, StatusBadge, Toggle, toast } from "../components/ui";
 import { INDIAN_STATES } from "../components/ProjectBits";
 import { api, downloadFile, fileObjectUrl, fmtBytes, fmtDateTime, setToken } from "../lib/api";
@@ -301,9 +302,12 @@ function NotificationsSection({ s, save }: { s: SettingsData; save: (k: string, 
   const items: [string, string][] = [["project_updates", "Project Updates"], ["task_assignments", "Task Assignments"], ["drawing_approvals", "Drawing Approvals"],
     ["estimate_revisions", "Estimate Revisions"], ["site_progress", "Site Progress Updates"], ["ai_suggestions", "AI Suggestions"], ["email_notifications", "Email Notifications"]];
   return (
-    <Card title="Notification Settings" icon={<Bell size={20} />}>
-      <div className="divide-y divide-line">{items.map(([k, l]) => <div key={k} className="flex items-center justify-between py-2 text-sm"><span>{l}</span><Toggle checked={!!n[k]} onChange={(v) => save("notifications", { [k]: v })} /></div>)}</div>
-    </Card>
+    <div className="space-y-4">
+      <PushCard />
+      <Card title="Notification Settings" icon={<Bell size={20} />}>
+        <div className="divide-y divide-line">{items.map(([k, l]) => <div key={k} className="flex items-center justify-between py-2 text-sm"><span>{l}</span><Toggle checked={!!n[k]} onChange={(v) => save("notifications", { [k]: v })} /></div>)}</div>
+      </Card>
+    </div>
   );
 }
 

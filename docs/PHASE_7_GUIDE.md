@@ -7,6 +7,21 @@ Version **1.7.0-phase7**. This is the last phase. It also includes the two fixes
 - `scripts\go_online.bat` now prepares the online files and a **render_env.txt** settings file to paste into Render.
 - After any update, `scripts\github_push.bat` alone updates both online parts (Render + Vercel).
 
+## New in 7.9 – speed
+- Files (drawings, photos, documents) are saved on the PC / server first and sent to the private Hugging Face storage in the background (several files in one go). Uploads and opening files are fast again; no Hugging Face progress bars in the CMD window.
+- The bell never waits for the weather service (weather alerts load in the background).
+- Fixed: "DXF drawing read" test (the drawing was read back from Hugging Face before it had arrived).
+
+## New in 7.8 – Weather safety alerts (bell + phone / PC notifications)
+- Bell 🔔 shows today's risks for your sites (thunderstorm, heavy rain, rain 70%+, strong wind, extreme heat) with what not to do.
+- Phone / PC notification at 6 AM (today) and 5 PM (tomorrow) – even when the app is closed. Turn it on: Home weather card → "Get these safety alerts on this phone / PC", or Settings → Notifications → "Turn on alerts on this device". Every person turns it on on their own device. iPhone: add the app to the Home Screen first.
+- Owner, once: Settings → Notifications (in the ONLINE app) → copy the "Daily check link" → cron-job.org (free) → Create cronjob → paste the link → schedule every day 06:00 and 17:00, time zone Asia/Kolkata. This wakes the free server and sends the alerts.
+- Fixes: "current location" on a PC (no GPS, ±hundreds of km) now silently uses the project site instead of a far town; the "older copy" bar shows only when the screen is really older than the server.
+
+## New in 7.7
+- Vastu "Apply suggestions" now also tries a mirrored plan and a fresh arrangement of the same rooms in the same building – the best one is offered; a clear message when the plan is already the best possible.
+- github_push.bat first takes in changes made on the GitHub website (no more "rejected – fetch first").
+
 ## New in 7.4
 - **Online file storage without a card:** files can be kept in a **private Hugging Face repo** (free, no card). `go_online.bat` sets it up and copies your PC files there. Settings → Backups → Storage then shows **Hugging Face (private)**. After this, the PC app and the online app read the same files.
 

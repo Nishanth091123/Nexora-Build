@@ -1,7 +1,7 @@
 {
   "name": "nexora-build-frontend",
   "private": true,
-  "version": "1.7.7-phase7",
+  "version": "1.7.9-phase7",
   "type": "module",
   "scripts": {
     "dev": "vite",

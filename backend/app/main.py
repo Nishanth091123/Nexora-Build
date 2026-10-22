@@ -8,9 +8,10 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.exc import DBAPIError
 
 from . import config
+from .alerts import start_alerts
 from .backup import start_auto_backups
 from .db import SessionLocal, init_db
-from .routers import admin, ai, auth, extras, invites, trash, design, drawing, estimate, files, pm, projects, settings, site, users, vastu
+from .routers import admin, ai, auth, extras, invites, push, trash, design, drawing, estimate, files, pm, projects, settings, site, users, vastu
 from .seed import seed
 from .storage import storage
 
@@ -25,8 +26,14 @@ async def lifespan(app: FastAPI):
     with SessionLocal() as db:
         seed(db)
     start_auto_backups()
+    start_alerts()
     log.info("Ready. Storage backend: %s", storage.name)
     yield
+    if storage.name == "hf":  # send files still waiting for upload before the server stops
+        try:
+            storage.flush()
+        except Exception as e:
+            log.warning("Files still waiting for upload (sent on next start): %s", e)
 
 
 app = FastAPI(title="Nexora Build API", version=config.APP_VERSION, lifespan=lifespan)
@@ -83,13 +90,13 @@ async def db_error_handler(request: Request, exc: DBAPIError):
 
 for r in (auth.router, users.router, projects.router, files.router, settings.router, admin.router,
           estimate.router, design.router, drawing.router, vastu.router, pm.router, site.router, ai.router,
-          trash.router, invites.router, invites.notif_router, extras.router):
+          trash.router, invites.router, invites.notif_router, extras.router, push.router):
     app.include_router(r)
 
 
 @app.get("/", include_in_schema=False)
 def root():
-    return {"message": "Nexora Build backend is running. Open the app at http://localhost:5173",
+    return {"message": "Nexora Build backend is running.",
             "api_docs": "/docs"}
 
 

@@ -176,4 +176,9 @@ def notifications(user: User = Depends(get_current_user),
             items.append({"kind": "task", "title": f"Overdue task: {t.title} ({live[t.project_id]})",
                           "link": "/projects?tab=tasks", "at": t.due_date.isoformat()})
     items.sort(key=lambda x: x["at"], reverse=True)
+    try:  # today's weather risks for my sites come first
+        from ..alerts import bell_items
+        items = bell_items(db, user) + items
+    except Exception:
+        pass
     return {"count": len(items), "items": items[:30]}

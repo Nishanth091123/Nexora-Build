@@ -577,3 +577,16 @@ class AIPhotoCheck(Base):
     provider: Mapped[str] = mapped_column(String(120), default="")
     created_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class PushSubscription(Base):
+    """A phone / PC browser that agreed to receive Nexora alerts (Web Push). Phase 7.8"""
+    __tablename__ = "push_subscriptions"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    endpoint: Mapped[str] = mapped_column(String(600), unique=True)
+    p256dh: Mapped[str] = mapped_column(String(200))
+    auth: Mapped[str] = mapped_column(String(100))
+    device: Mapped[str] = mapped_column(String(200), default="")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

@@ -14,6 +14,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 ENV = ROOT / ".env"
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")  # no progress bars in the CMD window
 sys.path.insert(0, str(ROOT / "backend"))
 
 
