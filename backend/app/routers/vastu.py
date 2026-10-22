@@ -58,10 +58,14 @@ def apply(project_id: int, body: VastuIn, user: User = Depends(get_current_user)
     """Suggest an improved plan by swapping rooms. Nothing is saved until the user saves it as a design version."""
     require_any(db, user, project_id, ("vastu",))
     plan, _ = _plan(db, project_id, body)
-    out = engine.improve(plan)
+    out = engine.best_for_vastu(plan)
     if not out["changes"]:
-        out["message"] = ("No safe room swap improves this plan automatically – follow the room-wise suggestions "
-                          "in the 2D editor (sizes or doors would break otherwise).")
+        if out["after"].get("not_matched", 0) == 0:
+            out["message"] = "This plan already follows the Vastu rules – nothing needs to change."
+        else:
+            out["message"] = ("This is already the best Vastu arrangement for this building size and room list. "
+                              "The remaining points need a bigger change (for example fewer rooms, another floor "
+                              "or a different plot) – see the room-wise suggestions.")
     return out
 
 

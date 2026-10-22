@@ -29,7 +29,7 @@ const TONE_ICON: Record<Tone, string> = { good: "bg-emerald-500", warn: "bg-ambe
 type Ctx = { project: any; stages: Stage[]; curing: { title: string; location: string; cast_on: string; day: number }[]; can_set_location: boolean };
 export type Sel = { kind: "project" } | { kind: "gps" } | ({ kind: "place" } & Place);
 export type WeatherState = {
-  ctx: Ctx | null; fc: Forecast | null; place: string; err: string; loading: boolean; needPlace: boolean;
+  ctx: Ctx | null; fc: Forecast | null; place: string; err: string; loading: boolean; needPlace: boolean; approx: number;
   sel: Sel; places: Place[]; projectLabel: string;
   setPlace: (town: string) => Promise<void>; reload: () => void;
   choose: (s: Sel) => void; addPlace: (p: Place) => void; removePlace: (p: Place) => void;
@@ -46,11 +46,12 @@ const readJson = (k: string, d: any) => { try { return JSON.parse(localStorage.g
 const writeJson = (k: string, v: any) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch { /* ignore */ } };
 const samePlace = (a: Place, b: Place) => Math.abs(a.lat - b.lat) < 0.01 && Math.abs(a.lon - b.lon) < 0.01;
 
-function gpsNow(): Promise<{ lat: number; lon: number }> {
+function gpsNow(): Promise<{ lat: number; lon: number; acc: number }> {
   return new Promise((ok, no) => {
     if (!navigator.geolocation) return no(new Error("Location is not available on this device"));
-    navigator.geolocation.getCurrentPosition((p) => ok({ lat: p.coords.latitude, lon: p.coords.longitude }),
-      () => no(new Error("Allow location access in the browser (address bar → location)")), { enableHighAccuracy: false, timeout: 12000, maximumAge: 600000 });
+    // fresh, high-accuracy fix (GPS on phones); a PC without GPS can only give an approximate internet-based location
+    navigator.geolocation.getCurrentPosition((p) => ok({ lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy || 0 }),
+      () => no(new Error("Allow location access in the browser (address bar → location)")), { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 });
   });
 }
 
@@ -65,6 +66,7 @@ export function useSiteWeather(): WeatherState {
   const [err, setErr] = useState("");
   const [loading, setLoading] = useState(false);
   const [needPlace, setNeedPlace] = useState(false);
+  const [approx, setApprox] = useState(0);  // km – current location is only approximate (PC / no GPS)
   const [tick, setTick] = useState(0);
   const [sel, setSel] = useState<Sel>(() => readJson(SEL_KEY, { kind: "project" }));
   const [places, setPlaces] = useState<Place[]>(() => readJson(PLACES_KEY, []));
@@ -78,7 +80,7 @@ export function useSiteWeather(): WeatherState {
   useEffect(() => {
     if (!pid) return;
     let alive = true;
-    setLoading(true); setErr(""); setFc(null); setNeedPlace(false);
+    setLoading(true); setErr(""); setFc(null); setNeedPlace(false); setApprox(0);
     (async () => {
       let c: Ctx | null = null;
       try { c = await api<Ctx>(`/api/projects/${pid}/weather-context`); } catch { /* weather still works without it */ }
@@ -90,6 +92,7 @@ export function useSiteWeather(): WeatherState {
         if (sel.kind === "gps") {
           const g = await gpsNow();
           const name = await placeName(g.lat, g.lon);
+          setApprox(g.acc > 3000 ? Math.round(g.acc / 1000) : 0);
           return await loadForecast(g.lat, g.lon, name || "My location");
         }
         if (sel.kind === "place") return await loadForecast(sel.lat, sel.lon, sel.label);
@@ -128,7 +131,7 @@ export function useSiteWeather(): WeatherState {
     setPlaces(next); writeJson(PLACES_KEY, next);
     if (sel.kind === "place" && samePlace(sel, p)) choose({ kind: "project" });
   };
-  return { ctx, fc, place, err, loading, needPlace, sel, places, projectLabel, setPlace, reload: () => setTick((x) => x + 1), choose, addPlace, removePlace };
+  return { ctx, fc, place, err, loading, needPlace, approx, sel, places, projectLabel, setPlace, reload: () => setTick((x) => x + 1), choose, addPlace, removePlace };
 }
 
 /** Location chooser: project site · my current location · saved towns · search. */
@@ -234,6 +237,13 @@ export function TodayWeatherCard({ w }: { w: WeatherState }) {
           <button className="btn-ghost btn-sm" onClick={w.reload}><RefreshCw size={14} /></button></div>
       ) : !w.fc || !d || !s ? <div className="h-48 animate-pulse rounded-xl bg-slate-100" /> : (
         <div className="space-y-3">
+          {w.sel.kind === "gps" && w.approx > 0 && (
+            <div className="flex items-start gap-2 rounded-xl bg-amber-50 p-2.5 text-[12px] text-amber-900 ring-1 ring-amber-200">
+              <MapPin size={15} className="mt-0.5 shrink-0" />
+              <span>{T(lang, `This device gave only an approximate location (±${w.approx} km, from the internet connection – PCs have no GPS). If the town is wrong, tap the place name above and search your town.`,
+                `இந்த device தோராயமான இடம் மட்டும் தருகிறது (±${w.approx} km). ஊர் தவறாக இருந்தால் மேலே உள்ள இடத்தின் பெயரை அழுத்தி உங்கள் ஊரை தேடுங்கள்.`)}</span>
+            </div>
+          )}
           {alert && (
             <div className={`flex items-start gap-2 rounded-xl p-2.5 text-[13px] font-semibold ${alert.tone === "bad" ? "bg-red-600 text-white" : "bg-amber-400 text-amber-950"}`}>
               <AlertTriangle size={18} className="mt-0.5 shrink-0" />{alert.text}

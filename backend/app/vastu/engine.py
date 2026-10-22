@@ -301,3 +301,96 @@ def improve(plan: dict, max_steps: int = 6) -> dict:
     remaining = [f"{c['title']}: {c['message']}" for c in after["checks"] if c["status"] == "not_matched"]
     return {"plan": p, "changes": changes, "before": before["summary"], "after": after["summary"], "result": after,
             "remaining": remaining}
+
+
+# ---------------------------------------------------------------- 7.7: re-plan for Vastu when room swaps are not enough
+def _bare(plan: dict) -> dict:
+    from ..design.geometry import add_openings
+    for lv in plan["levels"]:
+        lv.pop("walls", None)
+        lv.pop("openings", None)
+    return add_openings(plan)
+
+
+def _mirror(plan: dict) -> dict:
+    """Same rooms, left and right exchanged (the road side stays the same)."""
+    import copy
+    p = copy.deepcopy(plan)
+    bw = float(p["building"]["w"])
+    for lv in p["levels"]:
+        for r in lv["rooms"]:
+            r["x"] = round(bw - float(r["x"]) - float(r["w"]), 2)
+    return _bare(p)
+
+
+def _level_reqs(plan: dict) -> list[dict]:
+    """Room list per floor: from the design's own requirements, or counted from the drawing's rooms."""
+    req = (plan.get("requirements") or {}).get("levels")
+    if req and len(req) == len(plan["levels"]):
+        return [{k: v for k, v in lv.items() if not str(k).startswith("_")} for lv in req]
+    out = []
+    for lv in plan["levels"]:
+        rooms = lv.get("rooms") or []
+        typ = [r.get("type") for r in rooms]
+        names = [str(r.get("name") or "").lower() for r in rooms]
+        toilets = [r for r in rooms if r.get("type") in ("toilet", "common_toilet")]
+        attached = sum(1 for r in toilets if r.get("parent") or "attach" in str(r.get("name") or "").lower())
+        beds = typ.count("bedroom")
+        out.append({
+            "name": lv.get("name"), "stilt": bool(lv.get("stilt")),
+            "bedrooms": beds, "attached_toilets": min(attached, beds),
+            "common_toilets": len(toilets) - min(attached, beds),
+            "kitchen": "kitchen" in typ, "hall": "hall" in typ, "dining": "dining" in typ,
+            "pooja": "pooja" in typ, "lounge": "lounge" in typ and "hall" not in typ,
+            "parking_car": any(t == "parking" and "bike" not in n for t, n in zip(typ, names)),
+            "parking_bike": any(t == "parking" and "bike" in n for t, n in zip(typ, names)),
+        })
+    return out
+
+
+def _replan(plan: dict) -> dict:
+    import copy
+
+    from ..design.layout import build_level
+    reqs = _level_reqs(plan)
+    bw, bd = float(plan["building"]["w"]), float(plan["building"]["d"])
+    multi = len(reqs) > 1
+    p = copy.deepcopy(plan)
+    template = None
+    for i, (lv, req) in enumerate(zip(p["levels"], reqs)):
+        rooms, info = build_level(dict(req, name=lv.get("name") or req.get("name") or f"Level {i}"),
+                                  bw, bd, plan["compass"], multi, template)
+        if i == 0 and multi:
+            template = info
+        lv["rooms"] = rooms
+    return _bare(p)
+
+
+def best_for_vastu(plan: dict) -> dict:
+    """Try: room swaps on the plan as it is, on its mirror image, on a fresh layout of the same rooms in the same
+    building outline, and on that layout's mirror. Return the one that follows Vastu best (never a worse one)."""
+    before = analyse(plan)
+    base = improve(plan)
+    best, best_score, how = base, _score(base["result"]), None
+    tries = [("Rooms mirrored left ↔ right (same sizes, same road side)", lambda: _mirror(plan))]
+    try:
+        fresh = _replan(plan)
+        tries += [("New room arrangement for Vastu (same building size and rooms)", lambda: fresh),
+                  ("New room arrangement for Vastu, mirrored", lambda: _mirror(fresh))]
+    except Exception:  # rooms do not fit a fresh layout – keep swaps / mirror only
+        pass
+    for label, make in tries:
+        try:
+            cand = improve(make())
+        except Exception:
+            continue
+        sc = _score(cand["result"])
+        if sc > best_score + 0.5:
+            best, best_score, how = cand, sc, label
+    if how:
+        best = dict(best)
+        best["changes"] = [how] + list(best["changes"])
+        best["before"] = before["summary"]
+        best["plan"].setdefault("notes", [])
+        best["plan"]["notes"] = best["plan"]["notes"] + [f"Vastu: {how}"]
+    return best

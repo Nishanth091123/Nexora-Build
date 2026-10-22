@@ -94,6 +94,13 @@ def main() -> int:
     remotes = git("remote", capture=True).stdout.split()
     if "origin" not in remotes:
         git("remote", "add", "origin", REMOTE)
+    # bring in any change made on the GitHub website first (avoids "rejected – fetch first")
+    if git("ls-remote", "--heads", "origin", "main", check=False, capture=True).stdout.strip():
+        r = git("pull", "--rebase", "origin", "main", check=False, capture=True)
+        if r.returncode != 0:
+            git("rebase", "--abort", check=False, capture=True)
+            print("[FAIL] GitHub has changes that clash with this PC. Send this message to Claude.")
+            return 1
     print("Pushing to", REMOTE, "...")
     r = git("push", "-u", "origin", "main", check=False)
     if r.returncode != 0:
