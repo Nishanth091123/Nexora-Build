@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from "react";
+import { useOwnerOnly } from "../lib/ownerOnly";
 import { useNavigate } from "react-router-dom";
 import {
   Bot, Calculator, CheckSquare, ClipboardList, Compass, FileBarChart, FileSpreadsheet, Hammer, HardHat, LayoutDashboard, Library, PenSquare, Ruler, Scale,
@@ -67,11 +68,12 @@ export function HomePage() {
   const { t } = useI18n();
   const nav = useNavigate();
   const { user, projects } = useAuth();
-  const quick: [string, string, any, string][] = [
-    ["New Project", "/projects", ClipboardList, "Create and set up a project"], ["Design", "/design", PenSquare, "AI floor plans & drawings"],
-    ["Estimate", "/estimate", Calculator, "Quantities, BOQ & cost"], ["Site", "/site", HardHat, "DPR, photos, quality"],
-    ["Vastu", "/vastu", Compass, "Plan guidance"], ["AI Assistant", "/ai", Bot, "Ask anything in Tamil / English"],
-  ];
+  const oo = useOwnerOnly();
+  const quick = ([
+    ["New Project", "/projects", ClipboardList, "Create and set up a project", ""], ["Design", "/design", PenSquare, "AI floor plans & drawings", "design"],
+    ["Estimate", "/estimate", Calculator, "Quantities, BOQ & cost", "estimate"], ["Site", "/site", HardHat, "DPR, photos, quality", "site"],
+    ["Vastu", "/vastu", Compass, "Plan guidance", "vastu"], ["AI Assistant", "/ai", Bot, "Ask anything in Tamil / English", "ai"],
+  ] as [string, string, any, string, string][]).filter((q) => !oo.hidden(q[4])).map((q) => q.slice(0, 4) as [string, string, any, string]);
   const ongoing = projects.filter((p) => p.status === "ongoing").length;
   const weather = useSiteWeather();
   return (

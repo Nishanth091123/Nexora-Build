@@ -23,7 +23,8 @@ ALLOWED = {
     ".csv": "text/csv", ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ".glb": "model/gltf-binary", ".txt": "text/plain",
 }
-CATEGORIES = {"drawing", "report", "photo", "contract", "other"}
+CATEGORIES = {"drawing", "report", "photo", "contract", "other",
+              "structural", "estimation", "approval", "vastu"}  # 1.8: project folders
 DWG_MESSAGE = ("DWG files can't be read directly. Please convert to DXF (AutoCAD 2018 DXF, ASCII) or a vector PDF: "
                "in AutoCAD use SAVEAS → 'AutoCAD 2018 DXF', or use the free ODA File Converter "
                "(DWG → DXF 2018). Then upload the DXF/PDF here. | "

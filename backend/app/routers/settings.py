@@ -56,6 +56,7 @@ def update_settings(section: str, body: dict, owner: User = Depends(require_owne
 
 class CompanyIn(BaseModel):
     name: str | None = None
+    proprietor: str | None = None
     registration_no: str | None = None
     address: str | None = None
     industry: str | None = None
@@ -65,7 +66,7 @@ class CompanyIn(BaseModel):
 
 
 def company_out(o: Organization) -> dict:
-    return {"name": o.name, "registration_no": o.registration_no, "address": o.address, "industry": o.industry,
+    return {"name": o.name, "proprietor": o.proprietor or "", "registration_no": o.registration_no, "address": o.address, "industry": o.industry,
             "phone": o.phone, "email": o.email, "website": o.website,
             "logo_url": f"/api/files/{o.logo_file_id}/download" if o.logo_file_id else None}
 

@@ -81,6 +81,12 @@ def _guard_params(params: dict, allowed_text: str) -> dict:
     return out
 
 
+def _ambiguous_rooms(text: str) -> bool:
+    t = (text or "").lower()
+    return bool(re.search(r"\d+\s*(?:x|×|by|\*)\s*\d+", t) and re.search(r"\b\d+\s*rooms?\b", t)
+                and not re.search(r"bhk|bed\s*rooms?|bedrooms?", t))
+
+
 def regex_route(text: str, agent: str, has_attachment: bool, pending: dict | None) -> tuple[str, dict]:
     t = " " + (text or "").lower() + " "
     if has_attachment:
@@ -381,6 +387,10 @@ def respond(db: Session, user: User, conv: AIConversation, text: str, perms: dic
         tool = "drawing" if attachment.original_name.lower().rsplit(".", 1)[-1] in ("dxf", "png", "jpg", "jpeg", "webp", "pdf") \
             and (agent in ("drawing", "design", "vastu", "quantity") or re.search(r"plan|drawing|room|வரைபட|analy", text.lower())) \
             else "docs"
+    elif _ambiguous_rooms(text):
+        # "20x40, 4 rooms – cost?": rooms could mean bedrooms or all rooms → always the tool that asks
+        # (never left to the AI model, which sometimes answered with a guess)
+        tool, args = regex_route(text, agent, False, pending)
     else:
         try:
             if not any(llm.keys().values()):

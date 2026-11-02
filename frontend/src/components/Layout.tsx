@@ -5,24 +5,27 @@ import VersionBar from "./VersionBar";
 import NotifBell from "./NotifBell";
 import {
   Calculator, ChevronDown, Compass, FolderKanban, HardHat, Home, LogOut, Menu, PenSquare,
-  Search, Settings as SettingsIcon, Languages, Trash2, X,
+  Search, Settings as SettingsIcon, Languages, Trash2, Users, X,
 } from "lucide-react";
+import { useOwnerOnly } from "../lib/ownerOnly";
 import { useAuth } from "../lib/auth";
 import { useI18n } from "../lib/i18n";
 import { Avatar } from "./ui";
 
-const NAV = [
+const NAV: { to: string; label: string; icon: any; end?: boolean; module?: string; ownerOnly?: boolean }[] = [
   { to: "/", label: "Home", icon: Home, end: true },
-  { to: "/design", label: "Design", icon: PenSquare },
-  { to: "/site", label: "Site", icon: HardHat },
-  { to: "/vastu", label: "Vastu", icon: Compass },
-  { to: "/estimate", label: "Estimate", icon: Calculator },
+  { to: "/clients", label: "Clients", icon: Users, ownerOnly: true },
+  { to: "/design", label: "Design", icon: PenSquare, module: "design" },
+  { to: "/site", label: "Site", icon: HardHat, module: "site" },
+  { to: "/vastu", label: "Vastu", icon: Compass, module: "vastu" },
+  { to: "/estimate", label: "Estimate", icon: Calculator, module: "estimate" },
   { to: "/projects", label: "Projects", icon: FolderKanban },
-  { to: "/ai", label: "AI Assistant", icon: Search },
+  { to: "/ai", label: "AI Assistant", icon: Search, module: "ai" },
 ];
 
 // A different picture for each page (bottom of the sidebar).
 const SIDEBAR_IMG: [string, string][] = [
+  ["/clients", "proj_residential.jpg"],
   ["/site", "sidebar_site.jpg"], ["/vastu", "sidebar_vastu.jpg"], ["/design", "proj_villa.jpg"],
   ["/estimate", "estimate_house.jpg"], ["/projects", "proj_commercial.jpg"], ["/ai", "proj_residential.jpg"],
   ["/settings", "company_building.jpg"],
@@ -50,6 +53,9 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { t } = useI18n();
   const { user } = useAuth();
   const loc = useLocation();
+  // 1.8: modules the owner keeps for himself are not shown to other users
+  const oo = useOwnerOnly();
+  const navItems = NAV.filter((n) => oo.isOwner || (!n.ownerOnly && !oo.hidden(n.module)));
   const inBin = loc.pathname.startsWith("/settings") && new URLSearchParams(window.location.search).get("tab") === "bin";
   const item = (to: string, label: string, Icon: any, end?: boolean) => (
     <NavLink key={to} to={to} end={end} onClick={onClose}
@@ -70,7 +76,7 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
             <Logo />
             <button className="mr-3 mt-6 text-white lg:hidden" onClick={onClose} aria-label="Close menu"><X /></button>
           </div>
-          <nav className="flex flex-col gap-1.5">{NAV.map((n) => item(n.to, n.label, n.icon, n.end))}</nav>
+          <nav className="flex flex-col gap-1.5">{navItems.map((n) => item(n.to, n.label, n.icon, n.end))}</nav>
           <div className="mx-6 my-4 border-t border-white/15" />
           <nav className="flex flex-col gap-1.5">
             <NavLink to="/settings" onClick={onClose} className={`mx-3 flex items-center gap-3.5 rounded-xl px-4 py-3 text-[15px] font-medium transition ${

@@ -14,3 +14,4 @@ backend/storage/
 
 # Render settings file made by scripts\render_env.bat (contains keys)
 render_env.txt
+.update_cache/

@@ -72,6 +72,17 @@ def require_owner(user: User = Depends(get_current_user)) -> User:
     return user
 
 
+# 1.8: modules the owner keeps for himself (Settings → Owner-only modules). Never "view"/"edit".
+OWNER_ONLY_CHOICES = ("design", "estimate", "vastu", "site", "ai")
+
+
+def owner_only_modules(db: Session) -> set[str]:
+    from .models import AppSetting
+    row = db.get(AppSetting, "owner_only")
+    mods = ((row.value or {}).get("modules") if row else None) or []
+    return {m for m in mods if m in OWNER_ONLY_CHOICES}
+
+
 def project_permissions(db: Session, user: User, project: Project) -> dict:
     """Return {module: bool} for this user on this project."""
     if user.role == "owner":
@@ -80,6 +91,8 @@ def project_permissions(db: Session, user: User, project: Project) -> dict:
     if not acc:
         return {m: False for m in MODULES}
     perms = {m: bool(getattr(acc, f"can_{m}")) for m in MODULES}
+    for m in owner_only_modules(db):  # kept for the owner only, whatever was granted
+        perms[m] = False
     if any(perms.values()):
         perms["view"] = True
     return perms

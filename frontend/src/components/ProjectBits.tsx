@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { CalendarDays, MapPin, MoreVertical } from "lucide-react";
 import { api, fmtDate } from "../lib/api";
-import type { Project } from "../lib/auth";
+import { useAuth, type Project } from "../lib/auth";
 import { useI18n } from "../lib/i18n";
 import { Field, Modal, toast } from "./ui";
 
@@ -101,17 +101,23 @@ const EMPTY: Form = {
   health: "on_track", progress: 0, notes: "",
 };
 
-export function ProjectFormModal({ open, onClose, project, onSaved }: {
+export function ProjectFormModal({ open, onClose, project, onSaved, preset }: {
   open: boolean; onClose: () => void; project?: Project | null; onSaved: (p: Project) => void;
+  preset?: Form;  // 1.8: e.g. { client_id, client_name } when made from a client
 }) {
   const { t } = useI18n();
+  const { user } = useAuth();
   const [f, setF] = useState<Form>(EMPTY);
+  const [clientNames, setClientNames] = useState<string[]>([]);
+  useEffect(() => {  // owner: suggest saved clients while typing (a new name makes a new client)
+    if (open && user?.role === "owner") api<any>("/api/clients").then((r) => setClientNames(r.clients.map((c: any) => c.name))).catch(() => {});
+  }, [open, user?.role]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   useEffect(() => {
     if (!open) return;
     setErr("");
-    setF(project ? Object.fromEntries(Object.keys(EMPTY).map((k) => [k, (project as any)[k] ?? ""])) : EMPTY);
+    setF(project ? Object.fromEntries(Object.keys(EMPTY).map((k) => [k, (project as any)[k] ?? ""])) : { ...EMPTY, ...(preset || {}) });
   }, [open, project]);
   const set = (k: string) => (e: any) => setF({ ...f, [k]: e.target.value });
 
@@ -145,7 +151,9 @@ export function ProjectFormModal({ open, onClose, project, onSaved }: {
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="Project name *" className="sm:col-span-2"><input className="input" value={f.name} onChange={set("name")} placeholder="30x40 Residential House" /></Field>
         <Field label={t("Type")}>{sel("project_type", PROJECT_TYPES)}</Field>
-        <Field label={t("Client")}><input className="input" value={f.client_name} onChange={set("client_name")} /></Field>
+        <Field label={t("Client")}><input className="input" value={f.client_name} list="nx-client-names"
+          onChange={(e) => setF({ ...f, client_name: e.target.value, client_id: undefined })} />
+          <datalist id="nx-client-names">{clientNames.map((n) => <option key={n} value={n} />)}</datalist></Field>
         <Field label="State">{sel("state", INDIAN_STATES.map((s) => [s, s]))}</Field>
         <Field label="District">
           {f.state === "Tamil Nadu"

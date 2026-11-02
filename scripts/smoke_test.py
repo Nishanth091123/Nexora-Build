@@ -32,10 +32,22 @@ import subprocess
 import time
 from pathlib import Path
 
+FULL = "--full" in sys.argv  # also test the live AI providers (slow: free AI services can take minutes)
+T_START = time.perf_counter()
+TIMES: list[tuple[float, str]] = []
+
+
 class Client(httpx.Client):
-    """Slow answers (database waking up, AI providers) are retried once; a second timeout becomes a FAIL line
-    instead of stopping the whole test."""
+    """Slow answers (database waking up) are retried once; a second timeout becomes a FAIL line
+    instead of stopping the whole test. AI calls are never retried (that only doubled the wait)."""
     def request(self, method, url, **kw):
+        t0 = time.perf_counter()
+        try:
+            return self._request(method, url, **kw)
+        finally:
+            TIMES.append((time.perf_counter() - t0, f"{method} {str(url).split('?')[0]}"))
+
+    def _request(self, method, url, **kw):
         for attempt in (1, 2, 3):
             try:
                 return super().request(method, url, **kw)
@@ -47,7 +59,7 @@ class Client(httpx.Client):
                 return httpx.Response(599, json={"detail": f"connection dropped: {method} {url} ({type(e).__name__})"},
                                       request=httpx.Request(method, BASE + str(url)))
             except httpx.TimeoutException:
-                if attempt == 1:
+                if attempt == 1 and not str(url).startswith("/api/ai/"):
                     print(f"       (slow answer from {method} {url} – trying once more...)")
                     continue
                 return httpx.Response(599, json={"detail": f"timed out: {method} {url}"}, request=httpx.Request(method, BASE + str(url)))
@@ -83,7 +95,7 @@ except httpx.ConnectError:
     else:
         sys.exit("[ERROR] Backend did not start in 2 minutes.")
 check("health", r.status_code == 200 and r.json().get("status") == "ok", r.text)
-check("backend is the Phase 7 version (not an old one still running)", "phase7" in r.json().get("version", ""), r.text)
+check("backend is the 1.8 version (not an old one still running)", r.json().get("version", "").startswith("1.8"), r.text)
 
 login = input("Owner username [nishanth_s]: ").strip() or "nishanth_s"
 pw = getpass.getpass("Owner password (hidden): ")
@@ -91,6 +103,15 @@ r = c.post("/api/auth/login", json={"login": login, "password": pw})
 check("owner login", r.status_code == 200, r.text)
 if r.status_code != 200:
     sys.exit("Cannot continue without login.")
+c.headers["Authorization"] = "Bearer " + r.json()["token"]
+_lat = []
+for _ in range(3):
+    _t = time.perf_counter()
+    c.get("/api/auth/me")
+    _lat.append((time.perf_counter() - _t) * 1000)
+_ms = min(_lat)
+print(f"       Database speed: one simple request = {_ms:.0f} ms" + (
+      "  (slow internet to the online database – the whole test will take longer)" if _ms > 800 else ""))
 c.headers["Authorization"] = "Bearer " + r.json()["token"]
 
 r = c.post("/api/auth/login", json={"login": login, "password": "wrong-password-123"})
@@ -471,7 +492,9 @@ r, j = chat6({"conversation_id": conv6, "text": "", "form": {"tool": "docs", "la
                                                             "args": {"query": "which steel grade"}}})
 check("Document Q&A finds the answer", any(s.get("kind") == "doc" for s in j.get("assistant_message", {}).get("sources", [])),
       r.text[:300])
-if st6.get("any"):
+if st6.get("any") and not FULL:
+    print("       (live AI provider test skipped – quick mode. For it run:  scripts\\update.bat --full)")
+if st6.get("any") and FULL:
     t6 = c.get("/api/ai/status?test=true", timeout=180).json().get("test", {})
     for prov, res in t6.items():
         print(f"       AI {prov}: {res}")
@@ -493,15 +516,48 @@ r = c.post(f"/api/projects/{pid}/design/generate", json={"requirements": {**(req
            "levels": [{"name": "Ground Floor", "bedrooms": 3, "attached_toilets": 3, "common_toilets": 0, "kitchen": True, "hall": True, "dining": True}]}})
 check("too many rooms -> options offered", r.status_code == 422 and "suggestions" in r.text, r.text[:200])
 
+# ---------------- 1.8: Clients & Projects (owner only) ----------------
+r = c.get("/api/settings/company")
+check("company name + proprietor", r.status_code == 200 and "proprietor" in r.json(), r.text[:200])
+r = c.post("/api/clients", json={"name": "SMOKE CLIENT", "phone": "90000 00001", "location": "Thiruvarur"})
+cl = r.json() if r.status_code == 200 else {}
+check("client created", str(cl.get("code", "")).startswith("C-"), r.text[:200])
+if cl.get("id"):
+    r = c.put(f"/api/projects/{pid}/client", json={"client_id": cl["id"]})
+    check("project linked to client", r.status_code == 200 and r.json().get("client_name") == "SMOKE CLIENT", r.text[:200])
+    r = c.get(f"/api/clients/{cl['id']}")
+    check("client shows its project", r.status_code == 200 and any(p["id"] == pid for p in r.json()["projects"]), r.text[:200])
+    r = c.post(f"/api/clients/{cl['id']}/files", data={"category": "land"}, files={"file": ("patta.pdf", pdf, "application/pdf")})
+    check("client document upload", r.status_code == 200 and r.json().get("category") == "client_land", r.text[:200])
+    r = c.get("/api/clients?q=SMOKE")
+    check("client search", r.status_code == 200 and any(x["id"] == cl["id"] for x in r.json()["clients"]), r.text[:200])
+    r = c.put(f"/api/projects/{pid}/workflow", json={"key": "client_meeting", "done": True, "date": "2026-11-01"})
+    check("workflow stage done", r.status_code == 200 and r.json()["stages"][0]["done"] is True, r.text[:200])
+    r = c.post(f"/api/projects/{pid}/notes", json={"activity": "SMOKE note", "remarks": "test"})
+    check("project note added", r.status_code == 200, r.text[:200])
+    r = c.get("/api/clients/stats")
+    check("client stats", r.status_code == 200 and r.json().get("clients", 0) >= 1, r.text[:200])
+    r = c.post(f"/api/trash/client/{cl['id']}")
+    check("client to Recycle Bin", r.status_code == 200, r.text[:200])
+    c.post(f"/api/trash/client/{cl['id']}/purge", timeout=300)  # clean up (test data only)
+was = c.get("/api/owner-only").json().get("modules", [])
+r = c.put("/api/owner-only", json={"modules": sorted(set(was) | {"vastu"})})
+check("owner-only module switch", r.status_code == 200 and "vastu" in r.json()["modules"], r.text[:200])
+c.put("/api/owner-only", json={"modules": was})  # back as it was
+
 r = c.patch(f"/api/projects/{pid}", json={"status": "archived"})
 check("archive test project", r.status_code == 200, r.text)
 lst = c.get("/api/projects").json()["projects"]
 check("archived project hidden from list", all(p["id"] != pid for p in lst))
 
 print()
+total = time.perf_counter() - T_START
+print(f"Test time: {total / 60:.1f} min, {len(TIMES)} requests. Slowest:")
+for secs, what in sorted(TIMES, reverse=True)[:8]:
+    print(f"   {secs:6.1f} s  {what}")
 print(f"{ok_count} passed, {len(fail)} failed")
 if fail:
     print("Failed:", ", ".join(fail), "\nSend this output to Claude.")
     sys.exit(1)
 else:
-    print("PHASE 1 - 7 API: ALL GOOD")
+    print("NEXORA 1.8 API: ALL GOOD")

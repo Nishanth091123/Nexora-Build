@@ -12,6 +12,7 @@ const DesignPage = lazy(() => import("./pages/Design"));  // loaded only when op
 const VastuPage = lazy(() => import("./pages/Vastu"));  // loaded only when opened
 const SitePage = lazy(() => import("./pages/Site"));  // loaded only when opened
 const AIPage = lazy(() => import("./pages/AI"));  // loaded only when opened
+const ClientsPage = lazy(() => import("./pages/Clients"));  // 1.8 owner only
 import { HomePage } from "./pages/Modules";
 
 export default function App() {
@@ -30,6 +31,7 @@ export default function App() {
         <Routes>
           <Route element={<Layout />}>
             <Route index element={<HomePage />} />
+            <Route path="clients" element={<ClientsPage />} />
             <Route path="projects" element={<Projects />} />
             <Route path="design" element={<DesignPage />} />
             <Route path="site" element={<SitePage />} />

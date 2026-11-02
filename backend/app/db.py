@@ -44,7 +44,8 @@ NO_DELETE_TABLES = ["projects", "files", "audit_logs", "backup_records", "projec
                     "schedule_stages", "tasks", "approvals", "site_reports", "site_activities", "site_photos",
                     "material_entries", "workers", "attendance", "quality_checks", "safety_records",
                     "ai_conversations", "ai_messages", "ai_indexed_files", "ai_doc_chunks",
-                    "trash_log", "invite_links", "bbs_schedules", "permit_checklists", "ai_photo_checks"]
+                    "trash_log", "invite_links", "bbs_schedules", "permit_checklists", "ai_photo_checks",
+                    "clients", "project_notes"]
 
 PG_PROTECTION_SQL = [
     """
@@ -94,6 +95,17 @@ ADDITIVE_MIGRATIONS: dict[str, list[str]] = {
         "ALTER TABLE projects ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN NOT NULL DEFAULT false",
         "ALTER TABLE workers ADD COLUMN IF NOT EXISTS is_hidden BOOLEAN NOT NULL DEFAULT false",
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS invited_via INTEGER",
+    ],
+    # 1.8: Clients (owner only), project workflow tracker, company proprietor
+    "0009_v18_clients": [
+        "ALTER TABLE projects ADD COLUMN IF NOT EXISTS client_id INTEGER",
+        "ALTER TABLE projects ADD COLUMN IF NOT EXISTS workflow JSON",
+        "CREATE INDEX IF NOT EXISTS ix_projects_client_id ON projects (client_id)",
+        "ALTER TABLE files ADD COLUMN IF NOT EXISTS client_id INTEGER",
+        "CREATE INDEX IF NOT EXISTS ix_files_client_id ON files (client_id)",
+        "ALTER TABLE organization ADD COLUMN IF NOT EXISTS proprietor VARCHAR(160) NOT NULL DEFAULT ''",
+        "UPDATE organization SET name = 'Praganya Construction' WHERE id = 1 AND (name IS NULL OR name = '')",
+        "UPDATE organization SET proprietor = 'Nishanth S' WHERE id = 1 AND (proprietor IS NULL OR proprietor = '')",
     ],
 }
 

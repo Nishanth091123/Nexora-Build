@@ -11,7 +11,7 @@ from . import config
 from .alerts import start_alerts
 from .backup import start_auto_backups
 from .db import SessionLocal, init_db
-from .routers import admin, ai, auth, extras, invites, push, trash, design, drawing, estimate, files, pm, projects, settings, site, users, vastu
+from .routers import admin, clients, ai, auth, extras, invites, push, trash, design, drawing, estimate, files, pm, projects, settings, site, users, vastu
 from .seed import seed
 from .storage import storage
 
@@ -25,6 +25,12 @@ async def lifespan(app: FastAPI):
     init_db()
     with SessionLocal() as db:
         seed(db)
+        try:
+            n = clients.link_existing_clients(db)
+            if n:
+                log.info("Linked %d project(s) to client records", n)
+        except Exception as e:  # never stop the app for this
+            log.warning("client link skipped: %s", e)
     start_auto_backups()
     start_alerts()
     log.info("Ready. Storage backend: %s", storage.name)
@@ -85,7 +91,7 @@ async def db_error_handler(request: Request, exc: DBAPIError):
 
 for r in (auth.router, users.router, projects.router, files.router, settings.router, admin.router,
           estimate.router, design.router, drawing.router, vastu.router, pm.router, site.router, ai.router,
-          trash.router, invites.router, invites.notif_router, extras.router, push.router):
+          trash.router, invites.router, invites.notif_router, extras.router, push.router, clients.router):
     app.include_router(r)
 
 

@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from ..audit import log_action
 from ..db import get_db
-from ..models import AuditLog, Project, ProjectAccess, StoredFile, User
+from ..models import AuditLog, Client, Project, ProjectAccess, StoredFile, User
 from ..security import (get_current_user, project_permissions, require_project,
                         visible_project_ids)
 
@@ -54,6 +54,7 @@ class ProjectIn(BaseModel):
     status: str = "ongoing"
     health: str = "on_track"
     notes: str = ""
+    client_id: int | None = None  # 1.8 (owner only)
 
 
 class ProjectPatch(BaseModel):
@@ -80,6 +81,24 @@ class ProjectPatch(BaseModel):
     notes: str | None = None
     latitude: float | None = Field(default=None, ge=-90, le=90)
     longitude: float | None = Field(default=None, ge=-180, le=180)
+    client_id: int | None = None  # 1.8 (owner only)
+
+
+def _link_client(db: Session, user: User, p: Project, data: dict) -> None:
+    """Owner only: the project's client is a Client record (picked, or made from the typed name)."""
+    from .clients import _client, find_or_create_client
+    if user.role != "owner":
+        return
+    if data.get("client_id"):
+        c = _client(db, data["client_id"])
+        p.client_id, p.client_name = c.id, c.name
+    elif "client_name" in data and (data.get("client_name") or "").strip():
+        cur = p.client_id and db.get(Client, p.client_id)
+        if not cur or cur.name.lower() != p.client_name.strip().lower():
+            c = find_or_create_client(db, p.client_name, user.id, p.location)
+            p.client_id = c.id if c else None
+    elif "client_name" in data:
+        p.client_id = None
 
 
 def validate_fields(data: dict) -> None:
@@ -143,10 +162,12 @@ def create_project(body: ProjectIn, user: User = Depends(get_current_user), db: 
         raise HTTPException(403, "The owner has not allowed you to create projects")
     data = body.model_dump()
     validate_fields(data)
+    client_id = data.pop("client_id", None)
     # Built-up area is never guessed from plot size (setbacks apply – Design Studio, Phase 3).
     p =Project(code=next_code(db), created_by=user.id, **data)
     db.add(p)
     db.flush()
+    _link_client(db, user, p, {**data, "client_id": client_id})
     if user.role != "owner":  # creator gets full access to own project
         db.add(ProjectAccess(user_id=user.id, project_id=p.id, can_view=True, can_edit=True, can_design=True,
                              can_estimate=True, can_site=True, can_vastu=True, can_ai=True,
@@ -192,11 +213,14 @@ def update_project(project_id: int, body: ProjectPatch, user: User = Depends(get
         raise HTTPException(403, "Only the owner can archive projects")
     merged = {"start_date": p.start_date, "end_date": p.end_date, **data}
     validate_fields(merged)
+    link = {k: data.pop(k) for k in ("client_id",) if k in data}
     changed = []
     for k, v in data.items():
         if getattr(p, k) != v:
             setattr(p, k, v)
             changed.append(k)
+    if link or "client_name" in data:
+        _link_client(db, user, p, {**data, **link})
     db.commit()
     if changed:
         log_action(db, user, "archived" if data.get("status") == "archived" else "updated", "project", p.code,

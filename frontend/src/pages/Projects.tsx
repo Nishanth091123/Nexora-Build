@@ -23,7 +23,8 @@ type Detail = {
 };
 type FileItem = { id: number; name: string; category: string; size_bytes: number; version: number; created_at: string; url: string; content_type: string };
 
-const CATS: [string, string][] = [["drawing", "Drawings"], ["report", "Reports"], ["photo", "Photos"], ["contract", "Contracts"], ["other", "Others"]];
+const CATS: [string, string][] = [["drawing", "Drawings"], ["structural", "Structural"], ["estimation", "Estimation"], ["vastu", "Vastu"],
+  ["approval", "Approval"], ["report", "Reports"], ["photo", "Photos"], ["contract", "Contracts"], ["other", "Others"]];
 const cap = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 const ROLE_COLOR: Record<string, string> = { owner: "blue", editor: "green", viewer: "amber" };
 

@@ -53,7 +53,7 @@ function CompanySection({ isOwner }: { isOwner: boolean }) {
     try { const d = await api("/api/settings/company/logo", { form: fd }); setC(d); setLogo(URL.createObjectURL(f)); toast("Logo updated"); }
     catch (e: any) { toast(e.message, "err"); }
   };
-  const fields: [string, string][] = [["name", "Company Name"], ["registration_no", "Registration No."], ["address", "Address"],
+  const fields: [string, string][] = [["name", "Company Name"], ["proprietor", "Proprietor"], ["registration_no", "Registration No."], ["address", "Address"],
     ["industry", "Industry"], ["phone", "Phone"], ["email", "Email"], ["website", "Website"]];
   return (
     <Card title={t("Company Information")} icon={<Building2 size={20} />}
@@ -243,6 +243,32 @@ function AccessSection() {
           <p className="mt-2 text-xs text-slate-500">Changes save instantly. Any module automatically gives View access.</p>
         </>
       )}
+    </Card>
+  );
+}
+
+// ---------------- 1.8 Owner-only modules ----------------
+const OO_LABEL: Record<string, string> = { design: "Design (2D / 3D)", estimate: "Estimate & BOQ", vastu: "Vastu", site: "Site", ai: "AI Assistant" };
+function OwnerOnlySection() {
+  const [mods, setMods] = useState<string[]>([]);
+  const [choices, setChoices] = useState<string[]>([]);
+  useEffect(() => { api<any>("/api/owner-only").then((r) => { setMods(r.modules); setChoices(r.choices); }).catch(() => {}); }, []);
+  const flip = async (m: string, on: boolean) => {
+    const next = on ? [...mods, m] : mods.filter((x) => x !== m);
+    try { const r = await api<any>("/api/owner-only", { method: "PUT", body: { modules: next } }); setMods(r.modules); toast(on ? `${OO_LABEL[m]} – only you` : `${OO_LABEL[m]} – as per Project Access`); }
+    catch (e: any) { toast(e.message, "err"); }
+  };
+  return (
+    <Card title="Owner-only modules" icon={<Crown size={20} />}>
+      <p className="mb-3 text-sm text-slate-600">Switch ON = only you see this module. Other users lose it everywhere (menu and data), even if it is ticked below. Switch OFF = Project Access decides. <b>Clients</b> are always only yours.</p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {choices.map((m) => (
+          <div key={m} className="flex items-center justify-between rounded-lg border border-line px-3 py-2.5 text-sm">
+            <span className="font-medium text-navy-ink">{OO_LABEL[m] || m}</span>
+            <Toggle checked={mods.includes(m)} onChange={(v) => flip(m, v)} />
+          </div>
+        ))}
+      </div>
     </Card>
   );
 }
@@ -490,7 +516,7 @@ export default function Settings() {
           )}
           {tab === "company" && <div className="grid gap-4 lg:grid-cols-2"><CompanySection isOwner /><ProfileSection /></div>}
           {tab === "users" && <div className="grid gap-4 xl:grid-cols-[2fr_1fr]"><div className="min-w-0 space-y-4"><UsersSection /><InviteLinks /></div><RolesSection counts={userCounts} /></div>}
-          {tab === "access" && <AccessSection />}
+          {tab === "access" && <div className="space-y-4"><OwnerOnlySection /><AccessSection /></div>}
           {tab === "units" && <div className="grid gap-4 lg:grid-cols-2"><UnitsSection s={s} save={save} /><RatesSection /></div>}
           {tab === "ai" && <AISection s={s} save={save} keys={sys?.llm_keys} />}
           {tab === "notifications" && <NotificationsSection s={s} save={save} />}

@@ -47,6 +47,7 @@ class Organization(Base):
     email: Mapped[str] = mapped_column(String(200), default="")
     website: Mapped[str] = mapped_column(String(200), default="")
     logo_file_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    proprietor: Mapped[str] = mapped_column(String(160), default="")  # 1.8
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
@@ -79,6 +80,8 @@ class Project(Base):
     latitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     longitude: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     is_hidden: Mapped[bool] = mapped_column(Boolean, default=False)  # in the Recycle Bin (6.6)
+    client_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 1.8: Clients (owner only)
+    workflow: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # 1.8: {stage: {"done": bool, "date": "..."}}
     created_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
@@ -119,6 +122,7 @@ class StoredFile(Base):
     uploaded_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     is_hidden: Mapped[bool] = mapped_column(Boolean, default=False)  # "delete" only hides; data kept
+    client_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 1.8: client document (owner only)
 
 
 class AppSetting(Base):
@@ -599,4 +603,33 @@ class StoredBlob(Base):
     key: Mapped[str] = mapped_column(String(400), primary_key=True)
     data: Mapped[bytes] = mapped_column(LargeBinary)
     size_bytes: Mapped[int] = mapped_column(BigInteger, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# ---------------------------------------------------------------- 1.8 Clients (owner only)
+class Client(Base):
+    __tablename__ = "clients"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(20), unique=True, index=True)  # C-001
+    name: Mapped[str] = mapped_column(String(160))
+    phone: Mapped[str] = mapped_column(String(40), default="")
+    email: Mapped[str] = mapped_column(String(200), default="")
+    address: Mapped[str] = mapped_column(Text, default="")
+    location: Mapped[str] = mapped_column(String(160), default="")  # town (for search)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    is_hidden: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class ProjectNote(Base):
+    __tablename__ = "project_notes"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), index=True)
+    activity: Mapped[str] = mapped_column(String(200))
+    remarks: Mapped[str] = mapped_column(Text, default="")
+    note_date: Mapped[date] = mapped_column(Date)
+    by_name: Mapped[str] = mapped_column(String(120), default="")
+    is_hidden: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

@@ -68,7 +68,8 @@ def seed(db: Session) -> None:
         log.info("Owner account '%s' created", config.OWNER_USERNAME)
 
     if not db.get(Organization, 1):
-        db.add(Organization(id=1, name="", industry="Construction & Infrastructure"))
+        db.add(Organization(id=1, name="Praganya Construction", proprietor="Nishanth S",
+                            industry="Construction & Infrastructure"))
 
     # default Tamil Nadu rates – only ADD missing codes, never overwrite edited rates
     have = {r.code for r in db.query(RateItem).filter(RateItem.state == DEFAULT_STATE).all()}
