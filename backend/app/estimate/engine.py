@@ -130,6 +130,7 @@ class Inputs:
     contingency_pct: float | None = None      # default from rate library
     extra_notes: list[str] = field(default_factory=list)
     geometry: list[dict] | None = None        # per-level measured geometry from a design (Phase 3)
+    payment_schedule: list[dict] | None = None  # 1.8: [{"stage": "...", "pct": 10}] – default made from floors
 
     @staticmethod
     def from_dict(d: dict) -> "Inputs":
@@ -659,7 +660,106 @@ def calculate(inputs: dict, rates: dict[str, dict]) -> dict:
     c.add("Earthwork", "Watchman & curing during construction", "Site", months * 26, "day", None, None, None,
           {"watchman": months * 26})
 
-    return summarize(c, inp, names, total_sqft, months)
+    out = summarize(c, inp, names, total_sqft, months)
+    out.update(extras_v18(c, inp, names, geo))
+    g = out["totals"]["grand_total"]
+    for x in out["payment_schedule"]:
+        x["amount"] = round(g * x["pct"] / 100, 0)
+    return out
+
+
+# ---------------------------------------------------------------- 1.8 extra views of the same calculation
+STAIR_M2 = 2.5 * 4.2  # staircase footprint per floor (1.0 m flights + landing)
+
+
+def default_payment_schedule(names: list[str], stilt: bool) -> list[dict]:
+    """Typical stage-wise schedule: advance, foundation, one stage per roof slab, finishing, handover = 100 %."""
+    slabs = [n for n in names]
+    slab_total = 55
+    each = [slab_total // len(slabs) + (1 if i < slab_total % len(slabs) else 0) for i in range(len(slabs))]
+    out = [{"stage": "Advance / Mobilization", "pct": 10}, {"stage": "Foundation up to Plinth", "pct": 15}]
+    if len(slabs) == 1:
+        out += [{"stage": "Brickwork up to Lintel", "pct": 25}, {"stage": "Roof Slab", "pct": 30}]
+    else:
+        out += [{"stage": f"{n} Roof Slab", "pct": p} for n, p in zip(slabs, each)]
+    out += [{"stage": "Finishing Works (plaster, flooring, painting)", "pct": 15},
+            {"stage": "External Works & Handover", "pct": 5}]
+    return out
+
+
+def extras_v18(c: Calc, inp: Inputs, names: list[str], geo: list[dict]) -> dict:
+    items = c.items
+    # ---- floor-wise BOQ: same item across floors in one row (foundation/plinth under the first level,
+    #      terrace under the top level, external/site/additional in "Common")
+    first, top = names[0], names[-1]
+    col_of = {"Foundation": first, "Plinth": first, "Terrace": top, "External": "Common", "Site": "Common",
+              "Additional": "Common"}
+    cols = list(names) + (["Common"] if any(col_of.get(i["floor"]) == "Common" for i in items) else [])
+    rows: dict[tuple, dict] = {}
+    for it in items:
+        col = col_of.get(it["floor"], it["floor"])
+        k = (it["category"], it["description"], it["unit"])
+        r = rows.setdefault(k, {"category": it["category"], "group": it["group"], "description": it["description"],
+                                "unit": it["unit"], "qty": {}, "amount": 0.0, "material_cost": 0.0, "labour_cost": 0.0,
+                                "equipment_cost": 0.0})
+        r["qty"][col] = round(r["qty"].get(col, 0) + it["qty"], 2)
+        for f in ("amount", "material_cost", "labour_cost", "equipment_cost"):
+            r[f] += it[f]
+    boq_rows = []
+    for r in rows.values():
+        tq = round(sum(r["qty"].values()), 2)
+        boq_rows.append({**r, "total_qty": tq, "rate": round(r["amount"] / tq, 2) if tq else 0,
+                         **{f: round(r[f], 2) for f in ("amount", "material_cost", "labour_cost", "equipment_cost")}})
+
+    # ---- area statement (carpet = built-up minus wall footprint minus staircase)
+    area_rows = []
+    for n, g, a_sqft in zip(names, geo, inp.floor_areas_sqft):
+        wall_m2 = g["ext"] * 0.23 + g["int230"] * 0.23 + g["part"] * 0.115
+        stair = STAIR_M2 if inp.staircase and len(names) > 1 else 0.0
+        carpet = max(0.0, g["a"] - wall_m2 - stair)
+        r = g["r"]
+        remark = "Parking" if g["stilt"] else ", ".join(x for x in [
+            f"{r['bed']} bed" if r["bed"] else "", f"{r['toi']} toilet" if r["toi"] else "",
+            "kitchen" if r["kit"] else "", "hall" if r["hall"] else ""] if x)
+        area_rows.append({"floor": n, "builtup_sqft": round(a_sqft, 0), "carpet_sqft": round(carpet / 0.09290304, 0),
+                          "common_sqft": round(stair / 0.09290304, 0), "remarks": remark})
+    c.assumptions.append("Carpet area = built-up minus wall thickness (230/115 mm walls) minus staircase "
+                         f"({STAIR_M2:.1f} m² per floor) – approximate; measure from the final drawing.")
+
+    # ---- key quantities
+    def qsum(pred, field="qty"):
+        return round(sum(i[field] for i in items if pred(i)), 1)
+    key = [
+        {"name": "Excavation", "unit": "m³", "qty": qsum(lambda i: i["category"] == "Earthwork" and i["description"].startswith("Excavation"))},
+        {"name": "PCC (plain concrete)", "unit": "m³", "qty": qsum(lambda i: i["category"] == "Concrete (PCC)")},
+        {"name": "RCC (footing, column, beam, slab, stair)", "unit": "m³", "qty": qsum(lambda i: i["category"] == "RCC")},
+        {"name": "Steel (TMT)", "unit": "kg", "qty": qsum(lambda i: i["category"] == "Steel")},
+        {"name": "Brick / block work", "unit": "m³", "qty": qsum(lambda i: i["category"] == "Masonry" and i["unit"] == "m³")},
+        {"name": "Partition walls 115 mm", "unit": "m²", "qty": qsum(lambda i: i["category"] == "Masonry" and i["unit"] == "m²")},
+        {"name": "Plastering (internal + external + ceiling)", "unit": "m²", "qty": qsum(lambda i: i["category"] == "Plastering")},
+        {"name": "Flooring (tiles)", "unit": "m²", "qty": qsum(lambda i: i["category"] == "Flooring & Tiling" and "floor" in i["description"].lower())},
+        {"name": "Wall tiles", "unit": "m²", "qty": qsum(lambda i: i["description"].startswith("Wall tiles"))},
+        {"name": "Painting", "unit": "m²", "qty": qsum(lambda i: i["category"] == "Painting" and not i["description"].startswith("Enamel"))},
+        {"name": "Doors", "unit": "nos", "qty": qsum(lambda i: i["category"] == "Doors & Windows" and i["unit"] == "nos")},
+        {"name": "Windows & ventilators", "unit": "m²", "qty": qsum(lambda i: i["description"].startswith("Windows"))},
+        {"name": "Staircase concrete", "unit": "m³", "qty": qsum(lambda i: "Staircase" in i["description"] and i["category"] == "RCC")},
+    ]
+    key = [k for k in key if k["qty"] > 0]
+
+    # ---- payment schedule
+    sched = inp.payment_schedule or default_payment_schedule(names, inp.stilt)
+    clean = []
+    for s in sched:
+        try:
+            pct = float(s.get("pct") or 0)
+        except (TypeError, ValueError):
+            pct = 0
+        if str(s.get("stage") or "").strip():
+            clean.append({"stage": str(s["stage"]).strip()[:120], "pct": pct})
+    if abs(sum(x["pct"] for x in clean) - 100) > 0.01:
+        c.warnings.append(f"Payment schedule adds up to {sum(x['pct'] for x in clean):g}% – it should be 100%.")
+    return {"floor_boq": {"columns": cols, "rows": boq_rows}, "area_statement": area_rows,
+            "key_quantities": key, "payment_schedule": clean}
 
 
 def summarize(c: Calc, inp: Inputs, names: list[str], total_sqft: float, months: int) -> dict:

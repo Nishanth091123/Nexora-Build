@@ -7,6 +7,7 @@ import Page from "../components/Page";
 import OwnerDelete from "../components/OwnerDelete";
 import Plan3D from "../components/design/Plan3D";
 import BbsTab from "../components/bbs/BbsTab";
+import { FloorBoqPanel, LoanDocsPanel, PaymentSchedulePanel, QuickEstimate } from "../components/estimate/V18Panels";
 import RateLibrary, { type Rate } from "../components/RateLibrary";
 import { INDIAN_STATES } from "../components/ProjectBits";
 import { Badge, Card, Empty, Field, Modal, PillTabs, SegTabs, Toggle, toast } from "../components/ui";
@@ -371,12 +372,26 @@ export default function EstimatePage() {
     } catch (e: any) { toast(e.message, "err"); }
   };
 
-  const doExport = async (kind: "excel" | "pdf") => {
+  const doExport = async (kind: "excel" | "pdf" | "bank" | "client") => {
     setExportOpen(false);
     if (!saved || dirty) return toast("Save this estimate first (Save button) – exports come from a saved version", "err");
     const ext = kind === "excel" ? "xlsx" : "pdf";
-    try { await downloadFile(`/api/estimates/${saved.id}/${kind}`, `${currentProject?.code}_${kind === "excel" ? "BOQ" : "Estimate"}_v${saved.version}.${ext}`); }
+    const path = kind === "excel" ? "excel" : kind === "pdf" ? "pdf" : `pdf?fmt=${kind}`;
+    const tag = { excel: "BOQ", pdf: "Estimate", bank: "Bank_Loan_Estimate", client: "Client_Estimate" }[kind];
+    try { await downloadFile(`/api/estimates/${saved.id}/${path}`, `${currentProject?.code}_${tag}_v${saved.version}.${ext}`); }
     catch (e: any) { toast(e.message, "err"); }
+  };
+  const applySchedule = async (stages: { stage: string; pct: number }[] | null) => {
+    const inp = { ...(inputs || {}), payment_schedule: stages };
+    setInputs(inp);
+    const r = await calculate(undefined, inp);
+    if (r) toast(stages ? "Payment schedule applied – Save to keep it" : "Typical schedule restored – Save to keep it");
+  };
+  const applyQuick = async (q: any) => {
+    const inp = { ...(defaults || {}), ...(inputs || {}), ...q };
+    delete inp.geometry; delete inp.design_id;
+    setInputs(inp); setTab("overview");
+    await calculate(undefined, inp);
   };
 
   const runCompare = async () => {
@@ -398,9 +413,11 @@ export default function EstimatePage() {
       <div className="relative hidden sm:block">
         <button className="btn-outline" onClick={() => setExportOpen(!exportOpen)} disabled={!result}><Upload size={16} />Export<ChevronDown size={14} /></button>
         {exportOpen && (
-          <div className="absolute right-0 z-30 mt-2 w-48 rounded-xl border border-line bg-white p-1 shadow-xl">
+          <div className="absolute right-0 z-30 mt-2 w-64 rounded-xl border border-line bg-white p-1 shadow-xl">
             <button className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-slate-50" onClick={() => doExport("excel")}><FileSpreadsheet size={16} className="text-emerald-600" />BOQ (Excel)</button>
-            <button className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-slate-50" onClick={() => doExport("pdf")}><FileText size={16} className="text-red-500" />Estimate (PDF)</button>
+            <button className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-slate-50" onClick={() => doExport("pdf")}><FileText size={16} className="text-red-500" />Detailed Estimate (PDF)</button>
+            <button className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-slate-50" onClick={() => doExport("bank")}><FileText size={16} className="text-brand-600" />Bank Loan Estimate (PDF)</button>
+            <button className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-slate-50" onClick={() => doExport("client")}><FileText size={16} className="text-violet-600" />Client Copy (PDF, no rates)</button>
           </div>
         )}
       </div>
@@ -411,11 +428,15 @@ export default function EstimatePage() {
   if (!allowed) return <Page title={t("Estimate & BOQ")} subtitle="Calculate quantities, material, labour and cost"><Empty text="You don't have Estimate access for this project. Ask the owner." /></Page>;
 
   const tabs = [
-    { id: "overview", label: "Overview", icon: <LayoutDashboard size={18} /> }, { id: "takeoff", label: "Quantity Takeoff", icon: <Ruler size={18} /> },
+    { id: "quick", label: "Quick / Oral Estimate", icon: <Calculator size={18} /> },
+    { id: "overview", label: "Overview", icon: <LayoutDashboard size={18} /> },
+    { id: "floorboq", label: "Floor-wise BOQ", icon: <Layers size={18} /> }, { id: "takeoff", label: "Quantity Takeoff", icon: <Ruler size={18} /> },
     { id: "material", label: "Material Estimate", icon: <Package size={18} /> }, { id: "cost", label: "Cost Analysis", icon: <IndianRupee size={18} /> },
     { id: "boq", label: "BOQ", icon: <ClipboardList size={18} /> }, { id: "rates", label: "Rate Library", icon: <Library size={18} /> },
     { id: "compare", label: "Comparisons", icon: <GitCompare size={18} /> }, { id: "reports", label: "Reports", icon: <FileText size={18} /> },
     { id: "bbs", label: "BBS (Steel)", icon: <Ruler size={18} /> },
+    { id: "payment", label: "Payment Schedule", icon: <CalendarClock size={18} /> },
+    { id: "loan", label: "Loan Documents", icon: <FileText size={18} /> },
   ];
 
   const noResult = (
@@ -650,6 +671,10 @@ export default function EstimatePage() {
         <div className="space-y-4"><Card title="Cost Breakdown" icon={<IndianRupee size={20} />}><Donut data={result.breakdown} total={tt!.grand_total} /></Card><Card title="Floor-wise Summary" icon={<Layers size={20} />}>{floorTable}</Card></div></div> : noResult)}
       {tab === "boq" && (result ? <Card title="Bill of Quantities (click a row for rate analysis)" icon={<ClipboardList size={20} />}>{filters}{boqTable}</Card> : noResult)}
       {tab === "rates" && <RateLibrary defaultState={state} />}
+      {tab === "quick" && pid && <QuickEstimate pid={pid} defaults={defaults} state={state} onUseDetailed={applyQuick} />}
+      {tab === "floorboq" && (result ? <FloorBoqPanel result={result} /> : noResult)}
+      {tab === "payment" && (result ? <PaymentSchedulePanel result={result} onApply={applySchedule} busy={busy} /> : noResult)}
+      {tab === "loan" && pid && <LoanDocsPanel pid={pid} canUpload={!!currentProject?.permissions?.edit} />}
       {tab === "bbs" && pid && <BbsTab pid={pid} code={currentProject?.code || "Nexora"} />}
       {tab === "compare" && (
         <div className="space-y-4">

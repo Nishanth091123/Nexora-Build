@@ -81,7 +81,8 @@ def store(db: Session, user: User, name: str, data: bytes, ctype: str, category:
 @router.post("/project/{project_id}")
 async def upload_project_file(project_id: int, category: str = Form("other"), file: UploadFile = File(...),
                               user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    if category not in CATEGORIES:
+    from .estimate import LOAN_DOCS
+    if category not in CATEGORIES and category not in {f"loan_{k}" for k, _ in LOAN_DOCS}:
         raise HTTPException(400, f"category must be one of {', '.join(sorted(CATEGORIES))}")
     require_project(db, user, project_id, "edit")
     name, data, ctype = await read_and_check(file)

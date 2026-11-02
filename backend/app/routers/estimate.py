@@ -167,6 +167,92 @@ def run_calc(db: Session, inputs: dict, state: str):
     return result, rates
 
 
+# 1.8: owner's default percentages (Settings → Units & Rates → Estimate defaults)
+EST_DEFAULTS = {"gst_pct": 0, "contractor_margin_pct": 0, "contingency_pct": None}
+
+
+def estimate_setting_defaults(db: Session) -> dict:
+    from ..models import AppSetting
+    row = db.get(AppSetting, "estimate_defaults")
+    v = (row.value if row else {}) or {}
+    out = {}
+    for k, d in EST_DEFAULTS.items():
+        x = v.get(k, d)
+        out[k] = None if x in (None, "") else float(x)
+    if out["gst_pct"] is None:
+        out["gst_pct"] = 0
+    if out["contractor_margin_pct"] is None:
+        out["contractor_margin_pct"] = 0
+    return out
+
+
+@router.get("/estimate-settings")
+def get_est_settings(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return estimate_setting_defaults(db)
+
+
+class EstSettingsIn(BaseModel):
+    gst_pct: float = Field(default=0, ge=0, le=28)
+    contractor_margin_pct: float = Field(default=0, ge=0, le=40)
+    contingency_pct: float | None = Field(default=None, ge=0, le=20)
+
+
+@router.put("/estimate-settings")
+def put_est_settings(body: EstSettingsIn, owner: User = Depends(require_owner), db: Session = Depends(get_db)):
+    from ..models import AppSetting
+    row = db.get(AppSetting, "estimate_defaults")
+    if not row:
+        row = AppSetting(key="estimate_defaults", value={})
+        db.add(row)
+    row.value = body.model_dump()
+    db.commit()
+    log_action(db, owner, "updated", "settings", "estimate_defaults", str(row.value))
+    return estimate_setting_defaults(db)
+
+
+# ---------------------------------------------------------------- 1.8 quick / oral estimate
+class QuickIn(BaseModel):
+    builtup_sqft: float = Field(gt=0, le=200000)  # total of all floors
+    floors: int = Field(ge=1, le=6)
+    bedrooms: int = Field(ge=0, le=60)
+    toilets: int = Field(ge=0, le=60)
+    structure: str = "rcc_framed"
+    stilt: bool = False
+    state: str = DEFAULT_STATE
+
+
+@router.post("/projects/{project_id}/estimate/quick")
+def quick_estimate(project_id: int, body: QuickIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Oral estimate for a first discussion: the same engine run for Basic / Standard / Premium."""
+    p = require_project(db, user, project_id, "estimate")
+    if body.bedrooms <= 0 and body.toilets <= 0:
+        raise HTTPException(422, {"message": "Please confirm these details",
+                                  "questions": ["How many bedrooms and toilets in total?"]})
+    per = body.builtup_sqft / body.floors
+    kitchens = max(1, body.floors - (1 if body.stilt else 0)) if body.bedrooms >= 2 * body.floors else 1
+    base = {"floor_areas_sqft": [round(per, 1)] * body.floors, "stilt": body.stilt, "structure": body.structure,
+            "bedrooms": body.bedrooms, "toilets": body.toilets, "kitchens": kitchens, "halls": kitchens,
+            "plot_width_ft": p.plot_width * (3.28084 if p.unit == "m" else 1) if p.plot_width else None,
+            "plot_length_ft": p.plot_length * (3.28084 if p.unit == "m" else 1) if p.plot_length else None,
+            **estimate_setting_defaults(db)}
+    out = {}
+    std = None
+    for spec in ("basic", "standard", "premium"):
+        r, _ = run_calc(db, {**base, "spec_level": spec}, body.state)
+        t = r["totals"]
+        out[spec] = {"grand_total": t["grand_total"], "cost_per_sqft": t["cost_per_sqft"]}
+        if spec == "standard":
+            std = r
+    t = std["totals"]
+    return {"specs": out, "builtup_sqft": body.builtup_sqft, "floors": body.floors, "kitchens": kitchens,
+            "breakdown": std["breakdown"], "rates_state": std["rates_state"],
+            "quantities": {"cement_bags": t["cement_bags"], "steel_kg": t["steel_kg"], "msand_m3": t["msand_m3"],
+                           "psand_m3": t["psand_m3"], "aggregate_m3": t["aggregate_m3"], "bricks": t["bricks"]},
+            "inputs": {**base, "spec_level": "standard"},
+            "note": (f"Oral estimate for discussion – {kitchens} kitchen(s) assumed from the bedroom count; "
+                     "the detailed BOQ (Detailed Estimate) is the figure to quote.")}
+
+
 @router.get("/projects/{project_id}/estimate-defaults")
 def estimate_defaults(project_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     p = require_project(db, user, project_id, "estimate")
@@ -187,7 +273,7 @@ def estimate_defaults(project_id: int, user: User = Depends(get_current_user), d
             "plot_length_ft": round(p.plot_length * to_ft, 2) if p.plot_length else None,
             "staircase": True, "compound_wall": False, "gate": False, "sump_litres": 0,
             "septic_tank": False, "oh_tank_litres": None, "rwh": True, "parking_area_sqft": 0,
-            "approval_fees": 0, "contractor_margin_pct": 0, "gst_pct": 0, "extra_items": [],
+            "approval_fees": 0, "extra_items": [], **estimate_setting_defaults(db),
         },
         "state": p.state or DEFAULT_STATE,
         "needs_confirmation": missing,
@@ -251,25 +337,42 @@ def get_estimate(estimate_id: int, user: User = Depends(get_current_user), db: S
     return est_summary(e) | {"result": e.result, "inputs": e.inputs}
 
 
-def export_payload(e: Estimate, p: Project):
-    return ({"name": p.name, "code": p.code, "location": p.location, "district": p.district, "state": p.state},
-            {"title": e.title, "version": e.version, "rate_state": e.rate_state, "result": e.result})
+def export_payload(e: Estimate, p: Project, db: Session | None = None):
+    from ..models import Organization
+    org = db.get(Organization, 1) if db is not None else None
+    company = {"name": (org.name if org else "") or "", "proprietor": (org.proprietor if org else "") or "",
+               "phone": (org.phone if org else "") or "", "email": (org.email if org else "") or "",
+               "address": (org.address if org else "") or "", "registration_no": (org.registration_no if org else "") or ""}
+    return ({"name": p.name, "code": p.code, "location": p.location, "district": p.district, "state": p.state,
+             "client_name": p.client_name, "floors": p.floors, "company": company,
+             "plot": f"{p.plot_width:g} x {p.plot_length:g} {p.unit}" if p.plot_width and p.plot_length else ""},
+            {"title": e.title, "version": e.version, "rate_state": e.rate_state, "result": e.result,
+             "date": e.created_at.strftime("%d-%m-%Y")})
 
 
 @router.get("/estimates/{estimate_id}/excel")
 def export_excel(estimate_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     e, p = load_estimate(db, user, estimate_id)
-    data = to_excel(*export_payload(e, p))
+    data = to_excel(*export_payload(e, p, db))
     name = f"{p.code}_BOQ_v{e.version}.xlsx"
     return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"})
 
 
 @router.get("/estimates/{estimate_id}/pdf")
-def export_pdf(estimate_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def export_pdf(estimate_id: int, fmt: str = "detailed", user: User = Depends(get_current_user),
+               db: Session = Depends(get_db)):
+    """fmt: detailed (full BOQ) | bank (bank-loan estimate) | client (clean summary for the client)."""
+    from ..estimate.exports import to_pdf_bank, to_pdf_client
     e, p = load_estimate(db, user, estimate_id)
-    data = to_pdf(*export_payload(e, p))
-    name = f"{p.code}_Estimate_v{e.version}.pdf"
+    pay = export_payload(e, p, db)
+    if fmt == "bank":
+        data, tag = to_pdf_bank(*pay), "Bank_Loan_Estimate"
+    elif fmt == "client":
+        data, tag = to_pdf_client(*pay), "Client_Estimate"
+    else:
+        data, tag = to_pdf(*pay), "Estimate"
+    name = f"{p.code}_{tag}_v{e.version}.pdf"
     return Response(data, media_type="application/pdf",
                     headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"})
 
@@ -342,3 +445,23 @@ async def excel_import(project_id: int, file: UploadFile = File(...), state: str
     if out["extra_items"]:
         inputs["extra_items"] = out["extra_items"]
     return {"inputs": inputs, "rates_changed": len(changed), "rates_state": used, "warnings": out["warnings"]}
+
+
+# ---------------------------------------------------------------- 1.8 loan / official documents checklist
+LOAN_DOCS = [("estimate_report", "Estimate Report (Detailed)"), ("boq", "BOQ (Excel)"), ("architectural", "Architectural Plan"),
+             ("structural", "Structural Drawings"), ("site_photos", "Site Photos"), ("approval", "Approval Documents"),
+             ("loan_form", "Loan Application Copy"), ("id_proof", "Identity Proof (Client)")]
+
+
+@router.get("/projects/{project_id}/loan-docs")
+def loan_docs(project_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from ..models import StoredFile
+    from .files import file_out
+    p = require_project(db, user, project_id, "estimate")
+    files = (db.query(StoredFile).filter(StoredFile.project_id == p.id, StoredFile.is_hidden.is_(False),
+                                         StoredFile.category.like("loan_%")).order_by(StoredFile.created_at.desc()).all())
+    items = []
+    for key, label in LOAN_DOCS:
+        fs = [file_out(f) for f in files if f.category == f"loan_{key}"]
+        items.append({"key": key, "label": label, "status": "uploaded" if fs else "pending", "files": fs})
+    return {"items": items, "done": sum(i["status"] == "uploaded" for i in items), "total": len(items)}

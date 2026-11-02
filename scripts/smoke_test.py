@@ -95,7 +95,8 @@ except httpx.ConnectError:
     else:
         sys.exit("[ERROR] Backend did not start in 2 minutes.")
 check("health", r.status_code == 200 and r.json().get("status") == "ok", r.text)
-check("backend is the 1.8 version (not an old one still running)", r.json().get("version", "").startswith("1.8"), r.text)
+_v = tuple(int(x) for x in (r.json().get("version", "0.0").split("-")[0].split(".") + ["0"])[:2] if x.isdigit())
+check("backend is the 1.9 version (not an old one still running)", _v >= (1, 9), r.text)
 
 login = input("Owner username [nishanth_s]: ").strip() or "nishanth_s"
 pw = getpass.getpass("Owner password (hidden): ")
@@ -216,6 +217,41 @@ r = c.get(f"/api/estimates/{eid}/excel")
 check("Excel export", r.status_code == 200 and r.content[:2] == b"PK", r.text[:200] if r.status_code != 200 else "")
 r = c.get(f"/api/estimates/{eid}/pdf")
 check("PDF export", r.status_code == 200 and r.content[:4] == b"%PDF", r.text[:200] if r.status_code != 200 else "")
+# ---------------- 1.8 Part 2: estimate upgrade ----------------
+r = c.post(f"/api/projects/{pid}/estimates", json={"inputs": inp, "title": "SMOKE estimate 1.8"})
+e18 = r.json() if r.status_code == 200 else {}
+res18 = e18.get("result") or {}
+check("floor-wise BOQ", len(res18.get("floor_boq", {}).get("rows", [])) > 10, str(res18.get("floor_boq"))[:200])
+check("area statement", len(res18.get("area_statement", [])) == len(inp.get("floor_areas_sqft", [])) and
+      all(0 < a["carpet_sqft"] < a["builtup_sqft"] for a in res18.get("area_statement", [])), str(res18.get("area_statement"))[:200])
+ps18 = res18.get("payment_schedule", [])
+check("payment schedule = 100%", abs(sum(x["pct"] for x in ps18) - 100) < 0.01 and all("amount" in x for x in ps18), str(ps18)[:200])
+check("key quantities", len(res18.get("key_quantities", [])) >= 6, str(res18.get("key_quantities"))[:200])
+for fmt in ("bank", "client"):
+    r = c.get(f"/api/estimates/{e18.get('id')}/pdf?fmt={fmt}")
+    check(f"{fmt} PDF", r.status_code == 200 and r.content[:4] == b"%PDF", r.text[:200] if r.status_code != 200 else "")
+r = c.get(f"/api/estimates/{e18.get('id')}/excel")
+check("Excel has floor-wise BOQ", r.status_code == 200 and b"Floor-wise BOQ" in __import__("zipfile").ZipFile(__import__("io").BytesIO(r.content)).read("xl/workbook.xml"),
+      r.text[:200] if r.status_code != 200 else "")
+custom = [{"stage": "Advance", "pct": 20}, {"stage": "Structure", "pct": 50}, {"stage": "Finishing", "pct": 30}]
+r = c.post(f"/api/projects/{pid}/estimate/calculate", json={"inputs": {**inp, "payment_schedule": custom}, "state": "Tamil Nadu"})
+check("custom payment schedule", r.status_code == 200 and [x["pct"] for x in r.json()["payment_schedule"]] == [20, 50, 30], r.text[:200])
+r = c.post(f"/api/projects/{pid}/estimate/quick", json={"builtup_sqft": 2400, "floors": 2, "bedrooms": 3, "toilets": 3})
+qk = r.json() if r.status_code == 200 else {}
+check("quick estimate: Economy < Standard < Premium", bool(qk) and qk["specs"]["basic"]["grand_total"] < qk["specs"]["standard"]["grand_total"]
+      < qk["specs"]["premium"]["grand_total"], r.text[:200])
+r = c.post(f"/api/projects/{pid}/estimate/quick", json={"builtup_sqft": 2400, "floors": 2, "bedrooms": 0, "toilets": 0})
+check("quick estimate asks for rooms", r.status_code == 422, r.text[:200])
+was_es = c.get("/api/estimate-settings").json()
+r = c.put("/api/estimate-settings", json={"gst_pct": 12, "contractor_margin_pct": 10, "contingency_pct": None})
+check("estimate defaults saved", r.status_code == 200 and r.json()["gst_pct"] == 12, r.text[:200])
+r = c.get(f"/api/projects/{pid}/estimate-defaults")
+check("defaults used for new estimate", r.status_code == 200 and r.json()["inputs"]["gst_pct"] == 12, r.text[:200])
+c.put("/api/estimate-settings", json={k: was_es.get(k) for k in ("gst_pct", "contractor_margin_pct", "contingency_pct")})
+r = c.post(f"/api/files/project/{pid}", data={"category": "loan_boq"}, files={"file": ("boq.pdf", pdf, "application/pdf")})
+check("loan document upload", r.status_code == 200, r.text[:200])
+r = c.get(f"/api/projects/{pid}/loan-docs")
+check("loan checklist shows it", r.status_code == 200 and any(i["key"] == "boq" and i["status"] == "uploaded" for i in r.json()["items"]), r.text[:200])
 
 # ---------------- Phase 3: design studio ----------------
 r = c.post(f"/api/projects/{pid}/design/parse", json={"text": "20x40 4 rooms north facing"})
@@ -560,4 +596,4 @@ if fail:
     print("Failed:", ", ".join(fail), "\nSend this output to Claude.")
     sys.exit(1)
 else:
-    print("NEXORA 1.8 API: ALL GOOD")
+    print("NEXORA 1.9 API: ALL GOOD")

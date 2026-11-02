@@ -9,6 +9,7 @@ import InviteLinks from "../components/admin/InviteLinks";
 import RecycleBin from "../components/admin/RecycleBin";
 import RecoverBackup from "../components/admin/RecoverBackup";
 import { PushCard } from "../components/PushAlerts";
+import { EstimateDefaultsCard } from "../components/estimate/V18Panels";
 import { Avatar, Badge, Card, Empty, Field, Modal, PillTabs, SegTabs, StatusBadge, Toggle, toast } from "../components/ui";
 import { INDIAN_STATES } from "../components/ProjectBits";
 import { api, downloadFile, fileObjectUrl, fmtBytes, fmtDateTime, setToken } from "../lib/api";
@@ -517,7 +518,7 @@ export default function Settings() {
           {tab === "company" && <div className="grid gap-4 lg:grid-cols-2"><CompanySection isOwner /><ProfileSection /></div>}
           {tab === "users" && <div className="grid gap-4 xl:grid-cols-[2fr_1fr]"><div className="min-w-0 space-y-4"><UsersSection /><InviteLinks /></div><RolesSection counts={userCounts} /></div>}
           {tab === "access" && <div className="space-y-4"><OwnerOnlySection /><AccessSection /></div>}
-          {tab === "units" && <div className="grid gap-4 lg:grid-cols-2"><UnitsSection s={s} save={save} /><RatesSection /></div>}
+          {tab === "units" && <div className="grid gap-4 lg:grid-cols-2"><UnitsSection s={s} save={save} /><div className="space-y-4"><EstimateDefaultsCard /><RatesSection /></div></div>}
           {tab === "ai" && <AISection s={s} save={save} keys={sys?.llm_keys} />}
           {tab === "notifications" && <NotificationsSection s={s} save={save} />}
           {tab === "security" && <div className="grid gap-4 lg:grid-cols-2"><SecuritySection s={s} save={save} isOwner /><Card title="System" icon={<Database size={20} />}>
