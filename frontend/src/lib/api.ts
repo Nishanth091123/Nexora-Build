@@ -50,7 +50,14 @@ export async function api<T = any>(path: string, opts: { method?: string; body?:
     let questions: string[] = [];
     if (Array.isArray(msg)) msg = msg.map((d: any) => `${(d.loc || []).slice(-1)[0]}: ${d.msg}`).join(", ");
     else if (msg && typeof msg === "object") { questions = msg.questions || []; msg = msg.message || "Please check the inputs"; }
-    if (res.status === 404 && msg === "Not Found") msg = API_BASE ? "This feature needs the updated server – run the deploy again (docs/PHASE_7_GUIDE.md)." : "This feature needs the updated backend. Close ALL Nexora CMD windows and run scripts\\start.bat again.";
+    if (res.status === 404 && msg === "Not Found") {
+      if (API_BASE) {
+        let sv = "?";
+        try { sv = (await (await fetch(API_BASE + "/api/health", { cache: "no-store" })).json()).version || "?"; } catch { /* offline */ }
+        const scr = typeof __APP_VERSION__ !== "undefined" ? __APP_VERSION__ : "?";
+        msg = `The online server is still the old version (server ${sv}, screens ${scr}). Render has not updated: open render.com → nexora-build-api → Manual Deploy → "Deploy latest commit", wait ~5 min and reload.`;
+      } else msg = "This feature needs the updated backend. Close ALL Nexora CMD windows and run scripts\\start.bat again.";
+    }
     throw new ApiError(res.status, String(msg), questions, data?.detail);
   }
   return data as T;

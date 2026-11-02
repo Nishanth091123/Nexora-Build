@@ -107,6 +107,11 @@ ADDITIVE_MIGRATIONS: dict[str, list[str]] = {
         "UPDATE organization SET name = 'Praganya Construction' WHERE id = 1 AND (name IS NULL OR name = '')",
         "UPDATE organization SET proprietor = 'Nishanth S' WHERE id = 1 AND (proprietor IS NULL OR proprietor = '')",
     ],
+    # 1.9.1: the owner asked for the firm name – replace the old app-name placeholder too (once)
+    "0010_v191_company_name": [
+        "UPDATE organization SET name = 'Praganya Construction' WHERE id = 1 AND (name IS NULL OR name = '' OR name ILIKE 'nexora%')",
+        "UPDATE organization SET proprietor = 'Nishanth S' WHERE id = 1 AND (proprietor IS NULL OR proprietor = '')",
+    ],
 }
 
 
