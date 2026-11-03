@@ -8,6 +8,7 @@ import {
 import Page from "../components/Page";
 import OwnerDelete from "../components/OwnerDelete";
 import PlanSvg from "../components/design/PlanSvg";
+import DrawingSheets from "../components/design/DrawingSheets";
 import Plan3D from "../components/design/Plan3D";
 import { Badge, Card, Empty, Field, PhaseNote, PillTabs, Toggle, toast } from "../components/ui";
 import { api, ApiError, downloadFile, fmtDateTime, inr, lakhs, num, rupees } from "../lib/api";
@@ -15,7 +16,7 @@ import { useAuth } from "../lib/auth";
 import { useI18n } from "../lib/i18n";
 import { FACINGS, ROOM_TYPES, clone, type Plan, type Room } from "../lib/plan";
 
-type Tab = "ai" | "editor" | "3d" | "upload" | "rev";
+type Tab = "ai" | "editor" | "3d" | "sheets" | "upload" | "rev";
 type Quick = { totals: Record<string, number>; breakdown: { group: string; amount: number; pct: number }[]; spec_level: string; rates_state: string; warnings: string[] };
 type DesignRow = { id: number; version: number; title: string; prompt: string; source: string; spec_level: string; estimate_total: number; cost_per_sqft: number; builtup_sqft: number; summary: any; created_at: string; parent_id: number | null };
 type Suggestion = { label: string; requirements: any; notes: string[] };
@@ -43,7 +44,7 @@ export default function DesignPage() {
   const pid = currentProject?.id;
   const allowed = !!currentProject?.permissions?.design;
   const [params] = useSearchParams();
-  const [tab, setTab] = useState<Tab>(() => (["ai", "editor", "3d", "upload", "rev"].includes(params.get("tab") || "") ? params.get("tab") as Tab : "ai"));
+  const [tab, setTab] = useState<Tab>(() => (["ai", "editor", "3d", "sheets", "upload", "rev"].includes(params.get("tab") || "") ? params.get("tab") as Tab : "ai"));
   const [text, setText] = useState("");
   const [understood, setUnderstood] = useState<string[]>([]);
   const [questions, setQuestions] = useState<string[]>([]);
@@ -184,6 +185,16 @@ export default function DesignPage() {
       recompute(next);
     }
   };
+  const setSpecs = (specs: Record<string, { w_ft?: number; h_ft?: number; material?: string }>) => {
+    if (!plan) return;
+    const next = clone(plan);
+    next.opening_specs = specs;
+    setPast((p) => [...p.slice(-40), JSON.stringify(plan)]); setFuture([]); setDirty(true); setPlan(next);
+    (async () => {
+      try { showPlan(await api<Plan>(`/api/projects/${pid}/design/recompute`, { body: { plan: next } }), "edit"); }
+      catch (e: any) { toast(e.message, "err"); }
+    })();
+  };
   const undo = () => {
     if (!past.length || !plan) return;
     const prev = JSON.parse(past[past.length - 1]);
@@ -276,7 +287,8 @@ export default function DesignPage() {
 
   const tabs = [
     { id: "ai" as Tab, label: "AI Floor Plan", icon: <Wand2 size={18} /> }, { id: "editor" as Tab, label: "2D Editor", icon: <PenSquare size={18} /> },
-    { id: "3d" as Tab, label: "3D View", icon: <Box size={18} /> }, { id: "upload" as Tab, label: "Drawing Upload", icon: <Upload size={18} /> },
+    { id: "3d" as Tab, label: "3D View", icon: <Box size={18} /> }, { id: "sheets" as Tab, label: "Drawing Sheets", icon: <FileText size={18} /> },
+    { id: "upload" as Tab, label: "Drawing Upload", icon: <Upload size={18} /> },
     { id: "rev" as Tab, label: "Revisions", icon: <Layers size={18} /> },
   ];
 
@@ -547,6 +559,9 @@ export default function DesignPage() {
         </div>
       ))}
 
+      {tab === "sheets" && (!plan || !pid ? <Card><Empty text="Generate or open a plan first." /></Card> : (
+        <DrawingSheets pid={pid} plan={plan} saved={saved} dirty={dirty} code={currentProject?.code || "Nexora"} onSpecs={setSpecs} />
+      ))}
       {tab === "upload" && pid && (
         <DrawingImport projectId={pid} designs={designs} onSaved={async (d) => { await loadDesigns(); await openDesign(d.id); setTab("editor"); }} />
       )}

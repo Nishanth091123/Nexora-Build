@@ -144,7 +144,8 @@ def to_pdf(plan: dict, project: dict, meta: dict) -> bytes:
             c.drawString(px, py, _pdf_safe(f"Height ≈ {sb['height_m']} m · coverage {sb['coverage_pct']}%"))
         c.setFont("Helvetica-Oblique", 7)
         c.setFillColor(colors.HexColor("#64748b"))
-        c.drawString(margin, 8 * mm, _pdf_safe("Nexora Build – concept plan. Verify setbacks with the local body "
+        c.drawString(margin, 8 * mm, _pdf_safe(((project.get("company") or {}).get("name") or "Nexora Build")
+                                               + " – concept plan. Verify setbacks with the local body "
                                                "(DTCP/CMDA/Panchayat); structural design by a qualified engineer."))
         c.showPage()
     c.save()

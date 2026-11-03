@@ -263,14 +263,59 @@ def hide_design(design_id: int, user: User = Depends(get_current_user), db: Sess
     return {"ok": True}
 
 
-def _proj(p: Project) -> dict:
-    return {"name": p.name, "code": p.code, "location": p.location}
+def _proj(p: Project, db: Session | None = None) -> dict:
+    out = {"name": p.name, "code": p.code, "location": p.location, "district": p.district,
+           "client_name": p.client_name, "company": {}}
+    if db is not None:
+        from ..models import Organization
+        o = db.get(Organization, 1)
+        if o:
+            out["company"] = {"name": o.name or "", "proprietor": o.proprietor or "", "phone": o.phone or "",
+                              "address": o.address or "", "registration_no": o.registration_no or ""}
+    return out
+
+
+# ---------------------------------------------------------------- 1.10 drawing sheets
+@router.post("/projects/{project_id}/design/sheets-preview")
+def sheets_preview(project_id: int, body: PlanIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Door & window schedule, area details and SVG previews (site plan, floor plans, front elevation, section)."""
+    from ..design import sheets
+    require_any(db, user, project_id, ("design", "estimate"))
+    try:
+        plan = recompute(body.plan)
+    except PlanError as e:
+        raise HTTPException(422, {"message": str(e), "questions": [str(e)]})
+    except (KeyError, TypeError, ValueError) as e:
+        raise HTTPException(400, f"Invalid plan: {e}")
+    return sheets.sheet_previews(plan) | {"warnings": plan.get("warnings", [])}
+
+
+@router.get("/designs/{design_id}/sheets.pdf")
+def design_sheets_pdf(design_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from ..design import sheets
+    d, p = load_design(db, user, design_id, ("design", "estimate"))
+    plan = recompute(d.plan)
+    data = sheets.sheet_set_pdf(plan, _proj(p, db), {"version": d.version, "date": d.created_at.strftime("%d-%m-%Y")})
+    name = f"{p.code}_Drawing_Set_v{d.version}.pdf"
+    return Response(data, media_type="application/pdf",
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"})
+
+
+@router.get("/designs/{design_id}/sheets.dxf")
+def design_sheets_dxf(design_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    from ..design import sheets
+    d, p = load_design(db, user, design_id, ("design", "estimate"))
+    plan = recompute(d.plan)
+    data = sheets.sheets_dxf(plan, _proj(p, db), {"version": d.version})
+    name = f"{p.code}_Drawing_Set_v{d.version}.dxf"
+    return Response(data, media_type="application/dxf",
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"})
 
 
 @router.get("/designs/{design_id}/pdf")
 def design_pdf(design_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     d, p = load_design(db, user, design_id, ("design", "estimate"))
-    data = exports.to_pdf(d.plan, _proj(p), {"version": d.version})
+    data = exports.to_pdf(d.plan, _proj(p, db), {"version": d.version})
     name = f"{p.code}_Plan_v{d.version}.pdf"
     return Response(data, media_type="application/pdf",
                     headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"})

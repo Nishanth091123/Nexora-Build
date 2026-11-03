@@ -96,7 +96,7 @@ except httpx.ConnectError:
         sys.exit("[ERROR] Backend did not start in 2 minutes.")
 check("health", r.status_code == 200 and r.json().get("status") == "ok", r.text)
 _v = tuple(int(x) for x in (r.json().get("version", "0.0").split("-")[0].split(".") + ["0"])[:2] if x.isdigit())
-check("backend is the 1.9 version (not an old one still running)", _v >= (1, 9), r.text)
+check("backend is the 1.10 version (not an old one still running)", _v >= (1, 10), r.text)
 
 login = input("Owner username [nishanth_s]: ").strip() or "nishanth_s"
 pw = getpass.getpass("Owner password (hidden): ")
@@ -284,6 +284,22 @@ if plan:
     check("plan PDF export", r.status_code == 200 and r.content[:4] == b"%PDF", r.text[:200] if r.status_code != 200 else "")
     r = c.get(f"/api/designs/{d2}/dxf")
     check("plan DXF export", r.status_code == 200 and b"ENTITIES" in r.content, r.text[:200] if r.status_code != 200 else "")
+    # ---------------- 1.10 Part 3: drawing sheets ----------------
+    r = c.post(f"/api/projects/{pid}/design/sheets-preview", json={"plan": plan})
+    sv = r.json() if r.status_code == 200 else {}
+    check("door & window schedule", any(x["mark"] == "D1" for x in sv.get("schedule", [])) and
+          any(x["mark"].startswith("W") for x in sv.get("schedule", [])), r.text[:200])
+    check("elevation + section drawings", all(k in sv.get("svgs", {}) for k in ("site", "elevation", "section", "plan_0")), r.text[:200])
+    check("area details (FSI, coverage)", sv.get("area", {}).get("fsi", 0) > 0 and 0 < sv.get("area", {}).get("coverage_pct", 0) < 100, str(sv.get("area"))[:200])
+    sp = json.loads(json.dumps(plan))
+    sp["opening_specs"] = {"main_door": {"w_ft": 4, "h_ft": 7.5, "material": "Teak"}}
+    r = c.post(f"/api/projects/{pid}/design/recompute", json={"plan": sp})
+    md = [o for o in r.json()["levels"][0]["openings"] if o["type"] == "main_door"] if r.status_code == 200 else []
+    check("door size from schedule", bool(md) and md[0]["w"] == 4 and md[0]["h"] == 7.5, r.text[:200])
+    r = c.get(f"/api/designs/{d2}/sheets.pdf")
+    check("A3 drawing set PDF", r.status_code == 200 and r.content[:4] == b"%PDF", r.text[:200] if r.status_code != 200 else "")
+    r = c.get(f"/api/designs/{d2}/sheets.dxf")
+    check("drawing set DXF", r.status_code == 200 and b"SECTION A-A" in r.content, r.text[:200] if r.status_code != 200 else "")
     r = c.get(f"/api/designs/{d2}/estimate-inputs")
     ok = r.status_code == 200 and "geometry" in r.json()["inputs"]
     check("estimate inputs from design", ok, r.text[:200])
@@ -596,4 +612,4 @@ if fail:
     print("Failed:", ", ".join(fail), "\nSend this output to Claude.")
     sys.exit(1)
 else:
-    print("NEXORA 1.9 API: ALL GOOD")
+    print("NEXORA 1.10 API: ALL GOOD")

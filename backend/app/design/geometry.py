@@ -242,13 +242,18 @@ def add_openings(plan: dict) -> dict:
     """(Re)derive openings, walls and the quantity summary for every level. Mutates and returns plan."""
     bw, bd = plan["building"]["w"], plan["building"]["d"]
     all_warn = []
+    per = []
     for i, lv in enumerate(plan["levels"]):
         warns = check_rooms(lv, bw, bd)
         ops, w2 = level_openings(lv, i, bd)
         lv["openings"] = ops
+        per.append(warns + w2)
+    from .sheets import apply_specs  # 1.10: door/window sizes edited in the schedule
+    spec_warn = apply_specs(plan)
+    for i, lv in enumerate(plan["levels"]):
         lv["walls"] = walls(lv["rooms"])
         lv["summary"] = summarize_level(lv)
-        lv["warnings"] = warns + w2
+        lv["warnings"] = per[i] + [w for w in spec_warn if w.startswith(lv["name"] + ":")]
         all_warn += lv["warnings"]
     plan["warnings"] = all_warn
     plan["summary"] = summarize_plan(plan)

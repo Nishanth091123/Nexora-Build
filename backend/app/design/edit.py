@@ -52,6 +52,23 @@ def clean_plan(plan: dict) -> dict:
         lv["rooms"] = rooms
         lv["name"] = str(lv.get("name") or "Floor")[:40]
     plan["building"] = {"x": float(b.get("x", 0)), "y": float(b.get("y", 0)), "w": bw, "d": bd}
+    # 1.10: sizes per door/window type from the schedule (feet), checked
+    specs = {}
+    for k, v in (plan.get("opening_specs") or {}).items():
+        if not isinstance(v, dict):
+            continue
+        e = {}
+        for f, lo, hi in (("w_ft", 1.5, 16), ("h_ft", 1, 10)):
+            if v.get(f) not in (None, ""):
+                x = float(v[f])
+                if not lo <= x <= hi:
+                    raise PlanError(f"{k.replace('_', ' ')}: {f[0]} must be {lo}–{hi} ft.")
+                e[f] = round(x * 12) / 12
+        if v.get("material"):
+            e["material"] = str(v["material"])[:80]
+        if e:
+            specs[str(k)[:20]] = e
+    plan["opening_specs"] = specs
     return plan
 
 
