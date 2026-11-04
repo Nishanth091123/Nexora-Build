@@ -69,6 +69,11 @@ def clean_plan(plan: dict) -> dict:
         if e:
             specs[str(k)[:20]] = e
     plan["opening_specs"] = specs
+    # 1.11: 3D colour choices (hex colours only)
+    import re as _re
+    fin = plan.get("finishes") or {}
+    plan["finishes"] = {k: v for k, v in fin.items() if k in ("ext", "int", "floor", "door", "frame", "roof", "plinth")
+                        and isinstance(v, str) and _re.fullmatch(r"#[0-9a-fA-F]{6}", v)} if isinstance(fin, dict) else {}
     return plan
 
 

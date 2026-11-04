@@ -210,6 +210,23 @@ async def purge_item(entity: str, eid: int, owner: User = Depends(require_owner)
     return {"ok": True, "deleted": n}
 
 
+@router.post("/purge-many")
+async def purge_many(body: dict, owner: User = Depends(require_owner), db: Session = Depends(get_db)):
+    """1.11.1: delete several bin items permanently with ONE safety backup (faster than one by one)."""
+    pairs = []
+    for it in (body or {}).get("items") or []:
+        entity, eid = str(it.get("entity") or ""), int(it.get("id") or 0)
+        o = _get(db, entity, eid)
+        if not getattr(o, "is_hidden", False):
+            raise HTTPException(400, f"{entity} {eid}: move it to the Recycle Bin first")
+        pairs.append((entity, eid))
+    if not pairs:
+        return {"ok": True, "deleted": 0}
+    pairs.sort(key=lambda x: x[0] == "project")
+    n = await run_in_threadpool(_purge_many, db, owner, pairs)
+    return {"ok": True, "deleted": n}
+
+
 @router.post("/empty")
 async def empty_bin(body: dict, owner: User = Depends(require_owner), db: Session = Depends(get_db)):
     if (body or {}).get("confirm") != "DELETE":

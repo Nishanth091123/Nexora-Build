@@ -328,3 +328,44 @@ def design_dxf(design_id: int, user: User = Depends(get_current_user), db: Sessi
     name = f"{p.code}_Plan_v{d.version}.dxf"
     return Response(data, media_type="application/dxf",
                     headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"})
+
+
+# ---------------------------------------------------------------- 1.10.1 one PDF for the whole project
+@router.get("/projects/{project_id}/project-pdf")
+def project_pdf(project_id: int, estimate: str = "detailed", design_id: int | None = None, estimate_id: int | None = None,
+                user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Drawing set (A3) + estimate (detailed / bank / client) of the latest saved versions, merged into ONE PDF."""
+    import io as _io
+
+    from pypdf import PdfReader, PdfWriter
+
+    from ..design import sheets
+    from ..estimate.exports import to_pdf as est_pdf, to_pdf_bank, to_pdf_client
+    from ..models import Estimate
+    from .estimate import export_payload
+    p = require_any(db, user, project_id, ("design", "estimate"))
+    perms = project_permissions(db, user, p)
+    parts = []
+    if perms.get("design") or perms.get("estimate"):
+        q = db.query(Design).filter(Design.project_id == p.id, Design.is_hidden.is_(False))
+        d = q.filter(Design.id == design_id).first() if design_id else q.order_by(Design.version.desc()).first()
+        if d:
+            plan = recompute(d.plan)
+            parts.append(sheets.sheet_set_pdf(plan, _proj(p, db), {"version": d.version, "date": d.created_at.strftime("%d-%m-%Y")}))
+    if perms.get("estimate"):
+        q = db.query(Estimate).filter(Estimate.project_id == p.id, Estimate.is_hidden.is_(False))
+        e = q.filter(Estimate.id == estimate_id).first() if estimate_id else q.order_by(Estimate.version.desc()).first()
+        if e:
+            fn = {"bank": to_pdf_bank, "client": to_pdf_client}.get(estimate, est_pdf)
+            parts.append(fn(*export_payload(e, p, db)))
+    if not parts:
+        raise HTTPException(404, "Save a design or an estimate for this project first.")
+    w = PdfWriter()
+    for b in parts:
+        for page in PdfReader(_io.BytesIO(b)).pages:
+            w.add_page(page)
+    buf = _io.BytesIO()
+    w.write(buf)
+    name = f"{p.code}_Project_{'Drawings_and_' if len(parts) > 1 else ''}Estimate.pdf"
+    return Response(buf.getvalue(), media_type="application/pdf",
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"})

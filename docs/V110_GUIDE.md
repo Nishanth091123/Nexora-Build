@@ -32,3 +32,18 @@ It must end with **NEXORA 1.10 API: ALL GOOD**. Then check `<Render address>/api
 3. Door & Window Schedule → set Window width 4 → Apply sizes → the schedule shows W1 4'-0" and the Quick Estimate changes a little.
 4. Save the design → **Drawing Set PDF (A3)** → 7+ pages, with the title block showing Praganya Construction on every page.
 5. DXF → it opens in AutoCAD / DWG TrueView / LibreCAD.
+
+## 1.10.1 – drafted look, one PDF, Render deploys by itself
+- **Drawings look like an office CAD drawing now (plot pens):**
+  - Cut walls are heavy and black; doors are brown, with the leaf and a dashed swing; windows use the cyan 3-line symbol; dimensions are green with tick marks and room-by-room chain dimensions; D1/W1 marks are red; room names are blue.
+  - Furniture is drawn: bed, wardrobe, sofa, dining table, kitchen counter with sink and hob, WC and basin, car.
+  - Also: toilet tile grid, stair treads with an UP arrow, earth hatch, level markers ▽, sunshades with shadow, coping, footing/PCC hatch in the section.
+  - Line weights are real millimetres on paper (0.5 / 0.35 / 0.25 / 0.18 / 0.13). The DXF layers carry the same colours.
+- **One PDF for everything:**
+  - Design → Drawing Sheets → **Complete PDF (drawings + estimate)**.
+  - Estimate → Export → **Complete PDF (drawings + bank estimate)**.
+  - Both give the A3 drawing set and the estimate in one file.
+- **No more Manual Deploy (once):**
+  - render.com → nexora-build-api → **Settings → Deploy Hook → Copy**.
+  - Add this line to your `.env` (never pushed to GitHub): `RENDER_DEPLOY_HOOK=<paste>`.
+  - From now on `github_push.bat` starts the Render deploy itself and waits until `/api/health` shows the new version.

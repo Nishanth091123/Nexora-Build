@@ -137,33 +137,111 @@ def building_height(plan: dict) -> float:
 
 
 # ---------------------------------------------------------------- primitive drawings
+# ---------------------------------------------------------------- drafting pens (CAD-style plot styles)
+# layer → (colour, line weight in mm on paper, dash). Like an office CAD plot: cut walls heavy black,
+# outlines medium, openings / dimensions / furniture / hatch thin and in their own colours.
+PENS = {
+    "WALL":      ("#111111", 0.50, None),   # cut walls (filled)
+    "OUTLINE":   ("#111111", 0.35, None),   # elevation / section outlines
+    "SLAB":      ("#111111", 0.35, None),
+    "GROUND":    ("#111111", 0.70, None),
+    "WINDOW":    ("#0284c7", 0.25, None),   # cyan-blue
+    "DOOR":      ("#b45309", 0.25, None),   # brown
+    "SWING":     ("#b45309", 0.13, (1.2, 0.8)),
+    "FURNITURE": ("#7c7c8a", 0.13, None),   # grey
+    "STAIR":     ("#111111", 0.18, None),
+    "HATCH":     ("#9ca3af", 0.09, None),
+    "DIM":       ("#15803d", 0.18, None),   # green
+    "TEXT":      ("#111827", 0.25, None),
+    "ROOMTEXT":  ("#1e3a8a", 0.25, None),
+    "MARK":      ("#dc2626", 0.18, None),   # red marks D1 / W1
+    "CENTRE":    ("#dc2626", 0.13, (6, 1.5, 1, 1.5)),
+    "PLOT":      ("#111111", 0.50, (6, 2)),
+    "SETBACK":   ("#ea580c", 0.18, (3, 1.5)),
+    "BUILDING":  ("#111111", 0.35, None),
+    "ROAD":      ("#64748b", 0.25, None),
+    "COLUMN":    ("#111111", 0.35, None),
+    "FOOTING":   ("#111111", 0.35, None),
+    "PCC":       ("#111111", 0.25, None),
+    "PARAPET":   ("#111111", 0.35, None),
+    "SUNSHADE":  ("#111111", 0.25, None),
+    "SHADOW":    ("#d4d4d8", 0.0, None),
+}
+DXF_COLOR = {"WALL": 7, "OUTLINE": 7, "SLAB": 7, "GROUND": 7, "WINDOW": 4, "DOOR": 30, "SWING": 30, "FURNITURE": 8,
+             "STAIR": 7, "HATCH": 9, "DIM": 3, "TEXT": 7, "ROOMTEXT": 5, "MARK": 1, "CENTRE": 1, "PLOT": 7,
+             "SETBACK": 30, "BUILDING": 7, "ROAD": 8, "COLUMN": 7, "FOOTING": 7, "PCC": 8, "PARAPET": 7, "SUNSHADE": 7,
+             "SHADOW": 9, "TITLE": 7}
+
+
+def pen(layer: str):
+    return PENS.get(layer, ("#111111", 0.25, None))
+
+
 class Dwg:
-    """lines / rects / texts in feet. layer names follow DXF layers; 'fill' is a hex colour or None."""
+    """lines / rects / arcs / texts in feet. 'layer' picks the pen; 'fill' is a hex colour or None."""
 
     def __init__(self, title: str):
         self.title = title
         self.items: list[dict] = []
 
-    def line(self, x1, y1, x2, y2, layer="LINE", w=0.6):
-        self.items.append({"t": "line", "x1": x1, "y1": y1, "x2": x2, "y2": y2, "layer": layer, "w": w})
+    def line(self, x1, y1, x2, y2, layer="OUTLINE", w=None):
+        self.items.append({"t": "line", "x1": x1, "y1": y1, "x2": x2, "y2": y2, "layer": layer})
 
-    def rect(self, x, y, w, h, layer="LINE", fill=None, lw=0.6):
+    def rect(self, x, y, w, h, layer="OUTLINE", fill=None, lw=1):
         self.items.append({"t": "rect", "x": x, "y": y, "w": w, "h": h, "layer": layer, "fill": fill, "lw": lw})
 
-    def text(self, x, y, s, h=0.9, anchor="middle", layer="TEXT", bold=False):
+    def arc(self, cx, cy, r, a0, a1, layer="SWING"):
+        self.items.append({"t": "arc", "cx": cx, "cy": cy, "r": r, "a0": a0, "a1": a1, "layer": layer})
+
+    def text(self, x, y, s, h=0.9, anchor="middle", layer="TEXT", bold=False, mask=False):
+        """mask=True puts a white box behind the text (like a drafted label over hatch / furniture)."""
+        if mask:
+            L = len(str(s)) * h * 0.58 + 0.3
+            a = {"start": 0, "middle": -L / 2, "end": -L}[anchor]
+            self.items.append({"t": "rect", "x": x + a - 0.15, "y": y - 0.25 * h, "w": L, "h": h * 1.25,
+                               "layer": "MASK", "fill": "#ffffff", "lw": 0})
         self.items.append({"t": "text", "x": x, "y": y, "s": str(s), "h": h, "anchor": anchor, "layer": layer, "bold": bold})
 
-    def dim_h(self, x1, x2, y, label=None, off=0.0):
-        self.line(x1, y, x2, y, "DIM", 0.3)
-        for x in (x1, x2):
-            self.line(x, y - 0.5, x, y + 0.5, "DIM", 0.3)
-        self.text((x1 + x2) / 2, y + 0.35 + off, label or ft_in(abs(x2 - x1)), 0.75, layer="DIM")
+    def hatch(self, x, y, w, h, gap=0.6, layer="HATCH", angle=45):
+        """45° hatch lines clipped to a rectangle (earth / concrete / brick poché)."""
+        if w <= 0 or h <= 0:
+            return
+        k = 1 if angle == 45 else -1
+        t = -h
+        while t < w:
+            # line x = x + t + s, y = y + s (k = 1)  for s in [0, h], clipped to [x, x+w]
+            s0, s1 = max(0.0, -t), min(h, w - t)
+            if s1 > s0:
+                if k == 1:
+                    self.line(x + t + s0, y + s0, x + t + s1, y + s1, layer)
+                else:
+                    self.line(x + w - (t + s0), y + s0, x + w - (t + s1), y + s1, layer)
+            t += gap
 
-    def dim_v(self, x, y1, y2, label=None):
-        self.line(x, y1, x, y2, "DIM", 0.3)
+    def dim_h(self, x1, x2, y, label=None, off=0.0, ext_from=None):
+        """Architectural dimension: line, 45° ticks, extension lines, text above."""
+        self.line(x1 - 0.4, y, x2 + 0.4, y, "DIM")
+        for x in (x1, x2):
+            self.line(x - 0.3, y - 0.3, x + 0.3, y + 0.3, "DIM")
+            if ext_from is not None:
+                self.line(x, ext_from, x, y + 0.4 if y > ext_from else y - 0.4, "DIM")
+        self.text((x1 + x2) / 2, y + 0.3 + off, label or ft_in(abs(x2 - x1)), 0.7, layer="DIM")
+
+    def dim_v(self, x, y1, y2, label=None, ext_from=None):
+        self.line(x, y1 - 0.4, x, y2 + 0.4, "DIM")
         for y in (y1, y2):
-            self.line(x - 0.5, y, x + 0.5, y, "DIM", 0.3)
-        self.text(x - 0.6, (y1 + y2) / 2, label or ft_in(abs(y2 - y1)), 0.75, anchor="end", layer="DIM")
+            self.line(x - 0.3, y - 0.3, x + 0.3, y + 0.3, "DIM")
+            if ext_from is not None:
+                self.line(ext_from, y, x - 0.4 if x < ext_from else x + 0.4, y, "DIM")
+        self.text(x - 0.4, (y1 + y2) / 2, label or ft_in(abs(y2 - y1)), 0.7, anchor="end", layer="DIM")
+
+    def level(self, x, z, label):
+        """Level marker ▽ with value."""
+        self.line(x - 0.6, z + 0.9, x + 0.6, z + 0.9, "DIM")
+        self.line(x - 0.6, z + 0.9, x, z, "DIM")
+        self.line(x + 0.6, z + 0.9, x, z, "DIM")
+        self.line(x + 0.6, z + 0.9, x + 7.5, z + 0.9, "DIM")
+        self.text(x + 1.0, z + 1.2, label, 0.65, anchor="start", layer="DIM")
 
     def bounds(self):
         xs, ys = [], []
@@ -174,6 +252,9 @@ class Dwg:
             elif it["t"] == "rect":
                 xs += [it["x"], it["x"] + it["w"]]
                 ys += [it["y"], it["y"] + it["h"]]
+            elif it["t"] == "arc":
+                xs += [it["cx"] - it["r"], it["cx"] + it["r"]]
+                ys += [it["cy"] - it["r"], it["cy"] + it["r"]]
             else:
                 L = len(it["s"]) * it["h"] * 0.55
                 a = {"start": 0, "middle": -L / 2, "end": -L}[it["anchor"]]
@@ -182,86 +263,215 @@ class Dwg:
         return (min(xs), min(ys), max(xs), max(ys)) if xs else (0, 0, 1, 1)
 
 
-FILL = {"bedroom": "#dbeafe", "toilet": "#e0f2fe", "common_toilet": "#e0f2fe", "kitchen": "#fef3c7",
-        "hall": "#fde7d3", "lounge": "#fde7d3", "dining": "#fef9c3", "pooja": "#fce7f3", "stair": "#e5e7eb",
-        "parking": "#f3f4f6", "passage": "#f8fafc", "dress": "#ede9fe", "terrace": "#ecfccb", "balcony": "#ecfccb",
-        "sitout": "#ecfccb"}
 THK = {"ext": 0.755, "int230": 0.755, "int115": 0.377, "parapet": 0.5}
+
+
+def _furniture(d: Dwg, r: dict):
+    """Simple furniture symbols so the plan reads like a hand-prepared drawing (not to scale of real items)."""
+    x, y, w, h, t = r["x"], r["y"], r["w"], r["d"], r["type"]
+    F = "FURNITURE"
+    if t == "bedroom" and w >= 8 and h >= 8:
+        bw, bl = min(5.0, w - 3), min(6.5, h - 2.5)
+        bx, by = x + (w - bw) / 2, y + h - bl - 0.6
+        d.rect(bx, by, bw, bl, F)
+        d.rect(bx + 0.3, by + bl - 1.4, bw / 2 - 0.45, 1.0, F)
+        d.rect(bx + bw / 2 + 0.15, by + bl - 1.4, bw / 2 - 0.45, 1.0, F)
+        d.line(bx, by + bl * 0.55, bx + bw, by + bl * 0.55, F)
+        if w >= 10:
+            d.rect(x + 0.6, y + 0.6, 2.0, 4.0, F)  # wardrobe
+            d.line(x + 0.6, y + 2.6, x + 2.6, y + 2.6, F)
+    elif t in ("hall", "lounge") and w >= 8 and h >= 8:
+        sx, sy = x + 0.8, y + 0.8
+        d.rect(sx, sy, 2.3, min(7.0, h - 2.5), F)  # sofa
+        d.rect(sx + 0.3, sy + 0.3, 1.7, min(7.0, h - 2.5) - 0.6, F)
+        d.rect(x + 4.0, y + h / 2 - 1.0, 2.5, 2.0, F)  # centre table
+        d.rect(x + w - 1.5, y + h / 2 - 2.0, 0.9, 4.0, F)  # TV unit
+    elif t == "dining" and w >= 7 and h >= 7:
+        cx, cy = x + w / 2, y + h / 2
+        d.rect(cx - 2.0, cy - 1.25, 4.0, 2.5, F)
+        for dx in (-1.2, 0.6):
+            d.rect(cx + dx, cy + 1.45, 0.9, 0.9, F)
+            d.rect(cx + dx, cy - 2.35, 0.9, 0.9, F)
+    elif t == "kitchen":
+        d.rect(x + 0.3, y + 0.3, 2.0, h - 0.6, F)  # L-counter
+        d.rect(x + 2.3, y + h - 2.3, max(1.0, w - 2.6), 2.0, F)
+        d.rect(x + 0.6, y + h / 2 - 0.9, 1.4, 1.8, F)  # sink
+        d.arc(x + 1.3, y + h / 2, 0.55, 0, 360, F)
+        d.arc(x + 3.2, y + h - 1.3, 0.45, 0, 360, F)  # hob
+        d.arc(x + 4.4, y + h - 1.3, 0.45, 0, 360, F)
+    elif t in ("toilet", "common_toilet") and w >= 3.5 and h >= 4:
+        wx, wy = x + w - 2.0, y + h - 2.6
+        d.rect(wx, wy + 1.6, 1.4, 0.7, F)  # WC cistern
+        d.arc(wx + 0.7, wy + 0.95, 0.7, 0, 360, F)
+        d.rect(x + 0.4, y + h - 1.6, 1.6, 1.2, F)  # wash basin
+        d.arc(x + 1.2, y + h - 1.0, 0.4, 0, 360, F)
+    elif t == "parking" and w >= 9 and h >= 14:
+        cw, cl = 6.0, 13.5
+        cx, cy = x + (w - cw) / 2, y + (h - cl) / 2
+        d.rect(cx, cy, cw, cl, F)
+        d.rect(cx + 0.6, cy + 3.0, cw - 1.2, 3.0, F)
+        d.rect(cx + 0.6, cy + 8.0, cw - 1.2, 2.5, F)
+        d.text(cx + cw / 2, cy + cl / 2 - 0.3, "CAR", 0.6, layer="FURNITURE")
+    elif t == "pooja" and w >= 3:
+        d.rect(x + w / 2 - 0.9, y + h - 1.4, 1.8, 1.0, F)
 
 
 def floor_plan(plan: dict, li: int) -> Dwg:
     lv = plan["levels"][li]
     d = Dwg(f"{lv['name']} Plan")
+    ops = lv.get("openings", [])
     for r in lv["rooms"]:
-        d.rect(r["x"], r["y"], r["w"], r["d"], "ROOM", FILL.get(r["type"], "#ffffff"), 0.2)
+        if r["type"] in ("terrace", "balcony", "sitout"):
+            d.hatch(r["x"], r["y"], r["w"], r["d"], 1.2)
+        elif r["type"] in ("toilet", "common_toilet"):  # floor tile grid (2' x 2')
+            k = 2.0
+            xx = r["x"] + k
+            while xx < r["x"] + r["w"] - 0.01:
+                d.line(xx, r["y"], xx, r["y"] + r["d"], "HATCH")
+                xx += k
+            yy = r["y"] + k
+            while yy < r["y"] + r["d"] - 0.01:
+                d.line(r["x"], yy, r["x"] + r["w"], yy, "HATCH")
+                yy += k
+        _furniture(d, r)
+        if r["type"] == "stair":
+            treads = max(4, int(r["d"] / 0.9))
+            step = r["d"] / treads
+            mid = r["x"] + r["w"] / 2
+            for k in range(1, treads):
+                d.line(r["x"] + 0.4, r["y"] + k * step, mid - 0.15, r["y"] + k * step, "STAIR")
+                d.line(mid + 0.15, r["y"] + k * step, r["x"] + r["w"] - 0.4, r["y"] + k * step, "STAIR")
+            d.line(mid - 0.15, r["y"] + 0.4, mid - 0.15, r["y"] + r["d"] - 0.4, "STAIR")
+            d.line(mid + 0.15, r["y"] + 0.4, mid + 0.15, r["y"] + r["d"] - 0.4, "STAIR")
+            ax = r["x"] + r["w"] / 4
+            d.line(ax, r["y"] + 1.0, ax, r["y"] + r["d"] - 1.5, "STAIR")
+            d.line(ax, r["y"] + r["d"] - 1.5, ax - 0.4, r["y"] + r["d"] - 2.3, "STAIR")
+            d.line(ax, r["y"] + r["d"] - 1.5, ax + 0.4, r["y"] + r["d"] - 2.3, "STAIR")
+            d.text(ax, r["y"] + 0.4, "UP", 0.55, layer="STAIR")
+    # walls: solid poché, then openings cut through them
     for w in lv.get("walls", []):
         t = THK.get(w["kind"], 0.5)
+        fill = "#3f3f46" if w["kind"] != "int115" else "#71717a"
+        if w["kind"] == "parapet":
+            fill = None
         if w["y1"] == w["y2"]:
-            d.rect(min(w["x1"], w["x2"]), w["y1"] - t / 2, abs(w["x2"] - w["x1"]), t, "WALL", "#1e293b", 0)
+            d.rect(min(w["x1"], w["x2"]), w["y1"] - t / 2, abs(w["x2"] - w["x1"]), t, "WALL", fill, 1 if fill is None else 0)
         else:
-            d.rect(w["x1"] - t / 2, min(w["y1"], w["y2"]), t, abs(w["y2"] - w["y1"]), "WALL", "#1e293b", 0)
-    for o in lv.get("openings", []):
+            d.rect(w["x1"] - t / 2, min(w["y1"], w["y2"]), t, abs(w["y2"] - w["y1"]), "WALL", fill, 1 if fill is None else 0)
+    rooms = {r["id"]: r for r in lv["rooms"]}
+    for o in ops:
         win = o["type"] in ("window", "vent")
-        col = "#38bdf8" if win else "#ffffff"
         horiz = o["y1"] == o["y2"]
+        t = 0.78
+        x0, x1 = min(o["x1"], o["x2"]), max(o["x1"], o["x2"])
+        y0, y1 = min(o["y1"], o["y2"]), max(o["y1"], o["y2"])
         if horiz:
-            d.rect(min(o["x1"], o["x2"]), o["y1"] - 0.42, o["w"], 0.84, "WINDOW" if win else "DOOR", col, 0.2)
-            tx, ty = (o["x1"] + o["x2"]) / 2, o["y1"] + (1.0 if o["y1"] > 0.1 else -1.6)
+            d.rect(x0, o["y1"] - t / 2, x1 - x0, t, "WINDOW" if win else "DOOR", "#ffffff", 0)
         else:
-            d.rect(o["x1"] - 0.42, min(o["y1"], o["y2"]), 0.84, o["w"], "WINDOW" if win else "DOOR", col, 0.2)
-            tx, ty = o["x1"] + (1.3 if o["x1"] < 0.1 else -1.3), (o["y1"] + o["y2"]) / 2
+            d.rect(o["x1"] - t / 2, y0, t, y1 - y0, "WINDOW" if win else "DOOR", "#ffffff", 0)
+        if win:  # three-line window symbol
+            for f in (-t / 2, 0, t / 2):
+                if horiz:
+                    d.line(x0, o["y1"] + f, x1, o["y1"] + f, "WINDOW")
+                else:
+                    d.line(o["x1"] + f, y0, o["x1"] + f, y1, "WINDOW")
+            for e in ((x0, x1) if horiz else (y0, y1)):
+                if horiz:
+                    d.line(e, o["y1"] - t / 2, e, o["y1"] + t / 2, "WINDOW")
+                else:
+                    d.line(o["x1"] - t / 2, e, o["x1"] + t / 2, e, "WINDOW")
+        elif o["type"] != "opening":  # door leaf + 90° swing into the room
+            r = rooms.get(o["room"])
+            W = o["w"]
+            if horiz:
+                into = 1 if r and r["y"] + r["d"] / 2 > o["y1"] else -1
+                hx, hy = x0, o["y1"]
+                d.line(hx, hy, hx, hy + into * W, "DOOR")
+                d.arc(hx, hy, W, 0 if into > 0 else 270, 90 if into > 0 else 360)
+            else:
+                into = 1 if r and r["x"] + r["w"] / 2 > o["x1"] else -1
+                hx, hy = o["x1"], y0
+                d.line(hx, hy, hx + into * W, hy, "DOOR")
+                d.arc(hx, hy, W, 0 if into > 0 else 90, 90 if into > 0 else 180)
         if o.get("mark"):
-            d.text(tx, ty, o["mark"], 0.65, layer="TEXT")
+            if horiz:
+                tx, ty = (x0 + x1) / 2, o["y1"] + (-1.5 if (rooms.get(o["room"]) or {"y": 0, "d": 0})["y"] + 0.01 > o["y1"] - 0.01 else 0.9)
+            else:
+                tx, ty = o["x1"] + (1.2 if (rooms.get(o["room"]) or {"x": 0})["x"] >= o["x1"] - 0.01 else -1.2), (y0 + y1) / 2
+            d.text(tx, ty, o["mark"], 0.6, layer="MARK")
     for r in lv["rooms"]:
         cx, cy = r["x"] + r["w"] / 2, r["y"] + r["d"] / 2
         m = min(r["w"], r["d"])
-        fs = 0.85 if m >= 7 else 0.6 if m >= 5.5 else 0.45
-        d.text(cx, cy + 0.2, r["name"].upper(), fs, bold=True)
-        d.text(cx, cy - fs - 0.1, f"{ft_in(r['w'])} x {ft_in(r['d'])}", fs * 0.85)
+        fs = 0.8 if m >= 7 else 0.6 if m >= 5.5 else 0.45
+        if r["type"] in ("bedroom",):
+            cy = r["y"] + 1.8  # keep the label clear of the bed
         if r["type"] == "stair":
-            for k in range(1, int(r["d"] // 1)):
-                d.line(r["x"] + 0.4, r["y"] + k, r["x"] + r["w"] - 0.4, r["y"] + k, "LINE", 0.15)
-    xs = [r["x"] for r in lv["rooms"]] + [r["x"] + r["w"] for r in lv["rooms"]]
-    ys = [r["y"] for r in lv["rooms"]] + [r["y"] + r["d"] for r in lv["rooms"]]
-    x0, x1, y0, y1 = min(xs), max(xs), min(ys), max(ys)
-    d.dim_h(x0, x1, y1 + 2.5)
-    d.dim_v(x0 - 2.5, y0, y1)
-    d.text((x0 + x1) / 2, y0 - 4.2, "FRONT (ROAD SIDE)", 0.8, layer="TEXT")
+            cx = r["x"] + r["w"] * 0.72
+        d.text(cx, cy + 0.15, r["name"].upper(), fs, layer="ROOMTEXT", bold=True, mask=True)
+        d.text(cx, cy - fs - 0.05, f"{ft_in(r['w'])} X {ft_in(r['d'])}", fs * 0.85, layer="ROOMTEXT", mask=True)
+    # chain dimensions (room by room) + overall, on the top and the left
+    xs_all = [r["x"] for r in lv["rooms"]] + [r["x"] + r["w"] for r in lv["rooms"]]
+    ys_all = [r["y"] for r in lv["rooms"]] + [r["y"] + r["d"] for r in lv["rooms"]]
+    x0, x1, y0, y1 = min(xs_all), max(xs_all), min(ys_all), max(ys_all)
+    top = sorted({round(v, 2) for r in lv["rooms"] if abs(r["y"] + r["d"] - y1) < 0.05 for v in (r["x"], r["x"] + r["w"])})
+    left = sorted({round(v, 2) for r in lv["rooms"] if abs(r["x"] - x0) < 0.05 for v in (r["y"], r["y"] + r["d"])})
+    for a, b in zip(top, top[1:]):
+        d.dim_h(a, b, y1 + 2.0, ext_from=y1 + 0.5)
+    d.dim_h(x0, x1, y1 + 4.0, ext_from=y1 + 0.5)
+    for a, b in zip(left, left[1:]):
+        d.dim_v(x0 - 2.0, a, b, ext_from=x0 - 0.5)
+    d.dim_v(x0 - 4.5, y0, y1, ext_from=x0 - 0.5)
+    d.text((x0 + x1) / 2, y0 - 3.2, "FRONT  (ROAD SIDE)", 0.75, layer="TEXT", bold=True)
+    d.line((x0 + x1) / 2 - 2.5, y0 - 2.0, (x0 + x1) / 2 + 2.5, y0 - 2.0, "TEXT")
+    _north(d, plan, x1 + 4.5, y1 - 2.5)
     return d
 
 
 def site_plan(plan: dict) -> Dwg:
     plot, b, sb = plan["plot"], plan["building"], plan.get("setbacks") or {}
     d = Dwg("Site Plan")
-    d.rect(0, 0, plot["w"], plot["d"], "PLOT", "#f0fdf4", 0.8)
+    d.rect(0, 0, plot["w"], plot["d"], "PLOT")
     lv0 = plan["levels"][0]
     xs = [r["x"] for r in lv0["rooms"]] + [r["x"] + r["w"] for r in lv0["rooms"]]
     ys = [r["y"] for r in lv0["rooms"]] + [r["y"] + r["d"] for r in lv0["rooms"]]
     bx0, bx1, by0, by1 = b["x"] + min(xs), b["x"] + max(xs), b["y"] + min(ys), b["y"] + max(ys)
-    d.rect(bx0, by0, bx1 - bx0, by1 - by0, "BUILDING", "#cbd5e1", 0.8)
-    d.text((bx0 + bx1) / 2, (by0 + by1) / 2, "PROPOSED BUILDING", 1.0, bold=True)
-    d.text((bx0 + bx1) / 2, (by0 + by1) / 2 - 1.5, f"{len(plan['levels'])} floor(s)", 0.8)
-    d.rect(-2, -7, plot["w"] + 4, 4.5, "ROAD", "#e2e8f0", 0.3)
-    road = sb.get("road_width_m") or (plan.get("requirements") or {}).get("road_width_m")
-    d.text(plot["w"] / 2, -5.4, f"ROAD{f' ({road:g} m wide)' if isinstance(road, (int, float)) else ''}", 0.9, bold=True)
+    d.rect(b["x"], b["y"], b["w"], b["d"], "SETBACK")  # buildable line
+    d.rect(bx0 + 0.6, by0 - 0.6, bx1 - bx0, by1 - by0, "SHADOW", "#e4e4e7", 0)  # shadow
+    d.rect(bx0, by0, bx1 - bx0, by1 - by0, "BUILDING", "#ffffff")
+    d.hatch(bx0, by0, bx1 - bx0, by1 - by0, 1.0)
+    d.rect(bx0 + (bx1 - bx0) / 2 - 7, (by0 + by1) / 2 - 2.2, 14, 3.6, "BUILDING", "#ffffff")
+    d.text((bx0 + bx1) / 2, (by0 + by1) / 2, "PROPOSED BUILDING", 0.9, layer="ROOMTEXT", bold=True)
+    d.text((bx0 + bx1) / 2, (by0 + by1) / 2 - 1.5, f"{len(plan['levels'])} floor(s)", 0.7, layer="ROOMTEXT")
+    d.rect(-3, -8, plot["w"] + 6, 5, "ROAD", "#f1f5f9")
+    d.line(-3, -5.5, plot["w"] + 3, -5.5, "CENTRE")
+    road = (plan.get("requirements") or {}).get("road_width_m") or sb.get("road_width_m")
+    d.text(plot["w"] / 2, -7.4, f"ROAD{f'  ({road:g} m WIDE)' if isinstance(road, (int, float)) else ''}", 0.8, bold=True)
     ft = sb.get("ft") or {}
-    d.dim_v(-1.2, 0, by0, f"Front {ft.get('front', by0):g}'") if by0 > 0.1 else None
-    d.dim_v(-1.2, by1, plot["d"], f"Rear {ft.get('rear', plot['d'] - by1):g}'") if plot["d"] - by1 > 0.1 else None
-    d.dim_h(0, bx0, plot["d"] + 1.5, f"{ft.get('left', bx0):g}'") if bx0 > 0.1 else None
-    d.dim_h(bx1, plot["w"], plot["d"] + 1.5, f"{ft.get('right', plot['w'] - bx1):g}'") if plot["w"] - bx1 > 0.1 else None
-    d.dim_h(0, plot["w"], plot["d"] + 4, f"Plot {ft_in(plot['w'])}")
-    d.dim_v(plot["w"] + 3, 0, plot["d"], f"{ft_in(plot['d'])}")
-    _north(d, plan, plot["w"] + 6, plot["d"] - 3)
+    if by0 > 0.1:
+        d.dim_v(-1.5, 0, by0, f"FRONT {ft.get('front', by0):g}'")
+    if plot["d"] - by1 > 0.1:
+        d.dim_v(-1.5, by1, plot["d"], f"REAR {ft.get('rear', plot['d'] - by1):g}'")
+    if bx0 > 0.1:
+        d.dim_h(0, bx0, plot["d"] + 1.5, f"{ft.get('left', bx0):g}'")
+    if plot["w"] - bx1 > 0.1:
+        d.dim_h(bx1, plot["w"], plot["d"] + 1.5, f"{ft.get('right', plot['w'] - bx1):g}'")
+    d.dim_h(0, plot["w"], plot["d"] + 4, f"PLOT {ft_in(plot['w'])}")
+    d.dim_v(plot["w"] + 3.5, 0, plot["d"], f"{ft_in(plot['d'])}")
+    for gx in (0, plot["w"]):  # boundary stones
+        for gy in (0, plot["d"]):
+            d.rect(gx - 0.35, gy - 0.35, 0.7, 0.7, "PLOT", "#111111", 0)
+    _north(d, plan, plot["w"] + 7, plot["d"] - 3)
     return d
 
 
 def _north(d: Dwg, plan: dict, ax: float, ay: float):
     up, right = plan["compass"]["up"], plan["compass"]["right"]
     nx, ny = right[1], up[1]
-    d.line(ax - nx * 2.5, ay - ny * 2.5, ax + nx * 2.5, ay + ny * 2.5, "TEXT", 1.0)
-    d.line(ax + nx * 2.5, ay + ny * 2.5, ax + nx * 1.5 - ny * 0.7, ay + ny * 1.5 + nx * 0.7, "TEXT", 1.0)
-    d.line(ax + nx * 2.5, ay + ny * 2.5, ax + nx * 1.5 + ny * 0.7, ay + ny * 1.5 - nx * 0.7, "TEXT", 1.0)
-    d.text(ax + nx * 3.6, ay + ny * 3.6 - 0.4, "N", 1.1, bold=True)
+    d.arc(ax, ay, 2.6, 0, 360, "TEXT")
+    d.line(ax - nx * 2.4, ay - ny * 2.4, ax + nx * 2.4, ay + ny * 2.4, "TEXT")
+    d.line(ax + nx * 2.4, ay + ny * 2.4, ax - ny * 0.9 - nx * 0.6, ay + nx * 0.9 - ny * 0.6, "TEXT")
+    d.line(ax + nx * 2.4, ay + ny * 2.4, ax + ny * 0.9 - nx * 0.6, ay - nx * 0.9 - ny * 0.6, "TEXT")
+    d.text(ax + nx * 3.6, ay + ny * 3.6 - 0.45, "N", 1.0, bold=True)
 
 
 def _extent(lv: dict):
@@ -272,65 +482,100 @@ def _extent(lv: dict):
 
 def _levels_z(plan: dict) -> list[float]:
     H = float(plan.get("floor_height_ft") or 10)
-    return [PLINTH + i * H for i in range(len(plan["levels"]) + 1)]  # floor top of each level + roof
+    return [PLINTH + i * H for i in range(len(plan["levels"]) + 1)]
+
+
+def _ground(d: Dwg, a: float, b: float):
+    d.line(a, 0, b, 0, "GROUND")
+    k = a
+    while k < b - 0.6:  # earth hatch below ground line
+        d.line(k, -0.05, k + 0.7, -0.75, "HATCH")
+        k += 0.9
+
+
+def _window_elev(d: Dwg, x0: float, x1: float, z: float, h: float, vent: bool):
+    d.rect(x0, z, x1 - x0, h, "WINDOW", "#e0f2fe")
+    d.rect(x0 + 0.2, z + 0.2, x1 - x0 - 0.4, h - 0.4, "WINDOW")
+    if not vent:
+        n = max(2, int(round((x1 - x0) / 2)))
+        for i in range(1, n):
+            xx = x0 + i * (x1 - x0) / n
+            d.line(xx, z + 0.2, xx, z + h - 0.2, "WINDOW")
+        for k in range(1, 4):  # grill bars
+            d.line(x0 + 0.2, z + k * h / 4, x1 - 0.2, z + k * h / 4, "HATCH")
+    else:
+        for k in range(1, 4):
+            d.line(x0 + 0.2, z + k * h / 4, x1 - 0.2, z + k * h / 4, "WINDOW")
+    d.rect(x0 - 0.3, z - 0.25, x1 - x0 + 0.6, 0.25, "OUTLINE", "#d4d4d8")  # sill
+    d.rect(x0 - 0.75, z + h + 0.35, x1 - x0 + 1.5, 0.25, "SUNSHADE", "#a1a1aa")  # chajja
+    d.rect(x0 - 0.75, z + h - 0.1, x1 - x0 + 1.5, 0.45, "SHADOW", "#e4e4e7", 0)
 
 
 def front_elevation(plan: dict) -> Dwg:
     d = Dwg("Front Elevation")
-    H = float(plan.get("floor_height_ft") or 10)
     zs = _levels_z(plan)
     n = len(plan["levels"])
     gx0 = min(_extent(lv)[0] for lv in plan["levels"])
     gx1 = max(_extent(lv)[1] for lv in plan["levels"])
-    d.line(gx0 - 4, 0, gx1 + 4, 0, "GROUND", 1.2)
-    for k in range(int(gx0 - 4), int(gx1 + 4), 2):  # ground hatch
-        d.line(k, 0, k + 1, -1, "GROUND", 0.2)
-    d.rect(gx0 - 0.4, 0, gx1 - gx0 + 0.8, PLINTH, "WALL", "#cbd5e1", 0.5)
+    _ground(d, gx0 - 5, gx1 + 5)
+    d.rect(gx0 - 0.4, 0, gx1 - gx0 + 0.8, PLINTH, "OUTLINE", "#d4d4d8")
+    d.hatch(gx0 - 0.4, 0, gx1 - gx0 + 0.8, PLINTH, 0.5)
     for i, lv in enumerate(plan["levels"]):
         x0, x1, y0, _ = _extent(lv)
         z0, z1 = zs[i], zs[i + 1]
-        if lv.get("stilt") or any(r["type"] == "parking" and r["y"] <= y0 + 0.1 for r in lv["rooms"]) and i == 0:
-            # open parking front: columns only where the parking is
-            park = [r for r in lv["rooms"] if r["type"] == "parking" and r["y"] <= y0 + 0.1]
+        park = [r for r in lv["rooms"] if r["type"] == "parking" and r["y"] <= y0 + 0.1] if i == 0 else []
+        if lv.get("stilt") or park:
             for r in park:
                 for xx in (r["x"], r["x"] + r["w"] - 0.75):
-                    d.rect(xx, z0, 0.75, z1 - z0 - SLAB, "COLUMN", "#94a3b8", 0.4)
-            solid = [(r["x"], r["x"] + r["w"]) for r in lv["rooms"] if r["y"] <= y0 + 0.1 and r["type"] != "parking"]
-            for a, b in solid:
-                d.rect(a, z0, b - a, z1 - z0 - SLAB, "WALL", "#f8fafc", 0.5)
+                    d.rect(xx, z0, 0.75, z1 - z0 - SLAB, "COLUMN", "#e5e7eb")
+                d.rect(r["x"] + 0.75, z1 - SLAB - 1.25, r["w"] - 1.5, 1.25, "OUTLINE", "#f4f4f5")  # beam
+                d.rect(r["x"] + 0.75, z0, r["w"] - 1.5, z1 - z0 - SLAB - 1.25, "SHADOW", "#f4f4f5", 0)
+            for r in lv["rooms"]:
+                if r["y"] <= y0 + 0.1 and r["type"] != "parking":
+                    d.rect(r["x"], z0, r["w"], z1 - z0 - SLAB, "OUTLINE", "#fafaf9")
         else:
-            d.rect(x0, z0, x1 - x0, z1 - z0 - SLAB, "WALL", "#f8fafc", 0.6)
-        d.rect(x0 - 0.5, z1 - SLAB, x1 - x0 + 1.0, SLAB, "SLAB", "#64748b", 0.4)
-        # front openings: on horizontal external walls in the front 6 ft of this floor
+            d.rect(x0, z0, x1 - x0, z1 - z0 - SLAB, "OUTLINE", "#fafaf9")
+        d.rect(x0 - 0.5, z1 - SLAB, x1 - x0 + 1.0, SLAB, "SLAB", "#a1a1aa")
+        d.line(x0, z0 + 7.5, x1, z0 + 7.5, "HATCH")  # lintel band line
         for o in lv.get("openings", []):
             if o["y1"] != o["y2"] or o["y1"] > y0 + 6.01:
                 continue
             ox0, ox1 = min(o["x1"], o["x2"]), max(o["x1"], o["x2"])
             if o["type"] in ("window", "vent"):
                 sz = z0 + SILL[o["type"]]
-                d.rect(ox0, sz, ox1 - ox0, o["h"], "WINDOW", "#bae6fd", 0.5)
-                d.line((ox0 + ox1) / 2, sz, (ox0 + ox1) / 2, sz + o["h"], "WINDOW", 0.3)
-                d.rect(ox0 - 0.5, sz + o["h"] + 0.4, ox1 - ox0 + 1.0, 0.25, "SUNSHADE", "#475569", 0.3)
+                _window_elev(d, ox0, ox1, sz, o["h"], o["type"] == "vent")
+                mz = sz - 1.0
             elif o["type"] in ("main_door", "door"):
-                d.rect(ox0, z0, ox1 - ox0, o["h"], "DOOR", "#d6b48a", 0.5)
+                d.rect(ox0 - 0.25, z0, ox1 - ox0 + 0.5, o["h"] + 0.25, "DOOR", "#fde68a")
+                d.rect(ox0, z0, (ox1 - ox0) / 2, o["h"], "DOOR", "#d6b48a")
+                d.rect((ox0 + ox1) / 2, z0, (ox1 - ox0) / 2, o["h"], "DOOR", "#d6b48a")
+                for k in (0.25, 0.55):
+                    d.rect(ox0 + 0.25, z0 + o["h"] * k, (ox1 - ox0) / 2 - 0.5, o["h"] * 0.22, "DOOR")
+                    d.rect((ox0 + ox1) / 2 + 0.25, z0 + o["h"] * k, (ox1 - ox0) / 2 - 0.5, o["h"] * 0.22, "DOOR")
+                mz = z0 + o["h"] + 0.5
+            else:
+                continue
             if o.get("mark"):
-                mz = z0 + SILL[o["type"]] - 0.9 if o["type"] in ("window", "vent") else z0 + o["h"] + 0.3
-                d.text((ox0 + ox1) / 2, mz, o["mark"], 0.55, layer="DIM")
-        d.text(x1 + 1.2, z0 + 0.3, f"+{z0 * FT_M:.2f} m", 0.7, anchor="start", layer="DIM")
-        d.text(x1 + 1.2, z0 + 1.4, lv["name"], 0.7, anchor="start", layer="DIM")
+                d.text((ox0 + ox1) / 2, mz, o["mark"], 0.55, layer="MARK")
+        d.level(x1 + 1.5, z0, f"+{z0 * FT_M:.2f} m  {lv['name'].upper()}")
     tx0, tx1, _, _ = _extent(plan["levels"][-1])
     roof = zs[-1]
-    d.rect(tx0, roof, tx1 - tx0, PARAPET, "PARAPET", "#e2e8f0", 0.5)
+    d.rect(tx0, roof, tx1 - tx0, PARAPET, "PARAPET", "#fafaf9")
+    d.rect(tx0 - 0.25, roof + PARAPET, tx1 - tx0 + 0.5, 0.3, "PARAPET", "#a1a1aa")  # coping
     stair = next((r for r in plan["levels"][-1]["rooms"] if r["type"] == "stair"), None)
     if stair and n > 1:
-        d.rect(stair["x"], roof, stair["w"], HEADROOM, "WALL", "#f1f5f9", 0.6)
-        d.rect(stair["x"] - 0.5, roof + HEADROOM, stair["w"] + 1.0, SLAB, "SLAB", "#64748b", 0.4)
-        d.text(stair["x"] + stair["w"] / 2, roof + HEADROOM / 2, "HEAD ROOM", 0.6, layer="DIM")
-    top = roof + (HEADROOM if stair and n > 1 else PARAPET)
-    d.text(tx1 + 1.2, roof + 0.3, f"+{roof * FT_M:.2f} m Terrace", 0.7, anchor="start", layer="DIM")
-    d.dim_v(gx0 - 2.5, 0, top, f"{top * FT_M:.2f} m")
-    d.dim_h(gx0, gx1, -2.5)
-    d.text((gx0 + gx1) / 2, -4.3, "FRONT ELEVATION (ROAD SIDE)", 0.85, bold=True)
+        d.rect(stair["x"], roof, stair["w"], HEADROOM, "OUTLINE", "#fafaf9")
+        d.rect(stair["x"] - 0.6, roof + HEADROOM, stair["w"] + 1.2, SLAB + 0.15, "SLAB", "#a1a1aa")
+        d.text(stair["x"] + stair["w"] / 2, roof + HEADROOM / 2, "HEAD ROOM", 0.55, layer="DIM")
+    top = roof + (HEADROOM + SLAB if stair and n > 1 else PARAPET + 0.3)
+    d.level(tx1 + 1.5, roof, f"+{roof * FT_M:.2f} m  TERRACE")
+    d.level(gx1 + 1.5, 0, "±0.00 m  G.L.")
+    d.dim_v(gx0 - 3.0, 0, top, f"{top * FT_M:.2f} m", ext_from=gx0 - 0.5)
+    for i in range(n):
+        d.dim_v(gx0 - 1.5, zs[i], zs[i + 1], ft_in(zs[i + 1] - zs[i]))
+    d.dim_h(gx0, gx1, -2.5, ext_from=-0.2)
+    d.text((gx0 + gx1) / 2, -4.6, "FRONT ELEVATION  (ROAD SIDE)", 0.85, bold=True)
+    d.line((gx0 + gx1) / 2 - 6.5, -4.9, (gx0 + gx1) / 2 + 6.5, -4.9, "TEXT")
     return d
 
 
@@ -345,18 +590,19 @@ def section(plan: dict) -> Dwg:
     xc = stair["x"] + stair["w"] / 2 if stair else (x0 + x1) / 2
     gy0 = min(_extent(lv)[2] for lv in plan["levels"])
     gy1 = max(_extent(lv)[3] for lv in plan["levels"])
-    # ground, footings, PCC
-    d.line(gy0 - 4, 0, gy1 + 4, 0, "GROUND", 1.2)
-    for k in range(int(gy0 - 4), int(gy1 + 4), 2):
-        d.line(k, 0, k + 1, -1, "GROUND", 0.2)
+    _ground(d, gy0 - 5, gy1 + 5)
     walls_y = sorted({round(w["y1"], 2) for w in lv0.get("walls", []) if w["y1"] == w["y2"]
                       and min(w["x1"], w["x2"]) - 0.01 <= xc <= max(w["x1"], w["x2"]) + 0.01})
     for y in walls_y:
-        d.rect(y - 2.0, -5.0, 4.0, 0.33, "PCC", "#e5e7eb", 0.3)
-        d.rect(y - 1.75, -4.67, 3.5, 1.3, "FOOTING", "#94a3b8", 0.4)
-        d.rect(y - 0.375, -3.37, 0.75, 3.37 + PLINTH, "COLUMN", "#cbd5e1", 0.3)
-    d.rect(gy0, PLINTH - 0.33, gy1 - gy0, 0.33, "SLAB", "#94a3b8", 0.3)  # floor bed
-    d.text(gy0 - 3, -4.2, "FOOTING", 0.6, anchor="end", layer="DIM")
+        d.rect(y - 2.0, -5.0, 4.0, 0.33, "PCC", "#e5e7eb")
+        d.hatch(y - 2.0, -5.0, 4.0, 0.33, 0.25)
+        d.rect(y - 1.75, -4.67, 3.5, 1.3, "FOOTING", "#d4d4d8")
+        d.hatch(y - 1.75, -4.67, 3.5, 1.3, 0.45, angle=135)
+        d.rect(y - 0.375, -3.37, 0.75, 3.37 + PLINTH, "COLUMN", "#d4d4d8")
+    d.rect(gy0, PLINTH - 0.33, gy1 - gy0, 0.33, "SLAB", "#d4d4d8")
+    d.hatch(gy0, 0, gy1 - gy0, PLINTH - 0.33, 0.8)  # plinth filling
+    d.text(walls_y[0] - 2.5 if walls_y else gy0, -4.1, "FOOTING", 0.55, anchor="end", layer="DIM")
+    d.text(walls_y[0] - 2.5 if walls_y else gy0, -5.0, "PCC 1:4:8", 0.55, anchor="end", layer="DIM")
     for i, lv in enumerate(plan["levels"]):
         z0, z1 = zs[i], zs[i + 1]
         cut = [r for r in lv["rooms"] if r["x"] - 0.01 <= xc <= r["x"] + r["w"] + 0.01]
@@ -364,49 +610,57 @@ def section(plan: dict) -> Dwg:
             continue
         ly0 = min(r["y"] for r in cut)
         ly1 = max(r["y"] + r["d"] for r in cut)
-        d.rect(ly0 - 0.5, z1 - SLAB, ly1 - ly0 + 1.0, SLAB, "SLAB", "#475569", 0.3)
+        d.rect(ly0 - 0.5, z1 - SLAB, ly1 - ly0 + 1.0, SLAB, "SLAB", "#52525b")  # cut slab (dark)
         hw = [w for w in lv.get("walls", []) if w["y1"] == w["y2"] and min(w["x1"], w["x2"]) - 0.01 <= xc <= max(w["x1"], w["x2"]) + 0.01]
         for w in hw:
             t = THK.get(w["kind"], 0.5)
+            d.rect(w["y1"] - t / 2, z1 - SLAB - 1.25, t, 1.25, "SLAB", "#52525b")  # beam under slab
             gap = next((o for o in lv.get("openings", []) if o["y1"] == o["y2"] and abs(o["y1"] - w["y1"]) < 0.01
                         and min(o["x1"], o["x2"]) - 0.01 <= xc <= max(o["x1"], o["x2"]) + 0.01), None)
-            hz = z1 - SLAB - z0
+            hz = z1 - SLAB - 1.25 - z0
             if gap and gap["type"] in ("window", "vent"):
                 s = SILL[gap["type"]]
-                d.rect(w["y1"] - t / 2, z0, t, s, "WALL", "#334155", 0)
-                d.rect(w["y1"] - t / 2, z0 + s, t, gap["h"], "WINDOW", "#bae6fd", 0.2)
-                d.rect(w["y1"] - t / 2, z0 + s + gap["h"], t, hz - s - gap["h"], "WALL", "#334155", 0)
+                d.rect(w["y1"] - t / 2, z0, t, s, "WALL", "#3f3f46", 0)
+                d.rect(w["y1"] - t / 2, z0 + s, t, gap["h"], "WINDOW", "#e0f2fe")
+                d.line(w["y1"], z0 + s, w["y1"], z0 + s + gap["h"], "WINDOW")
+                d.rect(w["y1"] - t / 2, z0 + s + gap["h"], t, max(0, hz - s - gap["h"]), "WALL", "#3f3f46", 0)
             elif gap:
-                d.rect(w["y1"] - t / 2, z0 + gap["h"], t, hz - gap["h"], "WALL", "#334155", 0)
+                d.rect(w["y1"] - t / 2, z0 + gap["h"], t, max(0, hz - gap["h"]), "WALL", "#3f3f46", 0)
             elif w["kind"] != "parapet":
-                d.rect(w["y1"] - t / 2, z0, t, hz, "WALL", "#334155", 0)
+                d.rect(w["y1"] - t / 2, z0, t, hz, "WALL", "#3f3f46", 0)
         for r in cut:
             cy = r["y"] + r["d"] / 2
-            d.text(cy, z0 + (z1 - z0) / 2, r["name"].upper(), 0.7, bold=True)
+            d.text(cy, z0 + 3.2, r["name"].upper(), 0.65, layer="ROOMTEXT", bold=True, mask=True)
             if r["type"] == "stair" and i < n - 1:
                 steps = max(1, int((z1 - z0) / 0.5))  # 6" risers
-                for s_ in range(steps):  # one straight flight drawn across the stair room
-                    yy = r["y"] + 0.5 + s_ * (r["d"] - 1.0) / steps
-                    d.line(yy, z0 + s_ * (z1 - z0) / steps, yy + (r["d"] - 1.0) / steps, z0 + s_ * (z1 - z0) / steps, "STAIR", 0.3)
-                    d.line(yy + (r["d"] - 1.0) / steps, z0 + s_ * (z1 - z0) / steps, yy + (r["d"] - 1.0) / steps,
-                           z0 + (s_ + 1) * (z1 - z0) / steps, "STAIR", 0.3)
-        d.text(gy1 + 1.5, z0 + 0.3, f"+{z0 * FT_M:.2f} m  {lv['name']}", 0.7, anchor="start", layer="DIM")
-        d.dim_v(gy0 - 2.5, z0, z1)
+                run = (r["d"] - 1.0) / steps
+                pts = []
+                for s_ in range(steps):
+                    yy = r["y"] + 0.5 + s_ * run
+                    zz = z0 + s_ * (z1 - z0) / steps
+                    d.line(yy, zz, yy + run, zz, "STAIR")
+                    d.line(yy + run, zz, yy + run, zz + (z1 - z0) / steps, "STAIR")
+                    pts.append((yy, zz))
+                d.line(r["y"] + 0.5, z0 - 0.6, r["y"] + r["d"] - 0.5, z1 - 0.6, "STAIR")  # waist slab
+                d.line(r["y"] + 0.5, z0 + 3.0, r["y"] + r["d"] - 0.5, z1 + 3.0, "FURNITURE")  # handrail
+        d.level(gy1 + 1.5, z0, f"+{z0 * FT_M:.2f} m  {lv['name'].upper()}")
+        d.dim_v(gy0 - 2.5, z0, z1, ext_from=gy0 - 0.5)
     lvt = plan["levels"][-1]
     ty0, ty1 = _extent(lvt)[2], _extent(lvt)[3]
     roof = zs[-1]
-    d.rect(ty0 - 0.25, roof, 0.5, PARAPET, "PARAPET", "#94a3b8", 0.2)
-    d.rect(ty1 - 0.25, roof, 0.5, PARAPET, "PARAPET", "#94a3b8", 0.2)
+    for yy in (ty0 - 0.25, ty1 - 0.25):
+        d.rect(yy, roof, 0.5, PARAPET, "PARAPET", "#3f3f46", 0)
     st = next((r for r in lvt["rooms"] if r["type"] == "stair" and r["x"] - 0.01 <= xc <= r["x"] + r["w"] + 0.01), None)
     if st and n > 1:
-        d.rect(st["y"], roof, 0.5, HEADROOM, "WALL", "#334155", 0)
-        d.rect(st["y"] + st["d"] - 0.5, roof, 0.5, HEADROOM, "WALL", "#334155", 0)
-        d.rect(st["y"] - 0.5, roof + HEADROOM, st["d"] + 1.0, SLAB, "SLAB", "#475569", 0.3)
-        d.text(st["y"] + st["d"] / 2, roof + HEADROOM / 2, "HEAD ROOM", 0.6, layer="DIM")
-    d.text(gy1 + 1.5, roof + 0.3, f"+{roof * FT_M:.2f} m  Terrace", 0.7, anchor="start", layer="DIM")
-    d.text(gy1 + 1.5, 0.3, "+0.00 m  GL", 0.7, anchor="start", layer="DIM")
-    d.text((gy0 + gy1) / 2, -7.0, f"SECTION A-A (cut through {'staircase' if stair else 'middle'}, looking from the left side)", 0.8, bold=True)
-    d.text(gy0, -8.6, "FRONT (road) on the left", 0.6, anchor="start", layer="DIM")
+        d.rect(st["y"], roof, 0.5, HEADROOM, "WALL", "#3f3f46", 0)
+        d.rect(st["y"] + st["d"] - 0.5, roof, 0.5, HEADROOM, "WALL", "#3f3f46", 0)
+        d.rect(st["y"] - 0.5, roof + HEADROOM, st["d"] + 1.0, SLAB, "SLAB", "#52525b")
+        d.text(st["y"] + st["d"] / 2, roof + HEADROOM / 2, "HEAD ROOM", 0.55, layer="DIM")
+    d.level(gy1 + 1.5, roof, f"+{roof * FT_M:.2f} m  TERRACE")
+    d.level(gy1 + 1.5, 0, "±0.00 m  G.L.")
+    d.text((gy0 + gy1) / 2, -7.0, "SECTION A-A", 0.9, bold=True)
+    d.line((gy0 + gy1) / 2 - 3.5, -7.3, (gy0 + gy1) / 2 + 3.5, -7.3, "TEXT")
+    d.text((gy0 + gy1) / 2, -8.5, f"(cut through the {'staircase' if stair else 'middle'} · front / road side on the left)", 0.55, layer="DIM")
     return d
 
 
@@ -415,11 +669,24 @@ def _esc(s: str) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
+def _arc_pts(it, steps=24):
+    a0, a1 = math.radians(it["a0"]), math.radians(it["a1"])
+    return [(it["cx"] + it["r"] * math.cos(a0 + (a1 - a0) * i / steps), it["cy"] + it["r"] * math.sin(a0 + (a1 - a0) * i / steps))
+            for i in range(steps + 1)]
+
+
+def _order(items):
+    """Draw order: fills/shadows, hatch, rects, lines, arcs, then text on top."""
+    rank = {"SHADOW": 0, "HATCH": 2, "MASK": 3.5}
+    return sorted(items, key=lambda it: (4 if it["t"] == "text" else rank.get(it["layer"], 1 if it["t"] == "rect" else 3)))
+
+
 def to_svg(d: Dwg, px: int = 900) -> str:
     x0, y0, x1, y1 = d.bounds()
     pad = 2
     W, H = (x1 - x0) + 2 * pad, (y1 - y0) + 2 * pad
     k = px / W
+    mmk = k * 0.9  # px per mm of pen weight on screen
 
     def X(x):
         return (x - x0 + pad) * k
@@ -429,20 +696,22 @@ def to_svg(d: Dwg, px: int = 900) -> str:
 
     out = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W * k:.0f} {H * k:.0f}" width="100%" '
            f'style="background:#fff;font-family:Arial,Helvetica,sans-serif">']
-    for it in d.items:
+    for it in _order(d.items):
+        col, wmm, dash = pen(it["layer"])
+        sw = max(0.35, wmm * mmk)
+        da = f' stroke-dasharray="{",".join(f"{v * mmk:.1f}" for v in dash)}"' if dash else ""
         if it["t"] == "rect":
             fill = it["fill"] or "none"
-            sw = it["lw"] * k * 0.06 if it["lw"] else 0
+            stroke = f'stroke="{col}" stroke-width="{sw:.2f}"{da}' if it["lw"] else 'stroke="none"'
             out.append(f'<rect x="{X(it["x"]):.1f}" y="{Y(it["y"] + it["h"]):.1f}" width="{it["w"] * k:.1f}" '
-                       f'height="{it["h"] * k:.1f}" fill="{fill}" stroke="#334155" stroke-width="{sw:.2f}"/>')
-    for it in d.items:
-        if it["t"] == "line":
-            col = "#2563eb" if it["layer"] == "DIM" else "#1e293b"
+                       f'height="{it["h"] * k:.1f}" fill="{fill}" {stroke}/>')
+        elif it["t"] == "line":
             out.append(f'<line x1="{X(it["x1"]):.1f}" y1="{Y(it["y1"]):.1f}" x2="{X(it["x2"]):.1f}" '
-                       f'y2="{Y(it["y2"]):.1f}" stroke="{col}" stroke-width="{max(0.4, it["w"] * k * 0.06):.2f}"/>')
-    for it in d.items:
-        if it["t"] == "text":
-            col = "#2563eb" if it["layer"] == "DIM" else "#0f172a"
+                       f'y2="{Y(it["y2"]):.1f}" stroke="{col}" stroke-width="{sw:.2f}"{da}/>')
+        elif it["t"] == "arc":
+            pts = " ".join(f"{X(a):.1f},{Y(b):.1f}" for a, b in _arc_pts(it))
+            out.append(f'<polyline points="{pts}" fill="none" stroke="{col}" stroke-width="{sw:.2f}"{da}/>')
+        else:
             out.append(f'<text x="{X(it["x"]):.1f}" y="{Y(it["y"]):.1f}" font-size="{it["h"] * k:.1f}" '
                        f'text-anchor="{it["anchor"]}" fill="{col}"{" font-weight=\"bold\"" if it["bold"] else ""}>'
                        f'{_esc(it["s"])}</text>')
@@ -454,14 +723,15 @@ STD_SCALES = [50, 75, 100, 125, 150, 200, 250, 300, 400, 500]
 
 
 def _draw_pdf(c, d: Dwg, bx: float, by: float, bw: float, bh: float) -> str:
-    """Draw d into the box (points), at the largest standard scale that fits. Returns the scale text."""
+    """Draw d into the box (points), at the largest standard scale that fits. Returns the scale text.
+    Pen weights are real millimetres on paper (CAD plot style)."""
     from reportlab.lib import colors
     from reportlab.lib.units import mm
     x0, y0, x1, y1 = d.bounds()
-    wm, hm = (x1 - x0) * FT_M * 1000, (y1 - y0) * FT_M * 1000  # mm real
+    wm, hm = (x1 - x0) * FT_M * 1000, (y1 - y0) * FT_M * 1000
     sc = next((s for s in STD_SCALES if wm / s * mm <= bw and hm / s * mm <= bh), None)
     if sc:
-        k = FT_M * 1000 / sc * mm  # points per foot
+        k = FT_M * 1000 / sc * mm
         label = f"1:{sc}"
     else:
         k = min(bw / (x1 - x0), bh / (y1 - y0))
@@ -470,28 +740,35 @@ def _draw_pdf(c, d: Dwg, bx: float, by: float, bw: float, bh: float) -> str:
     oy = by + (bh - (y1 - y0) * k) / 2 - y0 * k
 
     def safe(s):
-        return (s.replace("×", "x").replace("–", "-").replace("²", "2").replace("³", "3"))
+        return (s.replace("×", "x").replace("–", "-").replace("²", "2").replace("³", "3").replace("±", "+/-"))
 
-    for it in d.items:
+    for it in _order(d.items):
+        col, wmm, dash = pen(it["layer"])
+        c.setStrokeColor(colors.HexColor(col))
+        c.setLineWidth(max(0.1, wmm * mm))
+        c.setDash([v * mm for v in dash] if dash else [])
         if it["t"] == "rect":
-            c.setLineWidth(max(0.15, it["lw"] * 0.5) if it["lw"] else 0.01)
-            c.setStrokeColor(colors.HexColor("#334155"))
             if it["fill"]:
                 c.setFillColor(colors.HexColor(it["fill"]))
             c.rect(ox + it["x"] * k, oy + it["y"] * k, it["w"] * k, it["h"] * k,
                    fill=1 if it["fill"] else 0, stroke=1 if it["lw"] else 0)
-    for it in d.items:
-        if it["t"] == "line":
-            c.setStrokeColor(colors.HexColor("#2563eb" if it["layer"] == "DIM" else "#1e293b"))
-            c.setLineWidth(max(0.15, it["w"] * 0.5))
+        elif it["t"] == "line":
             c.line(ox + it["x1"] * k, oy + it["y1"] * k, ox + it["x2"] * k, oy + it["y2"] * k)
-    for it in d.items:
-        if it["t"] == "text":
-            c.setFillColor(colors.HexColor("#2563eb" if it["layer"] == "DIM" else "#0f172a"))
+        elif it["t"] == "arc":
+            p = c.beginPath()
+            pts = _arc_pts(it)
+            p.moveTo(ox + pts[0][0] * k, oy + pts[0][1] * k)
+            for a, b in pts[1:]:
+                p.lineTo(ox + a * k, oy + b * k)
+            c.drawPath(p, stroke=1, fill=0)
+        else:
+            c.setDash([])
+            c.setFillColor(colors.HexColor(col))
             fs = max(4.5, min(11, it["h"] * k))
             c.setFont("Helvetica-Bold" if it["bold"] else "Helvetica", fs)
             fn = {"start": c.drawString, "middle": c.drawCentredString, "end": c.drawRightString}[it["anchor"]]
             fn(ox + it["x"] * k, oy + it["y"] * k, safe(it["s"]))
+    c.setDash([])
     return label
 
 
@@ -674,8 +951,8 @@ def sheets_dxf(plan: dict, project: dict, meta: dict) -> bytes:
     layers = sorted({it["layer"] for d in dwgs for it in d.items} | {"TITLE"})
     out = ["0", "SECTION", "2", "HEADER", "9", "$ACADVER", "1", "AC1009", "9", "$INSUNITS", "70", "2", "0", "ENDSEC",
            "0", "SECTION", "2", "TABLES", "0", "TABLE", "2", "LAYER", "70", str(len(layers))]
-    for i, name in enumerate(layers):
-        out += ["0", "LAYER", "2", name, "70", "0", "62", str(1 + i % 7), "6", "CONTINUOUS"]
+    for name in layers:
+        out += ["0", "LAYER", "2", name, "70", "0", "62", str(DXF_COLOR.get(name, 7)), "6", "CONTINUOUS"]
     out += ["0", "ENDTAB", "0", "ENDSEC", "0", "SECTION", "2", "ENTITIES"]
     ox = 0.0
     for d in dwgs:
@@ -684,12 +961,17 @@ def sheets_dxf(plan: dict, project: dict, meta: dict) -> bytes:
         for it in d.items:
             if it["t"] == "line":
                 _dxf_line(out, it["layer"], it["x1"] + dx, it["y1"] - y0, it["x2"] + dx, it["y2"] - y0)
+            elif it["t"] == "rect" and it["layer"] in ("MASK", "SHADOW"):
+                continue
             elif it["t"] == "rect":
                 x, y, w, h = it["x"] + dx, it["y"] - y0, it["w"], it["h"]
                 for a, b, cc, dd in ((x, y, x + w, y), (x + w, y, x + w, y + h), (x + w, y + h, x, y + h), (x, y + h, x, y)):
                     _dxf_line(out, it["layer"], a, b, cc, dd)
+            elif it["t"] == "arc":
+                out += ["0", "ARC", "8", it["layer"], "10", f"{it['cx'] + dx:.3f}", "20", f"{it['cy'] - y0:.3f}", "30", "0",
+                        "40", f"{it['r']:.3f}", "50", f"{it['a0'] % 360:.2f}", "51", f"{(it['a1'] if it['a1'] - it['a0'] < 360 else it['a0'] + 359.99) % 360:.2f}"]
             else:
-                _dxf_text(out, it["layer"], it["x"] + dx, it["y"] - y0, it["h"], it["s"], center=it["anchor"] == "middle")
+                _dxf_text(out, it["layer"], it["x"] + dx, it["y"] - y0, it["h"], it["s"].replace("±", "+/-"), center=it["anchor"] == "middle")
         _dxf_text(out, "TITLE", ox + (x1 - x0) / 2, -4, 1.5, d.title.upper())
         ox += (x1 - x0) + 20
     co = project.get("company") or {}

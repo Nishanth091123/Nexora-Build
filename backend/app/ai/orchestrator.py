@@ -278,7 +278,7 @@ def llm_route(text: str, agent: str, history: str, pending: dict | None, last_pl
     pend = json.dumps({k: pending.get(k) for k in ("tool", "kind") if pending.get(k)}) if pending else "nothing"
     prompt = ROUTER_PROMPT.format(kinds=kinds, params=params, agent=AGENTS[agent][0], pending=pend,
                                   last_plan=last_plan or "none", history=history or "(none)", text=text)
-    data, prov = llm.ask(prompt, want_json=True, order=order)
+    data, prov = llm.ask(prompt, want_json=True, order=order, budget=15)  # router: quick, else pattern reader
     tool = str(data.get("tool", "")).strip().lower()
     if tool not in TOOLS:
         raise ValueError(f"router returned {tool!r}")
@@ -500,7 +500,7 @@ def respond(db: Session, user: User, conv: AIConversation, text: str, perms: dic
     try:
         if not any(llm.keys().values()):
             raise llm.LLMError("No AI keys in .env")
-        content, prov = llm.ask(prompt, want_json=False, temperature=0.3, order=order, min_chars=20)
+        content, prov = llm.ask(prompt, want_json=False, temperature=0.3, order=order, min_chars=20, budget=35)
         content = str(content).strip()
         provider_used.append(prov)
     except Exception as e:

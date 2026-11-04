@@ -19,7 +19,7 @@ export type Plan = {
   version: number; units: string; plot: { w: number; d: number }; facing: string;
   compass: { up: [number, number]; right: [number, number] }; setbacks: Setbacks;
   building: { x: number; y: number; w: number; d: number }; floor_height_ft: number; levels: Level[];
-  notes: string[]; requirements: any; warnings: string[]; opening_specs?: Record<string, { w_ft?: number; h_ft?: number; material?: string }>;
+  notes: string[]; requirements: any; warnings: string[]; opening_specs?: Record<string, { w_ft?: number; h_ft?: number; material?: string }>; finishes?: Record<string, string>;
   summary: { levels: number; builtup_sqft: number; carpet_sqft: number; bedrooms: number; toilets: number; kitchens: number };
 };
 

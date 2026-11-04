@@ -115,6 +115,37 @@ ADDITIVE_MIGRATIONS: dict[str, list[str]] = {
 }
 
 
+def _protection_triggers() -> None:
+    """1.11.1: create the delete-protection triggers ONLY when missing.
+
+    Before, every start (PC test backend, Render wake-up / deploy) dropped and re-created ~35 triggers in one
+    transaction. That needs an exclusive lock on every table; with two servers on the same Neon database the
+    locks queued behind each other and a simple save could hang for minutes (811 s in the test).
+    Now: functions are replaced (no table lock), triggers are created only if absent, each in its own short
+    transaction with lock_timeout, so a busy table never blocks the start-up or other users."""
+    funcs = [s for s in PG_PROTECTION_SQL if "FUNCTION" in s and "TRIGGER trg_" not in s and not s.strip().startswith("DROP")]
+    with engine.begin() as conn:
+        conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+        for stmt in funcs:
+            conn.execute(text(stmt))
+    with engine.connect() as conn:
+        have = {r[0] for r in conn.execute(text("SELECT tgname FROM pg_trigger WHERE NOT tgisinternal"))}
+    wanted = [(f"trg_nexora_nodelete_{t}", f"CREATE TRIGGER trg_nexora_nodelete_{t} BEFORE DELETE ON {t} "
+                                          f"FOR EACH ROW EXECUTE FUNCTION nexora_block_delete()") for t in NO_DELETE_TABLES]
+    wanted.append(("trg_nexora_protect_owner", "CREATE TRIGGER trg_nexora_protect_owner BEFORE UPDATE OR DELETE ON users "
+                                               "FOR EACH ROW EXECUTE FUNCTION nexora_protect_owner()"))
+    for name, stmt in wanted:
+        if name in have:
+            continue
+        try:
+            with engine.begin() as conn:
+                conn.execute(text("SET LOCAL lock_timeout = '5s'"))
+                conn.execute(text(stmt))
+            log.info("Protection trigger added: %s", name)
+        except Exception as e:  # a busy table: try again on the next start, never hang
+            log.warning("Protection trigger %s not added now (table busy): %s", name, str(e).split("\n")[0][:120])
+
+
 def init_db() -> None:
     is_pg = engine.dialect.name == "postgresql"
     with engine.begin() as conn:
@@ -122,15 +153,8 @@ def init_db() -> None:
             conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
     Base.metadata.create_all(engine, checkfirst=True)
 
-    with engine.begin() as conn:
-        if is_pg:
-            for stmt in PG_PROTECTION_SQL:
-                conn.execute(text(stmt))
-            for t in NO_DELETE_TABLES:
-                conn.execute(text(f"DROP TRIGGER IF EXISTS trg_nexora_nodelete_{t} ON {t}"))
-                conn.execute(text(
-                    f"CREATE TRIGGER trg_nexora_nodelete_{t} BEFORE DELETE ON {t} "
-                    f"FOR EACH ROW EXECUTE FUNCTION nexora_block_delete()"))
+    if is_pg:
+        _protection_triggers()
 
     with Session(engine) as db:
         done = {m.version for m in db.query(SchemaMigration).all()}

@@ -15,7 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 REMOTE = "https://github.com/Nishanth091123/Nexora-Build.git"
 # generic key shapes, in case a key is pasted somewhere that is not in .env
-PATTERNS = [r"AIza[0-9A-Za-z_\-]{30,}", r"gsk_[0-9A-Za-z]{30,}", r"sk-or-v1-[0-9a-f]{40,}", r"hf_[0-9A-Za-z]{30,}",
+PATTERNS = [r"api\.render\.com/deploy/srv-[0-9a-z]+\?key=", r"AIza[0-9A-Za-z_\-]{30,}", r"gsk_[0-9A-Za-z]{30,}", r"sk-or-v1-[0-9a-f]{40,}", r"hf_[0-9A-Za-z]{30,}",
             r"postgres(?:ql)?://[^\s:@/]+:[^\s@/]{6,}@", r"ghp_[0-9A-Za-z]{30,}"]
 
 
@@ -36,7 +36,7 @@ def env_values() -> list[str]:
             if "=" in ln and not ln.strip().startswith("#"):
                 k, v = ln.split("=", 1)
                 v = v.strip().strip('"').strip("'")
-                if re.search(r"KEY|SECRET|TOKEN|PASSWORD|DATABASE_URL|ACCOUNT_ID", k.upper()) and len(v) >= 8:
+                if re.search(r"KEY|SECRET|TOKEN|PASSWORD|DATABASE_URL|ACCOUNT_ID|HOOK", k.upper()) and len(v) >= 8:
                     vals.append(v)
     return vals
 
@@ -114,7 +114,51 @@ def main() -> int:
         print("       If GitHub says 'rejected (fetch first)', the repo is not empty – make it again without README.")
         return 1
     print("[OK] PUSHED: https://github.com/Nishanth091123/Nexora-Build")
+    deploy_render()
     return 0
+
+
+def env_get(name: str) -> str:
+    p = ROOT / ".env"
+    if p.exists():
+        for ln in p.read_text(encoding="utf-8").splitlines():
+            if ln.strip().startswith(name + "="):
+                return ln.split("=", 1)[1].strip().strip('"').strip("'")
+    return ""
+
+
+def deploy_render() -> None:
+    """Start the Render deploy ourselves (no need to press Manual Deploy), then wait for the new version."""
+    import json
+    import time
+    import urllib.request
+    hook = env_get("RENDER_DEPLOY_HOOK")
+    if not hook:
+        print("[TIP] Render did not update by itself before. Set it up once so this script deploys for you:")
+        print("      render.com -> nexora-build-api -> Settings -> Deploy Hook -> Copy, then add this line to .env:")
+        print("      RENDER_DEPLOY_HOOK=<paste the link>")
+        return
+    try:
+        urllib.request.urlopen(urllib.request.Request(hook, method="POST", data=b""), timeout=30).read()
+        print("[OK] Render deploy started (takes ~5 minutes).")
+    except Exception as e:
+        print(f"[WARN] Could not start the Render deploy ({type(e).__name__}). Use Render -> Manual Deploy once.")
+        return
+    want = re.search(r'APP_VERSION = "([^"]+)"', (ROOT / "backend/app/config.py").read_text(encoding="utf-8"))
+    api = env_get("ONLINE_API_URL") or "https://nexora-build-api.onrender.com"
+    if not want:
+        return
+    print(f"      Waiting for the online server to show {want.group(1)} (you can close this window; it continues online)...")
+    for _ in range(40):  # up to ~13 minutes
+        time.sleep(20)
+        try:
+            v = json.loads(urllib.request.urlopen(api.rstrip("/") + "/api/health", timeout=20).read()).get("version")
+        except Exception:
+            v = None
+        if v == want.group(1):
+            print(f"[OK] ONLINE SERVER UPDATED: {v}")
+            return
+    print("[WARN] Still not updated after 13 min – open Render -> Events and send the error to Claude.")
 
 
 if __name__ == "__main__":

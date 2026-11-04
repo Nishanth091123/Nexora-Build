@@ -2,7 +2,7 @@
    Pages / scripts / images: network first, cached copy when offline.
    API GET (data): network first, cached copy when offline (shown with the offline bar).
    API writes are never cached here – the app queues them itself (src/lib/outbox.ts). */
-const VERSION = "nexora-v14";
+const VERSION = "nexora-v16";
 const SHELL = ["/", "/manifest.webmanifest", "/favicon.svg", "/icons/icon-192.png", "/icons/icon-512.png"];
 
 self.addEventListener("install", (e) => {

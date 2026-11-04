@@ -418,6 +418,11 @@ export default function EstimatePage() {
             <button className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-slate-50" onClick={() => doExport("pdf")}><FileText size={16} className="text-red-500" />Detailed Estimate (PDF)</button>
             <button className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-slate-50" onClick={() => doExport("bank")}><FileText size={16} className="text-brand-600" />Bank Loan Estimate (PDF)</button>
             <button className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-slate-50" onClick={() => doExport("client")}><FileText size={16} className="text-violet-600" />Client Copy (PDF, no rates)</button>
+            <button className="flex w-full items-center gap-2 rounded-lg border-t border-line px-3 py-2 text-sm font-semibold hover:bg-slate-50" onClick={() => {
+              setExportOpen(false);
+              if (!saved || dirty) return toast("Save this estimate first (Save button)", "err");
+              downloadFile(`/api/projects/${pid}/project-pdf?estimate=bank&estimate_id=${saved.id}`, `${currentProject?.code}_Project_Drawings_and_Estimate.pdf`).catch((e) => toast(e.message, "err"));
+            }}><FileText size={16} className="text-navy-ink" />Complete PDF (drawings + bank estimate)</button>
           </div>
         )}
       </div>

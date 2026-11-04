@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState , Suspense, lazy} from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import DrawingImport from "../components/design/DrawingImport";
 import {
@@ -9,6 +9,7 @@ import Page from "../components/Page";
 import OwnerDelete from "../components/OwnerDelete";
 import PlanSvg from "../components/design/PlanSvg";
 import DrawingSheets from "../components/design/DrawingSheets";
+const House3D = lazy(() => import("../components/design/House3D"));  // three.js loads only on the 3D tab
 import Plan3D from "../components/design/Plan3D";
 import { Badge, Card, Empty, Field, PhaseNote, PillTabs, Toggle, toast } from "../components/ui";
 import { api, ApiError, downloadFile, fmtDateTime, inr, lakhs, num, rupees } from "../lib/api";
@@ -540,8 +541,10 @@ export default function DesignPage() {
 
       {tab === "3d" && (!plan ? <Card><Empty text="Generate or open a plan first." /></Card> : (
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1fr_320px]">
-          <Card title="3D Preview" icon={<Box size={20} />} action={<button className="btn-outline btn-sm" onClick={() => setRoof(!roof)}>{roof ? <EyeOff size={14} /> : <Eye size={14} />}{roof ? "Hide roof" : "Show roof"}</button>}>
-            <Plan3D plan={plan} showRoof={roof} />
+          <Card title="3D Visualization" icon={<Box size={20} />}>
+            <Suspense fallback={<Empty text="Loading 3D…" />}>
+              <House3D plan={plan} finishes={plan.finishes} onFinishes={(f) => { const next = clone(plan); next.finishes = f as any; setPlan(next); setDirty(true); }} />
+            </Suspense>
           </Card>
           <div className="min-w-0 space-y-4">
             <Card title="Building" icon={<Layers size={20} />}>

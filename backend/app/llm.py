@@ -192,11 +192,15 @@ def _shrink_image(blob: bytes, mime: str, max_side: int = 2000, max_bytes: int =
 
 def ask(prompt: str, blob: bytes | None = None, mime: str = "", want_json: bool = True,
         image_fallback: tuple[bytes, str] | None = None, temperature: float = 0.0,
-        order: list[str] | None = None, min_chars: int = 0, strict: bool = False) -> tuple[dict | str, str]:
+        order: list[str] | None = None, min_chars: int = 0, strict: bool = False,
+        budget: float = 60.0) -> tuple[dict | str, str]:
     """Run the prompt through Gemini → Groq → OpenRouter (or the order given). Returns (answer, 'provider/model').
     min_chars: for text answers, a shorter (or number-only) answer counts as a failure and the next model is tried.
 
-    blob may be an image or a PDF (PDF only works on Gemini; image_fallback is sent to the others)."""
+    blob may be an image or a PDF (PDF only works on Gemini; image_fallback is sent to the others).
+    budget (1.11.2): total seconds for ALL providers together – a slow / hanging free AI service can no longer
+    keep a chat waiting for minutes; the caller then shows Nexora's own calculated answer."""
+    t_end = time.monotonic() + budget
     k = keys()
     errors: list[str] = []
     default = ["gemini", "groq", "openrouter"]
@@ -219,14 +223,28 @@ def ask(prompt: str, blob: bytes | None = None, mime: str = "", want_json: bool 
             raise LLMError(f"unusable answer {txt[:40]!r}")
         return txt, tag
 
+    def left() -> float:
+        return t_end - time.monotonic()
+
+    def arm(client) -> None:
+        """per-call timeout = what is left of the budget (max 30 s per model)."""
+        rem = left()
+        if rem < 3:
+            raise LLMError(f"AI took too long (over {budget:g} s)")
+        client.timeout = httpx.Timeout(min(30.0, rem), connect=min(8.0, rem))
+
     with httpx.Client(timeout=TIMEOUT) as client:
         for prov in order:
             key = k.get(prov)
             if not key:
                 continue
+            if left() < 3:
+                errors.append(f"time budget of {budget:g} s used up")
+                break
             if prov == "gemini":
                 for model in _pick_gemini(client, key):
                     try:
+                        arm(client)
                         return done(_gemini(client, key, model, prompt, blob, mime, want_json, temperature), f"gemini/{model}")
                     except Exception as e:
                         errors.append(f"gemini/{model}: {str(e)[:160]}")
@@ -239,6 +257,7 @@ def ask(prompt: str, blob: bytes | None = None, mime: str = "", want_json: bool 
             extra = {"X-Title": "Nexora Build"} if prov == "openrouter" else None
             for model in _pick_openai_like(prov, client, key, base + "/models", vision):
                 try:
+                    arm(client)
                     return done(_openai_like(client, base, key, model, prompt, other_blob, other_mime, want_json,
                                              extra, temperature), f"{prov}/{model}")
                 except Exception as e:

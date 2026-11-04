@@ -75,7 +75,7 @@ def status(test: bool = False, user: User = Depends(get_current_user)):
                 res[name] = "no key"
                 continue
             try:
-                txt, prov = llm.ask("Reply with the words: Nexora ready", want_json=False, order=[name], min_chars=5, strict=True)
+                txt, prov = llm.ask("Reply with the words: Nexora ready", want_json=False, order=[name], min_chars=5, strict=True, budget=25)
                 res[name] = f"OK ({prov})" if prov.startswith(name) else f"failed (answered by {prov})"
             except Exception as e:
                 res[name] = "failed: " + str(e).replace("All AI providers failed: ", "")[:220]

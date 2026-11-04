@@ -65,6 +65,10 @@ export default function DrawingSheets({ pid, plan, saved, dirty, code, onSpecs }
         action={<div className="flex gap-2">
           <button className="btn-primary btn-sm" onClick={() => dl("pdf")}><Download size={14} />Drawing Set PDF (A3)</button>
           <button className="btn-outline btn-sm" onClick={() => dl("dxf")}><Download size={14} />DXF (AutoCAD)</button>
+          <button className="btn-outline btn-sm" title="Drawing set + latest saved estimate in ONE PDF" onClick={() => {
+            if (!saved || dirty) return toast("Save the design first (Save button)", "err");
+            downloadFile(`/api/projects/${pid}/project-pdf?design_id=${saved.id}`, `${code}_Project_Drawings_and_Estimate.pdf`).catch((e) => toast(e.message, "err"));
+          }}><Download size={14} />Complete PDF (drawings + estimate)</button>
         </div>}>
         <div className="mb-3 flex flex-wrap gap-1.5">
           {sheets.map(([k, l]) => <button key={k} onClick={() => setSheet(k)} className={`rounded-md px-3 py-1.5 text-xs font-semibold ${sheet === k ? "bg-brand-600 text-white" : "bg-brand-50 text-navy-ink"}`}>{l}</button>)}

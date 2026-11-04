@@ -32,6 +32,7 @@ import subprocess
 import time
 from pathlib import Path
 
+CLEANUP: list[dict] = []  # test items in the Recycle Bin, purged together at the end (one safety backup)
 FULL = "--full" in sys.argv  # also test the live AI providers (slow: free AI services can take minutes)
 T_START = time.perf_counter()
 TIMES: list[tuple[float, str]] = []
@@ -96,7 +97,7 @@ except httpx.ConnectError:
         sys.exit("[ERROR] Backend did not start in 2 minutes.")
 check("health", r.status_code == 200 and r.json().get("status") == "ok", r.text)
 _v = tuple(int(x) for x in (r.json().get("version", "0.0").split("-")[0].split(".") + ["0"])[:2] if x.isdigit())
-check("backend is the 1.10 version (not an old one still running)", _v >= (1, 10), r.text)
+check("backend is the 1.11 version (not an old one still running)", _v >= (1, 11), r.text)
 
 login = input("Owner username [nishanth_s]: ").strip() or "nishanth_s"
 pw = getpass.getpass("Owner password (hidden): ")
@@ -300,6 +301,15 @@ if plan:
     check("A3 drawing set PDF", r.status_code == 200 and r.content[:4] == b"%PDF", r.text[:200] if r.status_code != 200 else "")
     r = c.get(f"/api/designs/{d2}/sheets.dxf")
     check("drawing set DXF", r.status_code == 200 and b"SECTION A-A" in r.content, r.text[:200] if r.status_code != 200 else "")
+    # ---------------- 1.11 Part 4: 3D colours are kept with the design ----------------
+    p3 = json.loads(json.dumps(plan))
+    p3["finishes"] = {"ext": "#b5654a", "floor": "#f5f5f4", "bad": "red", "door": "javascript:x"}
+    r = c.post(f"/api/projects/{pid}/designs", json={"plan": p3, "title": "SMOKE 3D colours"})
+    f3 = (r.json().get("plan") or {}).get("finishes", {}) if r.status_code == 200 else {}
+    check("3D colours saved (and cleaned)", f3 == {"ext": "#b5654a", "floor": "#f5f5f4"}, r.text[:200])
+    r = c.get(f"/api/projects/{pid}/project-pdf?design_id={d2}", timeout=180)
+    check("one complete PDF (drawings + estimate)", r.status_code == 200 and r.content[:4] == b"%PDF" and r.content.count(b"/Type /Page") > 8,
+          r.text[:200] if r.status_code != 200 else "")
     r = c.get(f"/api/designs/{d2}/estimate-inputs")
     ok = r.status_code == 200 and "geometry" in r.json()["inputs"]
     check("estimate inputs from design", ok, r.text[:200])
@@ -456,7 +466,7 @@ if bk:
     back = r.status_code == 200 and any(i["entity"] == "task" and i["id"] == tid for i in r.json()["items"])
     check("recovered task is back in the Recycle Bin", back, r.text[:200])
     if back:
-        c.post(f"/api/trash/task/{tid}/purge", timeout=300)  # clean up again
+        CLEANUP.append({"entity": "task", "id": tid})  # cleaned up at the end, in one go
 r = c.post("/api/invites", json={"label": "SMOKE invite", "job_title": "Site Engineer", "access": {str(pid): {"view": True, "site": True}}})
 inv = r.json() if r.status_code == 200 else {}
 check("invite link created", bool(inv.get("token")), r.text[:200])
@@ -507,7 +517,7 @@ r = c.post("/api/ai/calc", json={"kind": "concrete", "params": {"volume_m3": 1, 
 check("calculator: 1 m3 M20 = 9 bags", r.status_code == 200 and r.json()["results"][0]["value"] == 9, r.text[:200])
 
 def chat6(body):
-    rr = c.post("/api/ai/chat", json=body, timeout=180)
+    rr = c.post("/api/ai/chat", json=body, timeout=120)
     return rr, (rr.json() if rr.status_code == 200 else {})
 
 r, j = chat6({"project_id": pid, "agent": "quantity", "text": "", "form": {"tool": "calc", "kind": "concrete",
@@ -591,7 +601,7 @@ if cl.get("id"):
     check("client stats", r.status_code == 200 and r.json().get("clients", 0) >= 1, r.text[:200])
     r = c.post(f"/api/trash/client/{cl['id']}")
     check("client to Recycle Bin", r.status_code == 200, r.text[:200])
-    c.post(f"/api/trash/client/{cl['id']}/purge", timeout=300)  # clean up (test data only)
+    CLEANUP.append({"entity": "client", "id": cl["id"]})  # cleaned up at the end, in one go
 was = c.get("/api/owner-only").json().get("modules", [])
 r = c.put("/api/owner-only", json={"modules": sorted(set(was) | {"vastu"})})
 check("owner-only module switch", r.status_code == 200 and "vastu" in r.json()["modules"], r.text[:200])
@@ -602,6 +612,9 @@ check("archive test project", r.status_code == 200, r.text)
 lst = c.get("/api/projects").json()["projects"]
 check("archived project hidden from list", all(p["id"] != pid for p in lst))
 
+if CLEANUP:
+    r = c.post("/api/trash/purge-many", json={"items": CLEANUP}, timeout=300)
+    check("test items removed from the Recycle Bin (one backup)", r.status_code == 200, r.text[:200])
 print()
 total = time.perf_counter() - T_START
 print(f"Test time: {total / 60:.1f} min, {len(TIMES)} requests. Slowest:")
@@ -612,4 +625,4 @@ if fail:
     print("Failed:", ", ".join(fail), "\nSend this output to Claude.")
     sys.exit(1)
 else:
-    print("NEXORA 1.10 API: ALL GOOD")
+    print("NEXORA 1.11 API: ALL GOOD")
