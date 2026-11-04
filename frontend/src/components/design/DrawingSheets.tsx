@@ -8,7 +8,7 @@ import type { Plan } from "../../lib/plan";
 
 type Sched = { mark: string; type: string; label: string; w_ft: number; h_ft: number; size: string; sill_ft: number; material: string; per_level: Record<string, number>; count: number; rooms: string };
 type Row = { w_ft: string; h_ft: string; material: string };
-type Preview = { schedule: Sched[]; area: any; svgs: Record<string, string>; levels: string[]; warnings: string[] };
+type Preview = { schedule: Sched[]; area: any; svgs: Record<string, string>; svgs_cad?: Record<string, string>; levels: string[]; warnings: string[] };
 const TYPE_LABEL: Record<string, string> = { main_door: "Main door", door: "Room door", pooja_door: "Pooja door", toilet_door: "Toilet door", opening: "Opening", window: "Window (all)", vent: "Ventilator" };
 
 export default function DrawingSheets({ pid, plan, saved, dirty, code, onSpecs }: {
@@ -17,6 +17,7 @@ export default function DrawingSheets({ pid, plan, saved, dirty, code, onSpecs }
 }) {
   const [pv, setPv] = useState<Preview | null>(null);
   const [sheet, setSheet] = useState("elevation");
+  const [cad, setCad] = useState(false);
   const [edit, setEdit] = useState<Record<string, { w_ft: string; h_ft: string; material: string }>>({});
   const timer = useRef<number | null>(null);
 
@@ -49,9 +50,10 @@ export default function DrawingSheets({ pid, plan, saved, dirty, code, onSpecs }
     onSpecs(out);
     toast("Sizes applied – plan, quantities and estimate updated. Save the design to keep them.");
   };
-  const dl = async (kind: "pdf" | "dxf") => {
+  const dl = async (kind: "pdf" | "dxf" | "cad") => {
     if (!saved || dirty) return toast("Save the design first (Save button) – the drawing set is made from a saved version", "err");
-    try { await downloadFile(`/api/designs/${saved.id}/sheets.${kind}`, `${code}_Drawing_Set_v${saved.version}.${kind}`); }
+    const path = kind === "cad" ? "sheets.pdf?style=cad" : `sheets.${kind}`;
+    try { await downloadFile(`/api/designs/${saved.id}/${path}`, `${code}_Drawing_Set_v${saved.version}${kind === "cad" ? "_CAD.pdf" : "." + kind}`); }
     catch (e: any) { toast(e.message, "err"); }
   };
 
@@ -64,6 +66,8 @@ export default function DrawingSheets({ pid, plan, saved, dirty, code, onSpecs }
       <Card title="Drawing Sheets (auto generated)" icon={<FileText size={20} />}
         action={<div className="flex gap-2">
           <button className="btn-primary btn-sm" onClick={() => dl("pdf")}><Download size={14} />Drawing Set PDF (A3)</button>
+          <button className={`btn-sm ${cad ? "btn-primary" : "btn-outline"}`} onClick={() => setCad(!cad)}>{cad ? "CAD colours (black)" : "Paper colours"}</button>
+          <button className="btn-outline btn-sm" onClick={() => dl("cad")}><Download size={14} />PDF (CAD black)</button>
           <button className="btn-outline btn-sm" onClick={() => dl("dxf")}><Download size={14} />DXF (AutoCAD)</button>
           <button className="btn-outline btn-sm" title="Drawing set + latest saved estimate in ONE PDF" onClick={() => {
             if (!saved || dirty) return toast("Save the design first (Save button)", "err");
@@ -73,8 +77,8 @@ export default function DrawingSheets({ pid, plan, saved, dirty, code, onSpecs }
         <div className="mb-3 flex flex-wrap gap-1.5">
           {sheets.map(([k, l]) => <button key={k} onClick={() => setSheet(k)} className={`rounded-md px-3 py-1.5 text-xs font-semibold ${sheet === k ? "bg-brand-600 text-white" : "bg-brand-50 text-navy-ink"}`}>{l}</button>)}
         </div>
-        <div className="overflow-auto rounded-lg border border-line bg-white p-2">
-          <div className="mx-auto max-w-4xl" dangerouslySetInnerHTML={{ __html: pv.svgs[sheet] || "" }} />
+        <div className={`overflow-auto rounded-lg border border-line p-2 ${cad ? "bg-black" : "bg-white"}`}>
+          <div className="mx-auto max-w-4xl" dangerouslySetInnerHTML={{ __html: (cad ? pv.svgs_cad?.[sheet] : pv.svgs[sheet]) || "" }} />
         </div>
         <p className="mt-2 text-xs text-slate-500">The PDF set also has A-01 Title sheet (drawing list, area statement, FSI, coverage) and the Door &amp; Window Schedule sheet, with your firm's title block on every sheet. Signature boxes are left empty to sign by hand.</p>
       </Card>

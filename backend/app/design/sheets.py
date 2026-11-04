@@ -140,41 +140,39 @@ def building_height(plan: dict) -> float:
 # ---------------------------------------------------------------- drafting pens (CAD-style plot styles)
 # layer → (colour, line weight in mm on paper, dash). Like an office CAD plot: cut walls heavy black,
 # outlines medium, openings / dimensions / furniture / hatch thin and in their own colours.
-PENS = {
-    "WALL":      ("#111111", 0.50, None),   # cut walls (filled)
-    "OUTLINE":   ("#111111", 0.35, None),   # elevation / section outlines
-    "SLAB":      ("#111111", 0.35, None),
-    "GROUND":    ("#111111", 0.70, None),
-    "WINDOW":    ("#0284c7", 0.25, None),   # cyan-blue
-    "DOOR":      ("#b45309", 0.25, None),   # brown
-    "SWING":     ("#b45309", 0.13, (1.2, 0.8)),
-    "FURNITURE": ("#7c7c8a", 0.13, None),   # grey
-    "STAIR":     ("#111111", 0.18, None),
-    "HATCH":     ("#9ca3af", 0.09, None),
-    "DIM":       ("#15803d", 0.18, None),   # green
-    "TEXT":      ("#111827", 0.25, None),
-    "ROOMTEXT":  ("#1e3a8a", 0.25, None),
-    "MARK":      ("#dc2626", 0.18, None),   # red marks D1 / W1
-    "CENTRE":    ("#dc2626", 0.13, (6, 1.5, 1, 1.5)),
-    "PLOT":      ("#111111", 0.50, (6, 2)),
-    "SETBACK":   ("#ea580c", 0.18, (3, 1.5)),
-    "BUILDING":  ("#111111", 0.35, None),
-    "ROAD":      ("#64748b", 0.25, None),
-    "COLUMN":    ("#111111", 0.35, None),
-    "FOOTING":   ("#111111", 0.35, None),
-    "PCC":       ("#111111", 0.25, None),
-    "PARAPET":   ("#111111", 0.35, None),
-    "SUNSHADE":  ("#111111", 0.25, None),
-    "SHADOW":    ("#d4d4d8", 0.0, None),
+WEIGHT = {"WALL": 0.5, "OUTLINE": 0.35, "SLAB": 0.35, "GROUND": 0.7, "WINDOW": 0.25, "DOOR": 0.25, "SWING": 0.13,
+          "FURNITURE": 0.13, "STAIR": 0.18, "HATCH": 0.09, "WALLHATCH": 0.09, "DIM": 0.18, "TEXT": 0.25, "ROOMTEXT": 0.25,
+          "MARK": 0.18, "CENTRE": 0.13, "PLOT": 0.5, "SETBACK": 0.18, "BUILDING": 0.35, "ROAD": 0.25, "COLUMN": 0.35,
+          "FOOTING": 0.35, "PCC": 0.25, "PARAPET": 0.35, "SUNSHADE": 0.25, "SHADOW": 0.0, "MASK": 0.0,
+          "BEAM": 0.35, "REBAR": 0.35, "STIRRUP": 0.18, "GRID": 0.13, "SLABEDGE": 0.25}
+DASH = {"SWING": (1.2, 0.8), "CENTRE": (6, 1.5, 1, 1.5), "PLOT": (6, 2), "SETBACK": (3, 1.5), "GRID": (6, 1.5, 1, 1.5),
+        "BEAM": None}
+# colour per layer – "paper" = coloured lines on white (PDF / print); "cad" = AutoCAD screen (black background)
+PALETTE = {
+    "paper": {"WALL": "#c2410c", "WALLHATCH": "#fdba74", "OUTLINE": "#c2410c", "SLAB": "#4b5563", "GROUND": "#166534",
+              "WINDOW": "#0891b2", "DOOR": "#7e22ce", "SWING": "#7e22ce", "FURNITURE": "#64748b", "STAIR": "#0f766e",
+              "HATCH": "#9ca3af", "DIM": "#15803d", "TEXT": "#111827", "ROOMTEXT": "#1d4ed8", "MARK": "#dc2626",
+              "CENTRE": "#dc2626", "PLOT": "#111827", "SETBACK": "#ea580c", "BUILDING": "#c2410c", "ROAD": "#475569",
+              "COLUMN": "#b91c1c", "FOOTING": "#92400e", "PCC": "#6b7280", "PARAPET": "#c2410c", "SUNSHADE": "#4b5563",
+              "SHADOW": "#d4d4d8", "BEAM": "#2563eb", "REBAR": "#dc2626", "STIRRUP": "#16a34a", "GRID": "#dc2626",
+              "SLABEDGE": "#2563eb", "MASK": "#ffffff", "BG": "#ffffff"},
+    "cad": {"WALL": "#ffff00", "WALLHATCH": "#6b6b00", "OUTLINE": "#ffff00", "SLAB": "#c0c0c0", "GROUND": "#00ff00",
+            "WINDOW": "#00ffff", "DOOR": "#ff66ff", "SWING": "#ff66ff", "FURNITURE": "#9a9a9a", "STAIR": "#66ffcc",
+            "HATCH": "#7a7a7a", "DIM": "#00ff00", "TEXT": "#ffffff", "ROOMTEXT": "#7fbfff", "MARK": "#ff5050",
+            "CENTRE": "#ff5050", "PLOT": "#ffffff", "SETBACK": "#ffa040", "BUILDING": "#ffff00", "ROAD": "#a0a0a0",
+            "COLUMN": "#ff5050", "FOOTING": "#ffa040", "PCC": "#a0a0a0", "PARAPET": "#ffff00", "SUNSHADE": "#c0c0c0",
+            "SHADOW": "#000000", "BEAM": "#4da6ff", "REBAR": "#ff5050", "STIRRUP": "#00ff00", "GRID": "#ff5050",
+            "SLABEDGE": "#4da6ff", "MASK": "#000000", "BG": "#000000"},
 }
-DXF_COLOR = {"WALL": 7, "OUTLINE": 7, "SLAB": 7, "GROUND": 7, "WINDOW": 4, "DOOR": 30, "SWING": 30, "FURNITURE": 8,
-             "STAIR": 7, "HATCH": 9, "DIM": 3, "TEXT": 7, "ROOMTEXT": 5, "MARK": 1, "CENTRE": 1, "PLOT": 7,
-             "SETBACK": 30, "BUILDING": 7, "ROAD": 8, "COLUMN": 7, "FOOTING": 7, "PCC": 8, "PARAPET": 7, "SUNSHADE": 7,
-             "SHADOW": 9, "TITLE": 7}
+DXF_COLOR = {"WALL": 2, "WALLHATCH": 8, "OUTLINE": 2, "SLAB": 9, "GROUND": 3, "WINDOW": 4, "DOOR": 6, "SWING": 6,
+             "FURNITURE": 8, "STAIR": 4, "HATCH": 9, "DIM": 3, "TEXT": 7, "ROOMTEXT": 5, "MARK": 1, "CENTRE": 1,
+             "PLOT": 7, "SETBACK": 30, "BUILDING": 2, "ROAD": 8, "COLUMN": 1, "FOOTING": 30, "PCC": 8, "PARAPET": 2,
+             "SUNSHADE": 9, "SHADOW": 9, "TITLE": 7, "BEAM": 5, "REBAR": 1, "STIRRUP": 3, "GRID": 1, "SLABEDGE": 5}
 
 
-def pen(layer: str):
-    return PENS.get(layer, ("#111111", 0.25, None))
+def pen(layer: str, style: str = "paper"):
+    pal = PALETTE.get(style, PALETTE["paper"])
+    return pal.get(layer, pal["TEXT"]), WEIGHT.get(layer, 0.25), DASH.get(layer)
 
 
 class Dwg:
@@ -316,6 +314,75 @@ def _furniture(d: Dwg, r: dict):
         d.rect(x + w / 2 - 0.9, y + h - 1.4, 1.8, 1.0, F)
 
 
+def wall_body(lv: dict, kinds=("ext", "int230", "int115")) -> tuple[list[tuple], list[tuple]]:
+    """Union of all wall rectangles minus the door / window gaps (axis-aligned, exact by coordinate compression).
+    Returns (outline segments [(x1, y1, x2, y2)], filled strips [(x0, y0, x1, y1)] for the hatch)."""
+    rects, cuts = [], []
+    for w in lv.get("walls", []):
+        if w["kind"] not in kinds:
+            continue
+        t = THK.get(w["kind"], 0.5) / 2
+        if w["y1"] == w["y2"]:
+            rects.append((min(w["x1"], w["x2"]) - (t if w["kind"] != "int115" else 0), w["y1"] - t,
+                          max(w["x1"], w["x2"]) + (t if w["kind"] != "int115" else 0), w["y1"] + t))
+        else:
+            rects.append((w["x1"] - t, min(w["y1"], w["y2"]), w["x1"] + t, max(w["y1"], w["y2"])))
+    for o in lv.get("openings", []):
+        x0, x1 = min(o["x1"], o["x2"]), max(o["x1"], o["x2"])
+        y0, y1 = min(o["y1"], o["y2"]), max(o["y1"], o["y2"])
+        if o["y1"] == o["y2"]:
+            cuts.append((x0, o["y1"] - 0.6, x1, o["y1"] + 0.6))
+        else:
+            cuts.append((o["x1"] - 0.6, y0, o["x1"] + 0.6, y1))
+    if not rects:
+        return [], []
+    xs = sorted({round(v, 4) for r in rects + cuts for v in (r[0], r[2])})
+    ys = sorted({round(v, 4) for r in rects + cuts for v in (r[1], r[3])})
+    nx, ny = len(xs) - 1, len(ys) - 1
+
+    def inside(rs, cx, cy):
+        return any(r[0] <= cx <= r[2] and r[1] <= cy <= r[3] for r in rs)
+    fill = [[False] * ny for _ in range(nx)]
+    for i in range(nx):
+        cx = (xs[i] + xs[i + 1]) / 2
+        for j in range(ny):
+            cy = (ys[j] + ys[j + 1]) / 2
+            fill[i][j] = inside(rects, cx, cy) and not inside(cuts, cx, cy)
+    F = lambda i, j: 0 <= i < nx and 0 <= j < ny and fill[i][j]
+    segs = []
+    for j in range(ny + 1):  # horizontal boundary edges, merged along x
+        run = None
+        for i in range(nx):
+            edge = F(i, j - 1) != F(i, j)
+            if edge and run is None:
+                run = xs[i]
+            if (not edge or i == nx - 1) and run is not None:
+                end = xs[i + 1] if edge else xs[i]
+                segs.append((run, ys[j], end, ys[j]))
+                run = None
+    for i in range(nx + 1):  # vertical boundary edges, merged along y
+        run = None
+        for j in range(ny):
+            edge = F(i - 1, j) != F(i, j)
+            if edge and run is None:
+                run = ys[j]
+            if (not edge or j == ny - 1) and run is not None:
+                end = ys[j + 1] if edge else ys[j]
+                segs.append((xs[i], run, xs[i], end))
+                run = None
+    strips = []
+    for j in range(ny):  # filled runs per row → hatch strips
+        run = None
+        for i in range(nx + 1):
+            f = F(i, j)
+            if f and run is None:
+                run = xs[i]
+            if not f and run is not None:
+                strips.append((run, ys[j], xs[i], ys[j + 1]))
+                run = None
+    return segs, strips
+
+
 def floor_plan(plan: dict, li: int) -> Dwg:
     lv = plan["levels"][li]
     d = Dwg(f"{lv['name']} Plan")
@@ -348,16 +415,21 @@ def floor_plan(plan: dict, li: int) -> Dwg:
             d.line(ax, r["y"] + r["d"] - 1.5, ax - 0.4, r["y"] + r["d"] - 2.3, "STAIR")
             d.line(ax, r["y"] + r["d"] - 1.5, ax + 0.4, r["y"] + r["d"] - 2.3, "STAIR")
             d.text(ax, r["y"] + 0.4, "UP", 0.55, layer="STAIR")
-    # walls: solid poché, then openings cut through them
-    for w in lv.get("walls", []):
-        t = THK.get(w["kind"], 0.5)
-        fill = "#3f3f46" if w["kind"] != "int115" else "#71717a"
+    # walls: CAD style – coloured outline of the wall body (cut at doors / windows) + light hatch inside
+    segs, strips = wall_body(lv)
+    for x0_, y0_, x1_, y1_ in strips:
+        d.hatch(x0_, y0_, x1_ - x0_, y1_ - y0_, 0.45, layer="WALLHATCH")
+    for x1_, y1_, x2_, y2_ in segs:
+        d.line(x1_, y1_, x2_, y2_, "WALL")
+    for w in lv.get("walls", []):  # open-terrace parapets: thin double line
         if w["kind"] == "parapet":
-            fill = None
-        if w["y1"] == w["y2"]:
-            d.rect(min(w["x1"], w["x2"]), w["y1"] - t / 2, abs(w["x2"] - w["x1"]), t, "WALL", fill, 1 if fill is None else 0)
-        else:
-            d.rect(w["x1"] - t / 2, min(w["y1"], w["y2"]), t, abs(w["y2"] - w["y1"]), "WALL", fill, 1 if fill is None else 0)
+            t = THK["parapet"] / 2
+            if w["y1"] == w["y2"]:
+                d.line(min(w["x1"], w["x2"]), w["y1"] - t, max(w["x1"], w["x2"]), w["y1"] - t, "PARAPET")
+                d.line(min(w["x1"], w["x2"]), w["y1"] + t, max(w["x1"], w["x2"]), w["y1"] + t, "PARAPET")
+            else:
+                d.line(w["x1"] - t, min(w["y1"], w["y2"]), w["x1"] - t, max(w["y1"], w["y2"]), "PARAPET")
+                d.line(w["x1"] + t, min(w["y1"], w["y2"]), w["x1"] + t, max(w["y1"], w["y2"]), "PARAPET")
     rooms = {r["id"]: r for r in lv["rooms"]}
     for o in ops:
         win = o["type"] in ("window", "vent")
@@ -365,10 +437,6 @@ def floor_plan(plan: dict, li: int) -> Dwg:
         t = 0.78
         x0, x1 = min(o["x1"], o["x2"]), max(o["x1"], o["x2"])
         y0, y1 = min(o["y1"], o["y2"]), max(o["y1"], o["y2"])
-        if horiz:
-            d.rect(x0, o["y1"] - t / 2, x1 - x0, t, "WINDOW" if win else "DOOR", "#ffffff", 0)
-        else:
-            d.rect(o["x1"] - t / 2, y0, t, y1 - y0, "WINDOW" if win else "DOOR", "#ffffff", 0)
         if win:  # three-line window symbol
             for f in (-t / 2, 0, t / 2):
                 if horiz:
@@ -681,7 +749,16 @@ def _order(items):
     return sorted(items, key=lambda it: (4 if it["t"] == "text" else rank.get(it["layer"], 1 if it["t"] == "rect" else 3)))
 
 
-def to_svg(d: Dwg, px: int = 900) -> str:
+def _fill(it, style: str):
+    """Fill colour for a rect in this style (CAD screen: no fills, masks become the black background)."""
+    if it["layer"] == "MASK":
+        return PALETTE[style]["BG"]
+    if style == "cad":
+        return None
+    return it["fill"]
+
+
+def to_svg(d: Dwg, px: int = 900, style: str = "paper") -> str:
     x0, y0, x1, y1 = d.bounds()
     pad = 2
     W, H = (x1 - x0) + 2 * pad, (y1 - y0) + 2 * pad
@@ -695,14 +772,16 @@ def to_svg(d: Dwg, px: int = 900) -> str:
         return (y1 - y + pad) * k
 
     out = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W * k:.0f} {H * k:.0f}" width="100%" '
-           f'style="background:#fff;font-family:Arial,Helvetica,sans-serif">']
+           f'style="background:{PALETTE[style]["BG"]};font-family:Arial,Helvetica,sans-serif">']
     for it in _order(d.items):
-        col, wmm, dash = pen(it["layer"])
+        col, wmm, dash = pen(it["layer"], style)
         sw = max(0.35, wmm * mmk)
         da = f' stroke-dasharray="{",".join(f"{v * mmk:.1f}" for v in dash)}"' if dash else ""
         if it["t"] == "rect":
-            fill = it["fill"] or "none"
-            stroke = f'stroke="{col}" stroke-width="{sw:.2f}"{da}' if it["lw"] else 'stroke="none"'
+            if style == "cad" and it["layer"] == "SHADOW":
+                continue
+            fill = _fill(it, style) or "none"
+            stroke = f'stroke="{col}" stroke-width="{sw:.2f}"{da}' if (it["lw"] or (style == "cad" and it["layer"] not in ("MASK",) and it["fill"])) else 'stroke="none"'
             out.append(f'<rect x="{X(it["x"]):.1f}" y="{Y(it["y"] + it["h"]):.1f}" width="{it["w"] * k:.1f}" '
                        f'height="{it["h"] * k:.1f}" fill="{fill}" {stroke}/>')
         elif it["t"] == "line":
@@ -722,14 +801,14 @@ def to_svg(d: Dwg, px: int = 900) -> str:
 STD_SCALES = [50, 75, 100, 125, 150, 200, 250, 300, 400, 500]
 
 
-def _draw_pdf(c, d: Dwg, bx: float, by: float, bw: float, bh: float) -> str:
+def _draw_pdf(c, d: Dwg, bx: float, by: float, bw: float, bh: float, style: str = "paper", scales=None) -> str:
     """Draw d into the box (points), at the largest standard scale that fits. Returns the scale text.
     Pen weights are real millimetres on paper (CAD plot style)."""
     from reportlab.lib import colors
     from reportlab.lib.units import mm
     x0, y0, x1, y1 = d.bounds()
     wm, hm = (x1 - x0) * FT_M * 1000, (y1 - y0) * FT_M * 1000
-    sc = next((s for s in STD_SCALES if wm / s * mm <= bw and hm / s * mm <= bh), None)
+    sc = next((s for s in (scales or STD_SCALES) if wm / s * mm <= bw and hm / s * mm <= bh), None)
     if sc:
         k = FT_M * 1000 / sc * mm
         label = f"1:{sc}"
@@ -742,16 +821,23 @@ def _draw_pdf(c, d: Dwg, bx: float, by: float, bw: float, bh: float) -> str:
     def safe(s):
         return (s.replace("×", "x").replace("–", "-").replace("²", "2").replace("³", "3").replace("±", "+/-"))
 
+    if style == "cad":
+        c.setFillColor(colors.HexColor(PALETTE["cad"]["BG"]))
+        c.rect(bx, by, bw, bh, fill=1, stroke=0)
     for it in _order(d.items):
-        col, wmm, dash = pen(it["layer"])
+        col, wmm, dash = pen(it["layer"], style)
         c.setStrokeColor(colors.HexColor(col))
         c.setLineWidth(max(0.1, wmm * mm))
         c.setDash([v * mm for v in dash] if dash else [])
         if it["t"] == "rect":
-            if it["fill"]:
-                c.setFillColor(colors.HexColor(it["fill"]))
+            if style == "cad" and it["layer"] == "SHADOW":
+                continue
+            fl = _fill(it, style)
+            if fl:
+                c.setFillColor(colors.HexColor(fl))
+            stroke = it["lw"] or (style == "cad" and it["layer"] != "MASK" and bool(it["fill"]))
             c.rect(ox + it["x"] * k, oy + it["y"] * k, it["w"] * k, it["h"] * k,
-                   fill=1 if it["fill"] else 0, stroke=1 if it["lw"] else 0)
+                   fill=1 if fl else 0, stroke=1 if stroke else 0)
         elif it["t"] == "line":
             c.line(ox + it["x1"] * k, oy + it["y1"] * k, ox + it["x2"] * k, oy + it["y2"] * k)
         elif it["t"] == "arc":
@@ -772,7 +858,7 @@ def _draw_pdf(c, d: Dwg, bx: float, by: float, bw: float, bh: float) -> str:
     return label
 
 
-def sheet_set_pdf(plan: dict, project: dict, meta: dict) -> bytes:
+def sheet_set_pdf(plan: dict, project: dict, meta: dict, style: str = "paper") -> bytes:
     """A3 landscape drawing set: A-01 title & area statement, A-02 site plan, floor plans, elevation, section,
     door & window schedule. Title block with the firm's name on every sheet (no seal / signature printed)."""
     from reportlab.lib import colors
@@ -918,7 +1004,7 @@ def sheet_set_pdf(plan: dict, project: dict, meta: dict) -> bytes:
     for no, title, dwg in drawings:
         frame(no, title, "")
         heading(title)
-        scale = _draw_pdf(c, dwg, *area_box)
+        scale = _draw_pdf(c, dwg, *area_box, style=style)
         c.setFillColor(colors.white)  # overwrite the scale row of the title block
         x = W - M - TB_W
         c.setFont("Helvetica-Bold", 9)
@@ -945,9 +1031,14 @@ def sheet_set_pdf(plan: dict, project: dict, meta: dict) -> bytes:
 
 def sheets_dxf(plan: dict, project: dict, meta: dict) -> bytes:
     """All drawings (site plan, floor plans, elevation, section) side by side in one DXF (feet)."""
-    from .exports import _dxf_line, _dxf_text
     schedule(plan)
     dwgs = [site_plan(plan)] + [floor_plan(plan, i) for i in range(len(plan["levels"]))] + [front_elevation(plan), section(plan)]
+    co = project.get("company") or {}
+    return dwgs_dxf(dwgs, f"{co.get('name', '')} - {project.get('name', '')} - design v{meta.get('version', '')}")
+
+
+def dwgs_dxf(dwgs: list, footer: str) -> bytes:
+    from .exports import _dxf_line, _dxf_text
     layers = sorted({it["layer"] for d in dwgs for it in d.items} | {"TITLE"})
     out = ["0", "SECTION", "2", "HEADER", "9", "$ACADVER", "1", "AC1009", "9", "$INSUNITS", "70", "2", "0", "ENDSEC",
            "0", "SECTION", "2", "TABLES", "0", "TABLE", "2", "LAYER", "70", str(len(layers))]
@@ -974,18 +1065,19 @@ def sheets_dxf(plan: dict, project: dict, meta: dict) -> bytes:
                 _dxf_text(out, it["layer"], it["x"] + dx, it["y"] - y0, it["h"], it["s"].replace("±", "+/-"), center=it["anchor"] == "middle")
         _dxf_text(out, "TITLE", ox + (x1 - x0) / 2, -4, 1.5, d.title.upper())
         ox += (x1 - x0) + 20
-    co = project.get("company") or {}
-    _dxf_text(out, "TITLE", 0, -8, 1.2, f"{co.get('name', '')} - {project.get('name', '')} - design v{meta.get('version', '')}", center=False)
+    _dxf_text(out, "TITLE", 0, -8, 1.2, footer, center=False)
     out += ["0", "ENDSEC", "0", "EOF"]
     return ("\r\n".join(out) + "\r\n").encode("ascii", "replace")
 
 
 def sheet_previews(plan: dict) -> dict:
-    """SVG previews + tables for the Design page."""
+    """SVG previews (paper and CAD-screen colours) + tables for the Design page."""
     sched = schedule(plan)
+    dw = {"site": site_plan(plan), "elevation": front_elevation(plan), "section": section(plan),
+          **{f"plan_{i}": floor_plan(plan, i) for i in range(len(plan["levels"]))}}
     return {
         "schedule": sched, "area": area_details(plan),
-        "svgs": {"site": to_svg(site_plan(plan)), "elevation": to_svg(front_elevation(plan)), "section": to_svg(section(plan)),
-                 **{f"plan_{i}": to_svg(floor_plan(plan, i)) for i in range(len(plan["levels"]))}},
+        "svgs": {k: to_svg(v) for k, v in dw.items()},
+        "svgs_cad": {k: to_svg(v, style="cad") for k, v in dw.items()},
         "levels": [lv["name"] for lv in plan["levels"]],
     }

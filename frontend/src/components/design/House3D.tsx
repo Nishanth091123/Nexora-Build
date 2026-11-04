@@ -8,6 +8,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
+import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
+import { api } from "../../lib/api";
 import { Camera, Download, Film, Footprints, Layers3, Moon, RotateCcw, Sun } from "lucide-react";
 import { toast } from "../ui";
 import { WALL_T, type Plan } from "../../lib/plan";
@@ -28,18 +30,46 @@ export const SWATCHES: Record<keyof Finishes, [string, string][]> = {
 };
 const FIN_LABEL: Record<keyof Finishes, string> = { ext: "Exterior walls", int: "Interior walls", floor: "Flooring", door: "Doors", frame: "Window frames", roof: "Terrace", plinth: "Plinth" };
 
-type Mode = "exterior" | "interior" | "walk" | "exploded";
+type Mode = "exterior" | "interior" | "walk" | "exploded" | "structure";
 
-function build(plan: Plan, fin: Finishes, o: { upTo: number; only: number | null; mode: Mode; furniture: boolean; surround: boolean; roof: boolean }) {
+/** subtle plaster / grass speckle so surfaces don't look flat (generated, no image files) */
+function noiseTex(base: string, amount = 18, size = 128, rep = 1) {
+  const c = document.createElement("canvas"); c.width = c.height = size;
+  const g = c.getContext("2d")!;
+  g.fillStyle = base; g.fillRect(0, 0, size, size);
+  const img = g.getImageData(0, 0, size, size);
+  for (let i = 0; i < img.data.length; i += 4) {
+    const n = (Math.random() - 0.5) * amount;
+    img.data[i] += n; img.data[i + 1] += n; img.data[i + 2] += n;
+  }
+  g.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(rep, rep); t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+function skyTex(night: boolean) {
+  const c = document.createElement("canvas"); c.width = 2; c.height = 256;
+  const g = c.getContext("2d")!;
+  const gr = g.createLinearGradient(0, 0, 0, 256);
+  if (night) { gr.addColorStop(0, "#020617"); gr.addColorStop(1, "#1e293b"); }
+  else { gr.addColorStop(0, "#5ea9e6"); gr.addColorStop(0.6, "#bfe0f7"); gr.addColorStop(1, "#eef6fb"); }
+  g.fillStyle = gr; g.fillRect(0, 0, 2, 256);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+function build(plan: Plan, fin: Finishes, o: { upTo: number; only: number | null; mode: Mode; furniture: boolean; surround: boolean; roof: boolean; edges: boolean; structure?: any }) {
   const root = new THREE.Group();
   const H = plan.floor_height_ft || 10;
   const b = plan.building;
   const mats = new Map<string, THREE.Material>();
+  const plaster = noiseTex("#ffffff", 22, 128, 1);
   const mat = (col: string, extra: Partial<THREE.MeshStandardMaterialParameters> = {}) => {
     const k = col + JSON.stringify(extra);
-    if (!mats.has(k)) mats.set(k, new THREE.MeshStandardMaterial({ color: col, roughness: 0.85, metalness: 0, ...extra }));
+    if (!mats.has(k)) mats.set(k, new THREE.MeshStandardMaterial({ color: col, roughness: 0.85, metalness: 0, map: plaster, ...extra }));
     return mats.get(k)!;
   };
+  const edgeMat = new THREE.LineBasicMaterial({ color: "#3f3f46", transparent: true, opacity: 0.45 });
   const glass = new THREE.MeshPhysicalMaterial({ color: "#9fd3f5", transparent: true, opacity: 0.38, roughness: 0.05, metalness: 0.1 });
   const box = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, m: THREE.Material, parent: THREE.Object3D, name = "") => {
     const w = Math.abs(x1 - x0), d = Math.abs(y1 - y0), h = Math.abs(z1 - z0);
@@ -48,9 +78,11 @@ function build(plan: Plan, fin: Finishes, o: { upTo: number; only: number | null
     // plan (x, y, z-up) → world (X, Y-up, Z = −y), offset by the building position on the plot
     g.position.set(b.x + (x0 + x1) / 2, (z0 + z1) / 2, -(b.y + (y0 + y1) / 2));
     g.castShadow = true; g.receiveShadow = true; g.name = name;
+    if (o.edges && m !== glass) g.add(new THREE.LineSegments(new THREE.EdgesGeometry(g.geometry), edgeMat));
     parent.add(g);
     return g;
   };
+  if (o.mode === "structure" && o.structure) return structureModel(plan, o.structure, root, box, mat);
   const levels = plan.levels;
   const nShow = Math.min(levels.length, o.upTo);
   const gap = o.mode === "exploded" ? 6 : 0;
@@ -175,6 +207,40 @@ function build(plan: Plan, fin: Finishes, o: { upTo: number; only: number | null
   }
 }
 
+function structureModel(plan: Plan, st: any, root: THREE.Group,
+  box: (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, m: THREE.Material, p: THREE.Object3D, n?: string) => any,
+  mat: (c: string, e?: any) => THREE.Material) {
+  const H = plan.floor_height_ft || 10, n = plan.levels.length, MM = 1 / 304.8;
+  const depth = (st.inputs?.foundation_depth_m || 1.5) / 0.3048;
+  const cM = mat("#e11d48", { roughness: 0.6 }), bM = mat("#2563eb", { roughness: 0.6 }), fM = mat("#f59e0b"), pM = mat("#a8a29e");
+  const sM = new THREE.MeshStandardMaterial({ color: "#94a3b8", transparent: true, opacity: 0.35, roughness: 0.8 });
+  for (const f of st.footings || []) {
+    const B = f.B_m / 0.3048, D = f.D_mm * MM;
+    box(f.x - B / 2 - 0.33, f.y - B / 2 - 0.33, -depth - 0.33, f.x + B / 2 + 0.33, f.y + B / 2 + 0.33, -depth, pM, root, "PCC");
+    box(f.x - B / 2, f.y - B / 2, -depth, f.x + B / 2, f.y + B / 2, -depth + D, fM, root, `footing ${f.mark}`);
+  }
+  for (const c of st.columns || []) {
+    const b = c.b_mm * MM, D = c.D_mm * MM;
+    box(c.x - b / 2, c.y - D / 2, -depth, c.x + b / 2, c.y + D / 2, 1.5 + n * H, cM, root, `column ${c.mark}`);
+  }
+  const lvIndex: Record<string, number> = Object.fromEntries((st.levels || []).map((l: string, i: number) => [l, i]));
+  for (const bm of st.beams || []) {
+    const z = 1.5 + ((lvIndex[bm.level] ?? 0) + 1) * H, t = bm.b_mm * MM / 2, Dd = bm.D_mm * MM;
+    if (bm.dir === "h") box(bm.x1, bm.y1 - t, z - Dd, bm.x2, bm.y1 + t, z, bM, root, `beam ${bm.mark}`);
+    else box(bm.x1 - t, bm.y1, z - Dd, bm.x1 + t, bm.y2, z, bM, root, `beam ${bm.mark}`);
+  }
+  for (const sl of st.slabs || []) {
+    const z = 1.5 + ((lvIndex[sl.level] ?? 0) + 1) * H;
+    box(sl.x, sl.y, z - sl.D_mm * MM, sl.x + sl.w, sl.y + sl.d, z, sM, root, `slab ${sl.mark}`);
+  }
+  // plinth beams at ground level on the beam lines
+  for (const bm of (st.beams || []).filter((b: any) => (lvIndex[b.level] ?? 0) === 0)) {
+    if (bm.dir === "h") box(bm.x1, bm.y1 - 0.38, 0.5, bm.x2, bm.y1 + 0.38, 1.5, mat("#60a5fa"), root, "plinth beam");
+    else box(bm.x1 - 0.38, bm.y1, 0.5, bm.x1 + 0.38, bm.y2, 1.5, mat("#60a5fa"), root, "plinth beam");
+  }
+  return root;
+}
+
 function alongWall(w: { x1: number; y1: number; x2: number; y2: number }, fn: (s: number, e: number, c0: number, horiz: boolean, th: number) => void) {
   const horiz = w.y1 === w.y2;
   fn(horiz ? Math.min(w.x1, w.x2) : Math.min(w.y1, w.y2), horiz ? Math.max(w.x1, w.x2) : Math.max(w.y1, w.y2), horiz ? w.y1 : w.x1, horiz, 0.25);
@@ -245,7 +311,9 @@ function surroundings(plan: Plan, root: THREE.Object3D, mat: (c: string, e?: any
   }
 }
 
-export default function House3D({ plan, finishes, onFinishes }: { plan: Plan; finishes?: Partial<Finishes>; onFinishes?: (f: Finishes) => void }) {
+export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
+  plan: Plan; finishes?: Partial<Finishes>; onFinishes?: (f: Finishes) => void; pid?: number; designId?: number;
+}) {
   const host = useRef<HTMLDivElement>(null);
   const ctx = useRef<{ renderer: THREE.WebGLRenderer; scene: THREE.Scene; camera: THREE.PerspectiveCamera; controls: OrbitControls; model: THREE.Object3D | null; sun: THREE.DirectionalLight; amb: THREE.HemisphereLight; raf: number } | null>(null);
   const [mode, setMode] = useState<Mode>("exterior");
@@ -259,6 +327,16 @@ export default function House3D({ plan, finishes, onFinishes }: { plan: Plan; fi
   const [cut, setCut] = useState(false);
   const [rotate, setRotate] = useState(false);
   const [recording, setRecording] = useState(false);
+  const [edges, setEdges] = useState(true);
+  const [structure, setStructure] = useState<any>(null);
+  useEffect(() => {  // latest saved structural design of this floor plan (for the Structure view)
+    if (mode !== "structure" || !pid) return;
+    api<any[]>(`/api/projects/${pid}/structural`).then(async (list) => {
+      const v = list.find((x) => !designId || x.design_id === designId) || list[0];
+      if (!v) { toast("No structural design yet – make one in the Structural tab and Save", "err"); setMode("exterior"); return; }
+      setStructure((await api<any>(`/api/structural/${v.id}`)).result);
+    }).catch((e) => toast(e.message, "err"));
+  }, [mode, pid, designId]);
   const fin: Finishes = { ...DEFAULT_FINISH, ...(finishes || {}) };
   const finKey = JSON.stringify(fin);
   const keys = useRef<Record<string, boolean>>({});
@@ -272,9 +350,13 @@ export default function House3D({ plan, finishes, onFinishes }: { plan: Plan; fi
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.0;
     renderer.localClippingEnabled = true;
     el.appendChild(renderer.domElement);
     const scene = new THREE.Scene();
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;  // soft reflections / ambient light
     const camera = new THREE.PerspectiveCamera(45, el.clientWidth / el.clientHeight, 0.3, 2000);
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
@@ -283,7 +365,9 @@ export default function House3D({ plan, finishes, onFinishes }: { plan: Plan; fi
     scene.add(amb);
     const sun = new THREE.DirectionalLight("#fff6e5", 2.2);
     sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.mapSize.set(4096, 4096);
+    sun.shadow.bias = -0.0004;
+    sun.shadow.normalBias = 0.02;
     const sc = sun.shadow.camera as THREE.OrthographicCamera;
     sc.left = -90; sc.right = 90; sc.top = 90; sc.bottom = -90; sc.far = 400;
     scene.add(sun, sun.target);
@@ -332,20 +416,23 @@ export default function House3D({ plan, finishes, onFinishes }: { plan: Plan; fi
   useEffect(() => {
     const c = ctx.current; if (!c) return;
     if (c.model) { c.scene.remove(c.model); c.model.traverse((o: any) => o.geometry?.dispose?.()); }
-    const m = build(plan, fin, { upTo, only, mode, furniture, surround, roof });
+    if (mode === "structure" && !structure) return;
+    const m = build(plan, fin, { upTo, only, mode, furniture, surround: surround && mode !== "structure", roof, edges, structure });
     m.traverse((o: any) => {
       if (o.material) { o.material.wireframe = wire; }
     });
     c.scene.add(m); c.model = m;
     applyClip();
-  }, [plan, finKey, upTo, only, mode, furniture, surround, roof, wire]);
+  }, [plan, finKey, upTo, only, mode, furniture, surround, roof, wire, edges, structure]);
 
   // sky & light
   useEffect(() => {
     const c = ctx.current; if (!c) return;
-    c.scene.background = new THREE.Color(night ? "#0b1324" : "#cfe6f7");
+    c.scene.background = skyTex(night);
     c.scene.fog = new THREE.Fog(night ? "#0b1324" : "#cfe6f7", 150, 420);
-    c.amb.intensity = night ? 0.25 : 0.9;
+    c.amb.intensity = night ? 0.15 : 0.55;
+    c.renderer.toneMappingExposure = night ? 0.8 : 1.0;
+    c.scene.environmentIntensity = night ? 0.15 : 0.6;
     c.sun.intensity = night ? 0.25 : 2.2;
     c.sun.color.set(night ? "#9db4ff" : "#fff6e5");
     c.sun.position.set(centre.x + 60, 90, centre.z + 70); c.sun.target.position.copy(centre);
@@ -424,7 +511,8 @@ export default function House3D({ plan, finishes, onFinishes }: { plan: Plan; fi
     setTimeout(() => rec.stop(), 15000);
   };
 
-  const modes: [Mode, string, any][] = [["exterior", "Exterior View", Layers3], ["interior", "Interior View", Layers3], ["walk", "Walkthrough", Footprints], ["exploded", "Exploded View", Layers3]];
+  const modes: [Mode, string, any][] = [["exterior", "Exterior View", Layers3], ["interior", "Interior View", Layers3], ["walk", "Walkthrough", Footprints],
+    ["exploded", "Exploded View", Layers3], ["structure", "Structure (RCC frame)", Layers3]];
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap gap-1.5">
@@ -467,7 +555,7 @@ export default function House3D({ plan, finishes, onFinishes }: { plan: Plan; fi
           </div>
           <div className="grid grid-cols-2 gap-1.5 text-xs">
             {([["Furniture", furniture, setFurniture], ["Surroundings (plot, road, trees)", surround, setSurround], ["Roof / terrace", roof, setRoof],
-              ["Section cut (half)", cut, setCut], ["Wireframe", wire, setWire], ["Auto rotate", rotate, setRotate]] as [string, boolean, (v: boolean) => void][]).map(([l, v, f]) => (
+              ["Section cut (half)", cut, setCut], ["Wireframe", wire, setWire], ["Auto rotate", rotate, setRotate], ["Edge lines (architectural)", edges, setEdges]] as [string, boolean, (v: boolean) => void][]).map(([l, v, f]) => (
               <label key={l} className="flex items-center gap-2"><input type="checkbox" className="h-4 w-4 accent-brand-600" checked={v} onChange={(e) => f(e.target.checked)} />{l}</label>
             ))}
           </div>

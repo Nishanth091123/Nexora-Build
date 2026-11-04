@@ -291,12 +291,14 @@ def sheets_preview(project_id: int, body: PlanIn, user: User = Depends(get_curre
 
 
 @router.get("/designs/{design_id}/sheets.pdf")
-def design_sheets_pdf(design_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def design_sheets_pdf(design_id: int, style: str = "paper", user: User = Depends(get_current_user),
+                      db: Session = Depends(get_db)):
     from ..design import sheets
     d, p = load_design(db, user, design_id, ("design", "estimate"))
     plan = recompute(d.plan)
-    data = sheets.sheet_set_pdf(plan, _proj(p, db), {"version": d.version, "date": d.created_at.strftime("%d-%m-%Y")})
-    name = f"{p.code}_Drawing_Set_v{d.version}.pdf"
+    data = sheets.sheet_set_pdf(plan, _proj(p, db), {"version": d.version, "date": d.created_at.strftime("%d-%m-%Y")},
+                                style="cad" if style == "cad" else "paper")
+    name = f"{p.code}_Drawing_Set_v{d.version}{'_CAD' if style == 'cad' else ''}.pdf"
     return Response(data, media_type="application/pdf",
                     headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"})
 
@@ -346,12 +348,20 @@ def project_pdf(project_id: int, estimate: str = "detailed", design_id: int | No
     p = require_any(db, user, project_id, ("design", "estimate"))
     perms = project_permissions(db, user, p)
     parts = []
+    d = None
     if perms.get("design") or perms.get("estimate"):
         q = db.query(Design).filter(Design.project_id == p.id, Design.is_hidden.is_(False))
         d = q.filter(Design.id == design_id).first() if design_id else q.order_by(Design.version.desc()).first()
         if d:
             plan = recompute(d.plan)
             parts.append(sheets.sheet_set_pdf(plan, _proj(p, db), {"version": d.version, "date": d.created_at.strftime("%d-%m-%Y")}))
+    if perms.get("design") and d:
+        from ..models import StructuralDesign
+        from ..structural import sheets as ssheets
+        sd = (db.query(StructuralDesign).filter(StructuralDesign.project_id == p.id, StructuralDesign.design_id == d.id,
+                                                StructuralDesign.is_hidden.is_(False)).order_by(StructuralDesign.version.desc()).first())
+        if sd:
+            parts.append(ssheets.structural_pdf(sd.result, plan, _proj(p, db), {"version": sd.version, "date": sd.created_at.strftime("%d-%m-%Y")}))
     if perms.get("estimate"):
         q = db.query(Estimate).filter(Estimate.project_id == p.id, Estimate.is_hidden.is_(False))
         e = q.filter(Estimate.id == estimate_id).first() if estimate_id else q.order_by(Estimate.version.desc()).first()

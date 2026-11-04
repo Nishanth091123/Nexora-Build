@@ -97,7 +97,7 @@ except httpx.ConnectError:
         sys.exit("[ERROR] Backend did not start in 2 minutes.")
 check("health", r.status_code == 200 and r.json().get("status") == "ok", r.text)
 _v = tuple(int(x) for x in (r.json().get("version", "0.0").split("-")[0].split(".") + ["0"])[:2] if x.isdigit())
-check("backend is the 1.11 version (not an old one still running)", _v >= (1, 11), r.text)
+check("backend is the 1.12 version (not an old one still running)", _v >= (1, 12), r.text)
 
 login = input("Owner username [nishanth_s]: ").strip() or "nishanth_s"
 pw = getpass.getpass("Owner password (hidden): ")
@@ -307,6 +307,20 @@ if plan:
     r = c.post(f"/api/projects/{pid}/designs", json={"plan": p3, "title": "SMOKE 3D colours"})
     f3 = (r.json().get("plan") or {}).get("finishes", {}) if r.status_code == 200 else {}
     check("3D colours saved (and cleaned)", f3 == {"ext": "#b5654a", "floor": "#f5f5f4"}, r.text[:200])
+    # ---------------- 1.12 Part 5: structural (preliminary) + CAD colours ----------------
+    r = c.get(f"/api/designs/{d2}/sheets.pdf?style=cad")
+    check("drawing set PDF in CAD colours", r.status_code == 200 and r.content[:4] == b"%PDF", r.text[:200] if r.status_code != 200 else "")
+    r = c.post(f"/api/projects/{pid}/structural/calculate", json={"design_id": d2, "inputs": {}})
+    check("structural asks for soil SBC + seismic zone", r.status_code == 422 and "bearing" in r.text, r.text[:200])
+    r = c.post(f"/api/projects/{pid}/structural", json={"design_id": d2, "inputs": {"sbc_kn_m2": 150, "seismic_zone": "III"}}, timeout=180)
+    sd = r.json() if r.status_code == 200 else {}
+    res5 = sd.get("result") or {}
+    check("structural design (columns, beams, slabs, footings)", all(res5.get("summary", {}).get(k, 0) > 0 for k in ("columns", "beams", "slabs", "footings")), r.text[:200])
+    check("structural drawings", "columns" in (sd.get("previews") or {}) and "foundation" in (sd.get("previews") or {}), r.text[:200])
+    if sd.get("id"):
+        for path, magic in (("pdf", b"%PDF"), ("pdf?style=cad", b"%PDF"), ("dxf", b"SECTION")):
+            r = c.get(f"/api/structural/{sd['id']}/{path}", timeout=180)
+            check(f"structural {path}", r.status_code == 200 and magic in r.content[:200], r.text[:200] if r.status_code != 200 else "")
     r = c.get(f"/api/projects/{pid}/project-pdf?design_id={d2}", timeout=180)
     check("one complete PDF (drawings + estimate)", r.status_code == 200 and r.content[:4] == b"%PDF" and r.content.count(b"/Type /Page") > 8,
           r.text[:200] if r.status_code != 200 else "")
@@ -625,4 +639,4 @@ if fail:
     print("Failed:", ", ".join(fail), "\nSend this output to Claude.")
     sys.exit(1)
 else:
-    print("NEXORA 1.11 API: ALL GOOD")
+    print("NEXORA 1.12 API: ALL GOOD")

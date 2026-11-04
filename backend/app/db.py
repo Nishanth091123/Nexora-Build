@@ -45,7 +45,7 @@ NO_DELETE_TABLES = ["projects", "files", "audit_logs", "backup_records", "projec
                     "material_entries", "workers", "attendance", "quality_checks", "safety_records",
                     "ai_conversations", "ai_messages", "ai_indexed_files", "ai_doc_chunks",
                     "trash_log", "invite_links", "bbs_schedules", "permit_checklists", "ai_photo_checks",
-                    "clients", "project_notes"]
+                    "clients", "project_notes", "structural_designs"]
 
 PG_PROTECTION_SQL = [
     """

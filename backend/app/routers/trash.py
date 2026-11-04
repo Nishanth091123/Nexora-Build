@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from ..audit import log_action
 from ..backup import run_backup
 from ..db import get_db
-from ..models import (Client, ProjectNote, AIConversation, AIDocChunk, AIIndexedFile, AIMessage, AIPhotoCheck, Approval, Attendance,
+from ..models import (Client, ProjectNote, StructuralDesign, AIConversation, AIDocChunk, AIIndexedFile, AIMessage, AIPhotoCheck, Approval, Attendance,
                       BbsSchedule, Design, DrawingAnalysis, Estimate, MaterialEntry, PermitChecklist, Project,
                       ProjectAccess, QualityCheck, SafetyRecord, ScheduleStage, SiteActivity, SitePhoto, SiteReport,
                       StoredFile, Task, TrashLog, User, VastuReport, Worker)
@@ -55,6 +55,7 @@ ENTITIES = {
     "bbs": (BbsSchedule, "Bar bending schedule", lambda o: o.title),
     "client": (Client, "Client", lambda o: f"{o.code} · {o.name}"),
     "note": (ProjectNote, "Project note", lambda o: f"{o.activity} – {_d(o.note_date)}"),
+    "structural": (StructuralDesign, "Structural design", lambda o: f"{o.title} (v{o.version})"),
 }
 
 
@@ -152,7 +153,8 @@ def _purge(db: Session, entity: str, o) -> None:
         db.flush()  # files rows go before the project row (foreign key)
         for m in (AIConversation, AIDocChunk, AIIndexedFile, AIPhotoCheck, Attendance, Worker, SiteReport, SiteActivity,
                   SitePhoto, MaterialEntry, QualityCheck, SafetyRecord, Task, Approval, ScheduleStage, VastuReport,
-                  DrawingAnalysis, Design, Estimate, BbsSchedule, PermitChecklist, ProjectAccess, ProjectNote):
+                  DrawingAnalysis, Design, Estimate, BbsSchedule, PermitChecklist, ProjectAccess, ProjectNote,
+                  StructuralDesign):
             db.query(m).filter(m.project_id == pid).delete(synchronize_session=False)
         db.flush()
         db.delete(o)

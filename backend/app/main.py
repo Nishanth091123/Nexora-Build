@@ -11,7 +11,7 @@ from . import config
 from .alerts import start_alerts
 from .backup import start_auto_backups
 from .db import SessionLocal, init_db
-from .routers import admin, clients, ai, auth, extras, invites, push, trash, design, drawing, estimate, files, pm, projects, settings, site, users, vastu
+from .routers import admin, clients, structural, ai, auth, extras, invites, push, trash, design, drawing, estimate, files, pm, projects, settings, site, users, vastu
 from .seed import seed
 from .storage import storage
 
@@ -91,7 +91,7 @@ async def db_error_handler(request: Request, exc: DBAPIError):
 
 for r in (auth.router, users.router, projects.router, files.router, settings.router, admin.router,
           estimate.router, design.router, drawing.router, vastu.router, pm.router, site.router, ai.router,
-          trash.router, invites.router, invites.notif_router, extras.router, push.router, clients.router):
+          trash.router, invites.router, invites.notif_router, extras.router, push.router, clients.router, structural.router):
     app.include_router(r)
 
 
