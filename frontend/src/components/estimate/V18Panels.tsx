@@ -1,7 +1,7 @@
 /** 1.8 – Estimate upgrade panels: Quick / Oral estimate, Floor-wise BOQ + Area statement + Key quantities,
  *  Payment schedule (editable) and Loan / official documents checklist. */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CheckCircle2, Clock, FileText, Home, Plus, RotateCcw, Trash2, UploadCloud } from "lucide-react";
+import { CheckCircle2, Clock, Download, FileText, Home, Plus, RotateCcw, Trash2, UploadCloud } from "lucide-react";
 import { Badge, Card, Empty, Field, toast } from "../ui";
 import { api, ApiError, downloadFile, fmtDate, inr, lakhs, num, rupees } from "../../lib/api";
 
@@ -103,10 +103,11 @@ export function QuickEstimate({ pid, defaults, state, onUseDetailed }: {
 }
 
 // ------------------------------------------------------------------ Floor-wise BOQ, area statement, key quantities
-export function FloorBoqPanel({ result }: { result: any }) {
+export function FloorBoqPanel({ result, onExport, onRecalc }: { result: any; onExport?: (k: "excel" | "pdf" | "bank") => void; onRecalc?: () => void }) {
   const fb = result?.floor_boq;
   const [cat, setCat] = useState("all");
-  if (!fb) return <Card><Empty text="Calculate the estimate again (Inputs → Calculate) to see the floor-wise BOQ." /></Card>;
+  if (!fb) return <Card><Empty text="This estimate was saved by an older version. Work it out again to see the floor-wise BOQ.">
+    {onRecalc && <button className="btn-primary btn-sm mt-1" onClick={onRecalc}>Calculate again</button>}</Empty></Card>;
   const cats = [...new Set<string>(fb.rows.map((x: any) => x.category))];
   const rows = fb.rows.filter((x: any) => cat === "all" || x.category === cat);
   const a = result.area_statement || [];
@@ -134,7 +135,10 @@ export function FloorBoqPanel({ result }: { result: any }) {
           </div>
         </Card>
       </div>
-      <Card title="Detailed Estimation – Floor-wise BOQ">
+      <Card title="Detailed Estimation – Floor-wise BOQ"
+        action={onExport && <div className="flex gap-2">
+          <button className="btn-outline btn-sm" onClick={() => onExport("excel")}><Download size={14} />Excel</button>
+          <button className="btn-outline btn-sm" onClick={() => onExport("pdf")}><Download size={14} />PDF</button></div>}>
         <div className="mb-3 flex flex-wrap gap-1.5">
           {["all", ...cats].map((c) => <button key={c} onClick={() => setCat(c)} className={`rounded-md px-3 py-1.5 text-xs font-semibold ${cat === c ? "bg-brand-600 text-white" : "bg-brand-50 text-navy-ink"}`}>{c === "all" ? "All" : c}</button>)}
         </div>
@@ -170,16 +174,18 @@ export function FloorBoqPanel({ result }: { result: any }) {
 }
 
 // ------------------------------------------------------------------ Payment schedule (editable)
-export function PaymentSchedulePanel({ result, onApply, busy }: { result: any; onApply: (stages: { stage: string; pct: number }[] | null) => void; busy: boolean }) {
+export function PaymentSchedulePanel({ result, onApply, busy, onExport, onRecalc }: { result: any; onApply: (stages: { stage: string; pct: number }[] | null) => void; busy: boolean; onExport?: (k: "bank") => void; onRecalc?: () => void }) {
   const [rows, setRows] = useState<{ stage: string; pct: string }[]>([]);
   useEffect(() => { setRows((result?.payment_schedule || []).map((x: any) => ({ stage: x.stage, pct: String(x.pct) }))); }, [result]);
-  if (!result?.payment_schedule) return <Card><Empty text="Calculate the estimate again to see the payment schedule." /></Card>;
+  if (!result?.payment_schedule) return <Card><Empty text="This estimate was saved by an older version. Work it out again to see the payment schedule.">
+    {onRecalc && <button className="btn-primary btn-sm mt-1" onClick={onRecalc}>Calculate again</button>}</Empty></Card>;
   const grand = result.totals.grand_total;
   const total = rows.reduce((s, x) => s + (Number(x.pct) || 0), 0);
   const upd = (i: number, k: "stage" | "pct", v: string) => setRows(rows.map((x, j) => (j === i ? { ...x, [k]: v } : x)));
   return (
     <Card title="Payment Schedule (stage-wise)"
       action={<div className="flex gap-2">
+        {onExport && <button className="btn-outline btn-sm" title="Bank loan estimate PDF – has this schedule" onClick={() => onExport("bank")}><Download size={14} />PDF</button>}
         <button className="btn-ghost btn-sm" title="Typical schedule from the floors" onClick={() => onApply(null)}><RotateCcw size={14} />Default</button>
         <button className="btn-primary btn-sm" disabled={busy || Math.abs(total - 100) > 0.01} onClick={() => onApply(rows.map((x) => ({ stage: x.stage, pct: Number(x.pct) || 0 })))}>Apply</button>
       </div>}>

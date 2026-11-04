@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Download, FileText, Ruler, Save } from "lucide-react";
 import { Card, Empty, toast } from "../ui";
 import { api, downloadFile, num } from "../../lib/api";
+import { exportPlan, savePng, saveSvg } from "../../lib/designExport";
 import type { Plan } from "../../lib/plan";
 
 type Sched = { mark: string; type: string; label: string; w_ft: number; h_ft: number; size: string; sill_ft: number; material: string; per_level: Record<string, number>; count: number; rooms: string };
@@ -50,11 +51,15 @@ export default function DrawingSheets({ pid, plan, saved, dirty, code, onSpecs }
     onSpecs(out);
     toast("Sizes applied – plan, quantities and estimate updated. Save the design to keep them.");
   };
-  const dl = async (kind: "pdf" | "dxf" | "cad") => {
-    if (!saved || dirty) return toast("Save the design first (Save button) – the drawing set is made from a saved version", "err");
-    const path = kind === "cad" ? "sheets.pdf?style=cad" : `sheets.${kind}`;
-    try { await downloadFile(`/api/designs/${saved.id}/${path}`, `${code}_Drawing_Set_v${saved.version}${kind === "cad" ? "_CAD.pdf" : "." + kind}`); }
-    catch (e: any) { toast(e.message, "err"); }
+  // 1.13: downloads are made from the plan on the screen – no need to save first
+  const tag = saved && !dirty ? `v${saved.version}` : "draft";
+  const dl = async (kind: "pdf" | "dxf" | "cad", page = "") => {
+    const nm = page ? (sheets.find((x) => x[0] === page)?.[1] || page).replace(/[^A-Za-z0-9]+/g, "_") : "Drawing_Set";
+    try {
+      if (kind === "dxf") await exportPlan(pid, plan, "sheets_dxf", `${code}_Drawing_Set_${tag}.dxf`, { version: saved && !dirty ? saved.version : null });
+      else await exportPlan(pid, plan, "sheets_pdf", `${code}_${nm}_${tag}${kind === "cad" ? "_CAD" : ""}.pdf`,
+        { style: kind === "cad" ? "cad" : "paper", page, version: saved && !dirty ? saved.version : null });
+    } catch (e: any) { toast(e.message, "err"); }
   };
 
   if (!pv) return <Card><Empty text="Preparing drawing sheets..." /></Card>;
@@ -76,6 +81,16 @@ export default function DrawingSheets({ pid, plan, saved, dirty, code, onSpecs }
         </div>}>
         <div className="mb-3 flex flex-wrap gap-1.5">
           {sheets.map(([k, l]) => <button key={k} onClick={() => setSheet(k)} className={`rounded-md px-3 py-1.5 text-xs font-semibold ${sheet === k ? "bg-brand-600 text-white" : "bg-brand-50 text-navy-ink"}`}>{l}</button>)}
+        </div>
+        <div className="mb-2 flex flex-wrap items-center gap-1.5 text-xs">
+          <span className="font-semibold text-slate-500">This sheet:</span>
+          <button className="btn-outline btn-sm" onClick={() => dl(cad ? "cad" : "pdf", sheet)}><Download size={13} />PDF (A3)</button>
+          <button className="btn-outline btn-sm" onClick={() => savePng((cad ? pv.svgs_cad?.[sheet] : pv.svgs[sheet]) || "", `${code}_${sheet}.png`, 3000, cad ? "#000000" : "#ffffff").catch((e) => toast(e.message, "err"))}><Download size={13} />PNG</button>
+          <button className="btn-outline btn-sm" onClick={() => saveSvg((cad ? pv.svgs_cad?.[sheet] : pv.svgs[sheet]) || "", `${code}_${sheet}.svg`)}><Download size={13} />SVG</button>
+          <span className="flex-1" />
+          <button className="btn-ghost btn-sm" onClick={() => dl("pdf", "title")}><Download size={13} />Title sheet</button>
+          <button className="btn-ghost btn-sm" onClick={() => dl("pdf", "schedule")}><Download size={13} />Door &amp; window schedule</button>
+          {(!saved || dirty) && <span className="text-[11px] text-amber-700">Not saved – downloads show what is on the screen (marked “draft”).</span>}
         </div>
         <div className={`overflow-auto rounded-lg border border-line p-2 ${cad ? "bg-black" : "bg-white"}`}>
           <div className="mx-auto max-w-4xl" dangerouslySetInnerHTML={{ __html: (cad ? pv.svgs_cad?.[sheet] : pv.svgs[sheet]) || "" }} />

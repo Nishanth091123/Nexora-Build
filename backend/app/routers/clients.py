@@ -1,4 +1,5 @@
-"""1.8 – Clients & Projects (owner only).
+"""1.8 – Clients & Projects (owner only). 1.13: client details + documents are kept ONLY on the PC
+(see local_clients.py); the project tracker and notes stay with the project.
 
 Clients are the owner's own business data (name, phone, address, land documents), so every endpoint here is
 owner-only. Other users never see clients, client documents, the project workflow tracker or project notes.
@@ -7,15 +8,17 @@ from datetime import date
 from datetime import date as Date  # (field below is called "date")
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from ..audit import log_action
 from ..db import get_db
-from ..models import AppSetting, Client, Project, ProjectNote, StoredFile, User
+from .. import local_clients as lc
+from ..models import AppSetting, Project, ProjectNote, User
 from ..security import OWNER_ONLY_CHOICES, get_current_user, owner_only_modules, require_owner
-from .files import file_out, read_and_check, store
+from .files import read_and_check
 
 router = APIRouter(prefix="/api", tags=["clients"])
 
@@ -30,30 +33,25 @@ WORKFLOW_KEYS = {k for k, _ in WORKFLOW}
 
 
 # ---------------------------------------------------------------- helpers
-def next_client_code(db: Session) -> str:
-    n = (db.query(func.max(Client.id)).scalar() or 0) + 1
-    code = f"C-{n:03d}"
-    while db.query(Client).filter_by(code=code).first():
-        n += 1
-        code = f"C-{n:03d}"
-    return code
+def _real_projects(db: Session):
+    """Projects that count: not hidden, not archived, not the smoke-test project."""
+    return (db.query(Project).filter(Project.is_hidden.is_(False), Project.status != "archived",
+                                     ~func.upper(Project.name).like("SMOKE%")))
 
 
-def find_or_create_client(db: Session, name: str, user_id: int | None, location: str = "") -> Client | None:
-    name = (name or "").strip()
-    if not name:
+def find_or_create_client(db: Session, name: str, user_id: int | None, location: str = ""):
+    """Used by the projects router. On the PC → a local client record; online → no link (name only)."""
+    if lc.ONLINE:
         return None
-    c = (db.query(Client).filter(func.lower(Client.name) == name.lower(), Client.is_hidden.is_(False))
-         .order_by(Client.id).first())
-    if not c:
-        c = Client(code=next_client_code(db), name=name, location=location or "", created_by=user_id)
-        db.add(c)
-        db.flush()
-    return c
+    with lc.session() as s:
+        return lc.find_or_create(s, name, user_id, location)
 
 
 def link_existing_clients(db: Session) -> int:
-    """Once at start-up: projects that only have a typed client name get a Client record (idempotent)."""
+    """Once at start-up (PC only): move cloud clients to this PC, then link projects that only have a typed name."""
+    if lc.ONLINE:
+        return 0
+    n = lc.move_from_cloud(db)
     rows = (db.query(Project).filter(Project.client_id.is_(None), Project.client_name != "").all())
     for p in rows:
         c = find_or_create_client(db, p.client_name, p.created_by, p.location)
@@ -61,17 +59,23 @@ def link_existing_clients(db: Session) -> int:
             p.client_id = c.id
     if rows:
         db.commit()
-    return len(rows)
+    return n + len(rows)
 
 
-def client_out(c: Client, projects: int = 0, docs: int = 0) -> dict:
+def doc_out(f: lc.LClientFile) -> dict:
+    return {"id": f.id, "name": f.name, "category": f.category, "size_bytes": f.size_bytes,
+            "content_type": f.content_type, "created_at": f.created_at.isoformat(),
+            "url": f"/api/clients/files/{f.id}/download"}
+
+
+def client_out(c: lc.LClient, projects: int = 0, docs: int = 0) -> dict:
     return {"id": c.id, "code": c.code, "name": c.name, "phone": c.phone, "email": c.email, "address": c.address,
             "location": c.location, "notes": c.notes, "projects": projects, "documents": docs,
             "created_at": c.created_at.isoformat(), "updated_at": c.updated_at.isoformat()}
 
 
-def _client(db: Session, cid: int) -> Client:
-    c = db.get(Client, cid)
+def _client(s, cid: int) -> lc.LClient:
+    c = s.get(lc.LClient, cid)
     if not c or c.is_hidden:
         raise HTTPException(404, "Client not found")
     return c
@@ -90,7 +94,7 @@ def workflow_out(p: Project) -> list[dict]:
             for k, l in WORKFLOW]
 
 
-# ---------------------------------------------------------------- clients
+# ---------------------------------------------------------------- clients (PC only)
 class ClientIn(BaseModel):
     name: str = Field(min_length=2, max_length=160)
     phone: str = Field(default="", max_length=40)
@@ -109,13 +113,19 @@ class ClientPatch(BaseModel):
     notes: str | None = None
 
 
+@router.get("/clients/where")
+def clients_where(owner: User = Depends(require_owner)):
+    """Tells the screen whether clients are available here (PC) or not (online)."""
+    return lc.status()
+
+
 @router.get("/clients/stats")
-def client_stats(owner: User = Depends(require_owner), db: Session = Depends(get_db)):
-    projects = db.query(Project).filter(Project.is_hidden.is_(False)).all()
+def client_stats(owner: User = Depends(require_owner), db: Session = Depends(get_db), s=Depends(lc.get_ldb)):
+    projects = _real_projects(db).all()
     submitted = sum(bool(((p.workflow or {}).get("submission") or {}).get("done"))
                     and not ((p.workflow or {}).get("completed") or {}).get("done") for p in projects)
     return {
-        "clients": db.query(func.count(Client.id)).filter(Client.is_hidden.is_(False)).scalar() or 0,
+        "clients": s.query(func.count(lc.LClient.id)).filter(lc.LClient.is_hidden.is_(False)).scalar() or 0,
         "projects": len(projects),
         "in_progress": sum(p.status == "ongoing" for p in projects),
         "completed": sum(p.status == "completed" for p in projects),
@@ -125,54 +135,68 @@ def client_stats(owner: User = Depends(require_owner), db: Session = Depends(get
 
 
 @router.get("/clients")
-def list_clients(q: str = "", owner: User = Depends(require_owner), db: Session = Depends(get_db)):
-    qry = db.query(Client).filter(Client.is_hidden.is_(False))
+def list_clients(q: str = "", owner: User = Depends(require_owner), db: Session = Depends(get_db), s=Depends(lc.get_ldb)):
+    qry = s.query(lc.LClient).filter(lc.LClient.is_hidden.is_(False))
     if q.strip():
         like = f"%{q.strip()}%"
-        qry = qry.filter(or_(Client.name.ilike(like), Client.phone.ilike(like), Client.location.ilike(like),
-                             Client.code.ilike(like), Client.address.ilike(like)))
-    rows = qry.order_by(Client.updated_at.desc()).all()
-    pc = dict(db.query(Project.client_id, func.count(Project.id)).filter(Project.is_hidden.is_(False))
-              .group_by(Project.client_id).all())
-    dc = dict(db.query(StoredFile.client_id, func.count(StoredFile.id)).filter(StoredFile.is_hidden.is_(False))
-              .group_by(StoredFile.client_id).all())
+        L = lc.LClient
+        qry = qry.filter(or_(L.name.ilike(like), L.phone.ilike(like), L.location.ilike(like),
+                             L.code.ilike(like), L.address.ilike(like)))
+    rows = qry.order_by(lc.LClient.updated_at.desc()).all()
+    pc = dict(_real_projects(db).with_entities(Project.client_id, func.count(Project.id)).group_by(Project.client_id).all())
+    dc = dict(s.query(lc.LClientFile.client_id, func.count(lc.LClientFile.id)).filter(lc.LClientFile.is_hidden.is_(False))
+              .group_by(lc.LClientFile.client_id).all())
     return {"clients": [client_out(c, pc.get(c.id, 0), dc.get(c.id, 0)) for c in rows]}
 
 
 @router.post("/clients")
-def create_client(body: ClientIn, owner: User = Depends(require_owner), db: Session = Depends(get_db)):
+def create_client(body: ClientIn, owner: User = Depends(require_owner), db: Session = Depends(get_db), s=Depends(lc.get_ldb)):
     data = {k: (v.strip() if isinstance(v, str) else v) for k, v in body.model_dump().items()}
-    if db.query(Client).filter(func.lower(Client.name) == data["name"].lower(), Client.is_hidden.is_(False),
-                               Client.phone == data["phone"]).first():
+    if s.query(lc.LClient).filter(func.lower(lc.LClient.name) == data["name"].lower(), lc.LClient.is_hidden.is_(False),
+                                  lc.LClient.phone == data["phone"]).first():
         raise HTTPException(409, "A client with this name and phone already exists")
-    c = Client(code=next_client_code(db), created_by=owner.id, **data)
-    db.add(c)
-    db.commit()
-    log_action(db, owner, "created", "client", c.code, c.name)
+    c = lc.LClient(code=lc.next_code(s), created_by=owner.id, **data)
+    s.add(c)
+    s.commit()
+    log_action(db, owner, "created", "client", c.code, "(details kept on PC)")
     return client_out(c)
 
 
+@router.get("/clients/bin")
+def client_bin(owner: User = Depends(require_owner), s=Depends(lc.get_ldb)):
+    cs = s.query(lc.LClient).filter(lc.LClient.is_hidden.is_(True)).all()
+    names = {c.id: c.name for c in s.query(lc.LClient).all()}
+    fs = s.query(lc.LClientFile).filter(lc.LClientFile.is_hidden.is_(True)).all()
+    return {"clients": [{"id": c.id, "title": f"{c.code} · {c.name}", "deleted_at": c.deleted_at.isoformat() if c.deleted_at else None} for c in cs],
+            "files": [{"id": f.id, "title": f.name, "client": names.get(f.client_id, ""),
+                       "deleted_at": f.deleted_at.isoformat() if f.deleted_at else None} for f in fs],
+            "backups": sorted([p.name for p in lc.BACKUP_DIR.glob("clients_*.zip")], reverse=True)[:10] if lc.BACKUP_DIR.exists() else [],
+            "folder": str(lc.LOCAL_DIR)}
+
+
 @router.get("/clients/{cid}")
-def get_client(cid: int, owner: User = Depends(require_owner), db: Session = Depends(get_db)):
-    c = _client(db, cid)
+def get_client(cid: int, owner: User = Depends(require_owner), db: Session = Depends(get_db), s=Depends(lc.get_ldb)):
+    c = _client(s, cid)
     projects = (db.query(Project).filter(Project.client_id == c.id, Project.is_hidden.is_(False))
                 .order_by(Project.updated_at.desc()).all())
-    docs = (db.query(StoredFile).filter(StoredFile.client_id == c.id, StoredFile.is_hidden.is_(False))
-            .order_by(StoredFile.created_at.desc()).all())
+    docs = (s.query(lc.LClientFile).filter(lc.LClientFile.client_id == c.id, lc.LClientFile.is_hidden.is_(False))
+            .order_by(lc.LClientFile.created_at.desc()).all())
     return {
-        "client": client_out(c, len(projects), len(docs)),
+        "client": client_out(c, sum(p.status != "archived" and not p.name.upper().startswith("SMOKE") for p in projects), len(docs)),
         "projects": [{"id": p.id, "code": p.code, "name": p.name, "project_type": p.project_type, "floors": p.floors,
                       "plot": f"{p.plot_width:g} × {p.plot_length:g} {p.unit}" if p.plot_width and p.plot_length else "",
                       "builtup_area": p.builtup_area, "status": p.status, "location": p.location,
                       "updated_at": p.updated_at.isoformat(), "workflow": workflow_out(p)} for p in projects],
-        "documents": [file_out(f) for f in docs],
+        "documents": [doc_out(f) for f in docs],
         "doc_categories": CLIENT_DOC_CATS,
+        "folder": str(lc.FILES_DIR / c.code),
     }
 
 
 @router.patch("/clients/{cid}")
-def update_client(cid: int, body: ClientPatch, owner: User = Depends(require_owner), db: Session = Depends(get_db)):
-    c = _client(db, cid)
+def update_client(cid: int, body: ClientPatch, owner: User = Depends(require_owner), db: Session = Depends(get_db),
+                  s=Depends(lc.get_ldb)):
+    c = _client(s, cid)
     changed = []
     for k, v in body.model_dump(exclude_unset=True).items():
         if v is None:
@@ -181,27 +205,113 @@ def update_client(cid: int, body: ClientPatch, owner: User = Depends(require_own
         if getattr(c, k) != v:
             setattr(c, k, v)
             changed.append(k)
+    s.commit()
     if "name" in changed:  # keep the name shown on projects in step
         for p in db.query(Project).filter(Project.client_id == c.id).all():
             p.client_name = c.name
-    db.commit()
+        db.commit()
     if changed:
         log_action(db, owner, "updated", "client", c.code, "Changed: " + ", ".join(changed))
     return client_out(c)
 
 
+@router.delete("/clients/{cid}")
+def hide_client(cid: int, owner: User = Depends(require_owner), db: Session = Depends(get_db), s=Depends(lc.get_ldb)):
+    """Move to the clients Recycle Bin (on this PC). Projects stay."""
+    c = _client(s, cid)
+    c.is_hidden, c.deleted_at = True, lc.utcnow()
+    s.commit()
+    log_action(db, owner, "deleted", "client", c.code, "moved to recycle bin (PC)")
+    return {"ok": True}
+
+
 @router.post("/clients/{cid}/files")
 async def upload_client_file(cid: int, category: str = Form("land"), file: UploadFile = File(...),
-                             owner: User = Depends(require_owner), db: Session = Depends(get_db)):
-    c = _client(db, cid)
+                             owner: User = Depends(require_owner), db: Session = Depends(get_db), s=Depends(lc.get_ldb)):
+    c = _client(s, cid)
     if category not in CLIENT_DOC_CATS:
         raise HTTPException(400, f"category must be one of {', '.join(CLIENT_DOC_CATS)}")
     name, data, ctype = await read_and_check(file)
-    f = store(db, owner, name, data, ctype, f"client_{category}", None)
-    f.client_id = c.id
-    db.commit()
-    log_action(db, owner, "uploaded", "client_file", f.id, f"{c.code} {name}")
-    return file_out(f)
+    f = lc.LClientFile(client_id=c.id, category=f"client_{category}", name=name, rel_path=lc.save_file(c, name, data),
+                       content_type=ctype or "application/octet-stream", size_bytes=len(data))
+    s.add(f)
+    s.commit()
+    log_action(db, owner, "uploaded", "client_file", f.id, f"{c.code} (kept on PC)")
+    return doc_out(f)
+
+
+@router.get("/clients/files/{fid}/download")
+def download_client_file(fid: int, owner: User = Depends(require_owner), s=Depends(lc.get_ldb)):
+    f = s.get(lc.LClientFile, fid)
+    if not f:
+        raise HTTPException(404, "File not found")
+    p = lc.file_path(f)
+    if not p.exists():
+        raise HTTPException(404, f"The file is missing from {p.parent}")
+    return FileResponse(p, media_type=f.content_type, filename=f.name)
+
+
+@router.delete("/clients/files/{fid}")
+def hide_client_file(fid: int, owner: User = Depends(require_owner), s=Depends(lc.get_ldb)):
+    f = s.get(lc.LClientFile, fid)
+    if not f:
+        raise HTTPException(404, "File not found")
+    f.is_hidden, f.deleted_at = True, lc.utcnow()
+    s.commit()
+    return {"ok": True}
+
+
+class BinIn(BaseModel):
+    kind: str  # client | file
+    id: int
+
+
+@router.post("/clients/bin/restore")
+def restore_from_bin(body: BinIn, owner: User = Depends(require_owner), s=Depends(lc.get_ldb)):
+    m = lc.LClient if body.kind == "client" else lc.LClientFile
+    o = s.get(m, body.id)
+    if not o:
+        raise HTTPException(404, "Not found")
+    o.is_hidden, o.deleted_at = False, None
+    s.commit()
+    return {"ok": True}
+
+
+@router.post("/clients/bin/purge")
+def purge_from_bin(body: BinIn, owner: User = Depends(require_owner), db: Session = Depends(get_db), s=Depends(lc.get_ldb)):
+    """Owner only: delete permanently from this PC – a backup zip is written first (local_data\\backups)."""
+    if body.kind == "client":
+        c = s.get(lc.LClient, body.id)
+        if not c or not c.is_hidden:
+            raise HTTPException(400, "Move it to the recycle bin first")
+        zp = lc.backup_zip(f"before_delete_{c.code}", [c.id])
+        for f in s.query(lc.LClientFile).filter_by(client_id=c.id).all():
+            try:
+                lc.file_path(f).unlink(missing_ok=True)
+            except OSError:
+                pass
+            s.delete(f)
+        db.query(Project).filter(Project.client_id == c.id).update({Project.client_id: None}, synchronize_session=False)
+        db.commit()
+        s.delete(c)
+    else:
+        f = s.get(lc.LClientFile, body.id)
+        if not f or not f.is_hidden:
+            raise HTTPException(400, "Move it to the recycle bin first")
+        zp = lc.backup_zip(f"before_delete_file_{f.id}", [f.client_id])
+        try:
+            lc.file_path(f).unlink(missing_ok=True)
+        except OSError:
+            pass
+        s.delete(f)
+    s.commit()
+    return {"ok": True, "backup": zp.name}
+
+
+@router.post("/clients/backup")
+def make_backup(owner: User = Depends(require_owner), s=Depends(lc.get_ldb)):
+    zp = lc.backup_zip("manual")
+    return FileResponse(zp, media_type="application/zip", filename=zp.name)
 
 
 # ---------------------------------------------------------------- project link, workflow, notes
@@ -210,12 +320,13 @@ class LinkIn(BaseModel):
 
 
 @router.put("/projects/{pid}/client")
-def set_project_client(pid: int, body: LinkIn, owner: User = Depends(require_owner), db: Session = Depends(get_db)):
+def set_project_client(pid: int, body: LinkIn, owner: User = Depends(require_owner), db: Session = Depends(get_db),
+                       s=Depends(lc.get_ldb)):
     p = _project(db, pid)
     if body.client_id is None:
         p.client_id = None
     else:
-        c = _client(db, body.client_id)
+        c = _client(s, body.client_id)
         p.client_id, p.client_name = c.id, c.name
     db.commit()
     log_action(db, owner, "updated", "project", p.code, f"Client: {p.client_name or '—'}", project_id=p.id)

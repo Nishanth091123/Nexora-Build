@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState , Suspense, lazy} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, Suspense, lazy, type RefObject } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import DrawingImport from "../components/design/DrawingImport";
 import {
@@ -14,6 +14,7 @@ const House3D = lazy(() => import("../components/design/House3D"));  // three.js
 import Plan3D from "../components/design/Plan3D";
 import { Badge, Card, Empty, Field, PhaseNote, PillTabs, Toggle, toast } from "../components/ui";
 import { api, ApiError, downloadFile, fmtDateTime, inr, lakhs, num, rupees } from "../lib/api";
+import { exportPlan, savePng, saveSvg } from "../lib/designExport";
 import { useAuth } from "../lib/auth";
 import { useI18n } from "../lib/i18n";
 import { FACINGS, ROOM_TYPES, clone, type Plan, type Room } from "../lib/plan";
@@ -74,6 +75,8 @@ export default function DesignPage() {
   const [cmpB, setCmpB] = useState<number | "">("");
   const [cmp, setCmp] = useState<any>(null);
   const recomputeTimer = useRef<number | null>(null);
+  const planHost = useRef<HTMLDivElement>(null);  // 1.13 downloads
+  const editHost = useRef<HTMLDivElement>(null);
   const planRef = useRef<Plan | null>(null);
   planRef.current = plan;
 
@@ -338,11 +341,38 @@ export default function DesignPage() {
     </Card>
   );
 
+  // 1.13: download right next to the drawing – from the plan on the screen (no need to save first)
+  const dlTag = saved && !dirty ? `v${saved.version}` : "draft";
+  const dlPlan = (kind: "plan_pdf" | "plan_dxf" | "sheets_pdf") => {
+    if (!plan || !pid) return;
+    const nm = kind === "plan_dxf" ? `${currentProject?.code}_Plan_${dlTag}.dxf` : kind === "plan_pdf" ? `${currentProject?.code}_Plan_${dlTag}.pdf` : `${currentProject?.code}_Drawing_Set_${dlTag}.pdf`;
+    exportPlan(pid, plan, kind, nm, { version: saved && !dirty ? saved.version : null }).catch((e) => toast(e.message, "err"));
+  };
+  const dlImage = (host: HTMLDivElement | null, kind: "png" | "svg") => {
+    const svg = host?.querySelector("svg");
+    if (!svg || !lvl) return toast("Drawing not ready yet", "err");
+    const nm = `${currentProject?.code}_${lvl.name.replace(/\s+/g, "_")}_${dlTag}`;
+    if (kind === "svg") saveSvg(new XMLSerializer().serializeToString(svg), `${nm}.svg`);
+    else savePng(svg, `${nm}.png`, 2400).catch((e) => toast(e.message, "err"));
+  };
+  const downloadBar = (host: RefObject<HTMLDivElement>) => plan && (
+    <div className="mt-2 flex flex-wrap items-center gap-1.5 rounded-lg bg-slate-50 p-2 text-xs">
+      <span className="font-semibold text-slate-500"><Download size={13} className="mr-1 inline" />Download</span>
+      <button className="btn-outline btn-sm" onClick={() => dlImage(host.current, "png")}>This floor (PNG)</button>
+      <button className="btn-outline btn-sm" onClick={() => dlImage(host.current, "svg")}>SVG</button>
+      <button className="btn-outline btn-sm" onClick={() => dlPlan("plan_pdf")}>Plan PDF</button>
+      <button className="btn-outline btn-sm" onClick={() => dlPlan("plan_dxf")}>DXF (AutoCAD)</button>
+      <button className="btn-outline btn-sm" onClick={() => dlPlan("sheets_pdf")}>Full drawing set (A3 PDF)</button>
+      {(!saved || dirty) && <span className="text-[11px] text-amber-700">not saved – marked “draft”</span>}
+    </div>
+  );
+
   const planCard = plan && lvl && (
     <Card title={`Plan – ${lvl.name}`} icon={<Ruler size={20} />} action={levelTabs}>
-      <div className="aspect-[4/5] max-h-[640px] w-full rounded-lg border border-line bg-white p-1 sm:aspect-square">
+      <div ref={planHost} className="aspect-[4/5] max-h-[640px] w-full rounded-lg border border-line bg-white p-1 sm:aspect-square">
         <PlanSvg plan={plan} level={level} stale={stale} />
       </div>
+      {downloadBar(planHost)}
       <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
         <Stat label="Built-up (this floor)" value={`${inr(lvl.summary.builtup_sqft)} sft`} />
         <Stat label="Carpet" value={`${inr(lvl.summary.carpet_sqft)} sft`} />
@@ -504,9 +534,10 @@ export default function DesignPage() {
               </label>
               {aiPlan && <button className="btn-ghost btn-sm" onClick={() => { if (window.confirm("Go back to the AI plan? Your edits stay in Undo.")) { setPast((p) => [...p, JSON.stringify(plan)]); setPlan(clone(aiPlan)); setStale(false); setDirty(true); runQuick(aiPlan); } }}><RotateCcw size={14} />AI plan</button>}
             </div>
-            <div className="aspect-[4/5] max-h-[720px] w-full rounded-lg border border-line bg-white p-1 sm:aspect-square">
+            <div ref={editHost} className="aspect-[4/5] max-h-[720px] w-full rounded-lg border border-line bg-white p-1 sm:aspect-square">
               <PlanSvg plan={plan} level={level} editable selected={selected} onSelect={setSelected} onChange={setRooms} grid={grid} stale={stale} />
             </div>
+            {downloadBar(editHost)}
             <p className="mt-2 text-xs text-slate-500">Drag a room to move it (its toilet & dress move with it); drag the blue handles to resize. Walls, doors, windows and the estimate update automatically. Ctrl+Z / Ctrl+Y, Delete key.</p>
           </Card>
           <div className="min-w-0 space-y-4">

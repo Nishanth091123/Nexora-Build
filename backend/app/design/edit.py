@@ -72,8 +72,11 @@ def clean_plan(plan: dict) -> dict:
     # 1.11: 3D colour choices (hex colours only)
     import re as _re
     fin = plan.get("finishes") or {}
-    plan["finishes"] = {k: v for k, v in fin.items() if k in ("ext", "int", "floor", "door", "frame", "roof", "plinth")
-                        and isinstance(v, str) and _re.fullmatch(r"#[0-9a-fA-F]{6}", v)} if isinstance(fin, dict) else {}
+    clean = {k: v for k, v in fin.items() if k in ("ext", "int", "floor", "door", "frame", "roof", "plinth")
+             and isinstance(v, str) and _re.fullmatch(r"#[0-9a-fA-F]{6}", v)} if isinstance(fin, dict) else {}
+    if isinstance(fin, dict) and fin.get("style") in ("basic", "modern", "contemporary", "traditional"):
+        clean["style"] = fin["style"]  # 1.13: 3D elevation style
+    plan["finishes"] = clean
     return plan
 
 

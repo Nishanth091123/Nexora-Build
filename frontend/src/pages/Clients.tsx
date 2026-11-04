@@ -2,13 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   Activity, Briefcase, CheckCircle2, CircleDot, ClipboardList, Download, FileText, FolderKanban, FolderOpen,
-  Hourglass, Image as ImageIcon, Lock, PauseCircle, Pencil, Plus, Save, Search, Send, UploadCloud, UserRound, Users,
+  HardDrive, Hourglass, Image as ImageIcon, Lock, PauseCircle, Pencil, Plus, RotateCcw, Save, Search, Send, Trash2, UploadCloud, UserRound, Users,
 } from "lucide-react";
 import Page from "../components/Page";
 import OwnerDelete from "../components/OwnerDelete";
 import { ProjectFormModal, StatCard } from "../components/ProjectBits";
 import { Badge, Card, Empty, Field, Modal, toast } from "../components/ui";
-import { api, downloadFile, fmtBytes, fmtDate } from "../lib/api";
+import { api, downloadFile, downloadPost, fmtBytes, fmtDate } from "../lib/api";
 import { useAuth } from "../lib/auth";
 
 type Client = { id: number; code: string; name: string; phone: string; email: string; address: string; location: string; notes: string; projects: number; documents: number };
@@ -44,6 +44,8 @@ export default function Clients() {
   const [projOpen, setProjOpen] = useState(false);
   const docInput = useRef<HTMLInputElement>(null);
   const [upCat, setUpCat] = useState("land");
+  const [where, setWhere] = useState<{ local: boolean; folder: string; message: string } | null>(null);
+  const [binOpen, setBinOpen] = useState(false);
 
   const loadStats = () => api<any>("/api/clients/stats").then(setStats).catch(() => {});
   const loadList = useCallback(() => api<{ clients: Client[] }>(`/api/clients?q=${encodeURIComponent(q)}`)
@@ -59,13 +61,33 @@ export default function Clients() {
   }, [cid]);
 
   const isOwner = user?.role === "owner";
-  useEffect(() => { if (isOwner) loadStats(); }, [isOwner]);
-  useEffect(() => { if (!isOwner) return; const h = setTimeout(loadList, 250); return () => clearTimeout(h); }, [loadList, isOwner]);
-  useEffect(() => { if (isOwner) loadDetail().catch((e) => toast(e.message, "err")); }, [loadDetail, isOwner]);
+  const local = !!where?.local;
+  useEffect(() => { if (isOwner) api<any>("/api/clients/where").then(setWhere).catch(() => setWhere({ local: false, folder: "", message: "" })); }, [isOwner]);
+  useEffect(() => { if (isOwner && local) loadStats(); }, [isOwner, local]);
+  useEffect(() => { if (!isOwner || !local) return; const h = setTimeout(loadList, 250); return () => clearTimeout(h); }, [loadList, isOwner, local]);
+  useEffect(() => { if (isOwner && local) loadDetail().catch((e) => toast(e.message, "err")); }, [loadDetail, isOwner, local]);
 
   if (!isOwner) {
     return <Page title="Clients" subtitle="Owner only"><Empty icon={<Lock className="text-slate-400" />} text="Clients are visible only to the owner." /></Page>;
   }
+  if (!where) return <Page title="Clients & Projects" subtitle="Loading…"><div /></Page>;
+  if (!local) {
+    return (
+      <Page title="Clients & Projects" subtitle="Kept only on your PC">
+        <Empty icon={<HardDrive className="text-slate-400" />}
+          text={where.message || "Clients are kept only on your PC. Open Nexora Build on your computer (scripts\\start.bat) to see clients and their documents."} />
+      </Page>
+    );
+  }
+  const delClient = async () => {
+    if (!d) return;
+    try { await api(`/api/clients/${d.client.id}`, { method: "DELETE" }); toast("Moved to the clients recycle bin"); setCid(null); loadList(); loadStats(); }
+    catch (e: any) { toast(e.message, "err"); }
+  };
+  const delDoc = async (id: number) => {
+    try { await api(`/api/clients/files/${id}`, { method: "DELETE" }); toast("Moved to the clients recycle bin"); loadDetail(); loadList(); }
+    catch (e: any) { toast(e.message, "err"); }
+  };
 
   const saveClient = async () => {
     if (!cid) return;
@@ -84,6 +106,14 @@ export default function Clients() {
 
   return (
     <Page title="Clients & Projects" subtitle="Your clients, their documents and every project – visible only to you">
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-800">
+        <HardDrive size={16} />
+        <span>Client details and documents are saved <b>only on this PC</b>{where.folder ? <> – <code className="rounded bg-white/70 px-1">{where.folder}</code></> : null}. They are not sent to the online app or GitHub.</span>
+        <div className="ml-auto flex gap-2">
+          <button className="btn-outline btn-sm" onClick={() => downloadPost("/api/clients/backup", {}, `clients_backup_${new Date().toISOString().slice(0, 10)}.zip`).catch((e) => toast(e.message, "err"))}><Download size={14} />Backup (zip)</button>
+          <button className="btn-outline btn-sm" onClick={() => setBinOpen(true)}><Trash2 size={14} />Recycle bin</button>
+        </div>
+      </div>
       {/* stats + quick actions */}
       <div className="grid gap-4 xl:grid-cols-[1fr_260px]">
         <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 2xl:grid-cols-6">
@@ -135,7 +165,7 @@ export default function Clients() {
 
         <Card title="Client Details" icon={<UserRound size={20} />}
           action={d && <div className="flex items-center gap-1">
-            <OwnerDelete entity="client" id={d.client.id} title={`${d.client.code} · ${d.client.name}`} onDone={() => { setCid(null); loadList(); loadStats(); }} />
+            <ConfirmDelete title={`${d.client.code} · ${d.client.name}`} onYes={delClient} />
           </div>}>
           {!d ? <Empty text="Select or add a client" /> : (
             <div className="space-y-3">
@@ -172,7 +202,7 @@ export default function Clients() {
                         <div className="text-[11px] text-slate-500">{d.doc_categories[x.category.replace("client_", "")] || "Other"} · {fmtDate(x.created_at)} · {fmtBytes(x.size_bytes)}</div>
                       </div>
                       <button className="btn-ghost btn-sm" title="Download" onClick={() => downloadFile(x.url, x.name).catch((e) => toast(e.message, "err"))}><Download size={15} /></button>
-                      <OwnerDelete entity="file" id={x.id} title={x.name} onDone={loadDetail} />
+                      <ConfirmDelete title={x.name} onYes={() => delDoc(x.id)} />
                     </li>
                   ))}
                 </ul>
@@ -241,12 +271,73 @@ export default function Clients() {
       {project && <Tracker key={`w${project.id}`} pid={project.id} code={project.code} onChange={() => { loadDetail(); loadStats(); }} />}
       {project && <Notes key={`n${project.id}`} pid={project.id} />}
 
+      <ClientBin open={binOpen} onClose={() => setBinOpen(false)} onChange={() => { loadList(); loadStats(); loadDetail(); }} />
       <NewClientModal open={newOpen} onClose={() => setNewOpen(false)}
         onSaved={(c) => { setQ(""); setCid(c.id); loadList(); loadStats(); }} />
       {d && <ProjectFormModal open={projOpen} onClose={() => setProjOpen(false)} project={null}
         preset={{ client_id: d.client.id, client_name: d.client.name, location: d.client.location }}
         onSaved={async (p) => { await reloadProjects(); await loadDetail(); await loadList(); loadStats(); setPid(p.id); }} />}
     </Page>
+  );
+}
+
+function ConfirmDelete({ title, onYes }: { title: string; onYes: () => Promise<void> | void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button type="button" title="Delete" onClick={(e) => { e.stopPropagation(); setOpen(true); }}
+        className="inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-xs font-semibold text-red-600 hover:bg-red-50"><Trash2 size={14} /></button>
+      <Modal open={open} onClose={() => setOpen(false)} title="Delete?">
+        <p className="text-sm text-slate-700">Move <b>{title}</b> to the clients recycle bin?</p>
+        <p className="mt-1 text-xs text-slate-500">You can restore it from Clients → Recycle bin. Projects are not touched.</p>
+        <div className="mt-4 flex justify-end gap-2">
+          <button className="btn-ghost" onClick={() => setOpen(false)}>Cancel</button>
+          <button className="btn bg-red-600 text-white hover:bg-red-700" onClick={async () => { await onYes(); setOpen(false); }}><Trash2 size={16} />Delete</button>
+        </div>
+      </Modal>
+    </>
+  );
+}
+
+type BinRow = { id: number; title: string; client?: string; deleted_at: string | null };
+function ClientBin({ open, onClose, onChange }: { open: boolean; onClose: () => void; onChange: () => void }) {
+  const [b, setB] = useState<{ clients: BinRow[]; files: BinRow[]; backups: string[]; folder: string } | null>(null);
+  const [sure, setSure] = useState<string>("");
+  const load = useCallback(() => api<any>("/api/clients/bin").then(setB).catch((e) => toast(e.message, "err")), []);
+  useEffect(() => { if (open) { load(); setSure(""); } }, [open, load]);
+  const act = async (what: "restore" | "purge", kind: string, id: number) => {
+    try {
+      const r = await api<any>(`/api/clients/bin/${what}`, { body: { kind, id } });
+      toast(what === "restore" ? "Restored" : `Deleted permanently (backup: ${r.backup})`);
+      setSure(""); load(); onChange();
+    } catch (e: any) { toast(e.message, "err"); }
+  };
+  const row = (kind: string, x: BinRow) => {
+    const k = `${kind}${x.id}`;
+    return (
+      <li key={k} className="flex items-center gap-2 px-3 py-2 text-sm">
+        <div className="min-w-0 flex-1"><div className="truncate font-medium text-navy-ink">{x.title}</div>
+          <div className="text-[11px] text-slate-500">{x.client ? `${x.client} · ` : ""}{x.deleted_at ? fmtDate(x.deleted_at) : ""}</div></div>
+        <button className="btn-outline btn-sm" onClick={() => act("restore", kind, x.id)}><RotateCcw size={14} />Restore</button>
+        {sure === k
+          ? <button className="btn btn-sm bg-red-600 text-white" onClick={() => act("purge", kind, x.id)}>Sure? Delete</button>
+          : <button className="btn-ghost btn-sm text-red-600" onClick={() => setSure(k)}><Trash2 size={14} />Delete permanently</button>}
+      </li>
+    );
+  };
+  return (
+    <Modal open={open} onClose={onClose} title="Clients recycle bin (this PC)">
+      {!b ? <p className="text-sm text-slate-500">Loading…</p> : (
+        <div className="space-y-3">
+          {!b.clients.length && !b.files.length ? <Empty text="The recycle bin is empty." /> : (
+            <ul className="max-h-[320px] divide-y divide-line overflow-auto rounded-lg border border-line">
+              {b.clients.map((x) => row("client", x))}{b.files.map((x) => row("file", x))}
+            </ul>
+          )}
+          <p className="text-[11px] text-slate-500">A backup zip is made before every permanent delete. Backups: <code>{b.folder + "\\backups"}</code>{b.backups[0] ? ` (latest ${b.backups[0]})` : ""}</p>
+        </div>
+      )}
+    </Modal>
   );
 }
 

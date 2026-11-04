@@ -1,325 +1,64 @@
-/** 1.11 – Real 3D (three.js / WebGL) built from the plan: plinth, walls with door & window openings, glass,
- *  doors, sunshades, slabs, stairs, parapet, head room, furniture, compound wall, road and trees.
- *  Views: Exterior / Interior (roof off, cut floor) / Walkthrough (eye height) / Exploded; camera presets
- *  (front, sides, rear, top), day / night, section cut, wireframe; colours for walls, floor, doors, frames;
- *  export PNG, GLB (3D model) and a WebM video (turntable).
- *  Units: 1 = 1 foot. World: X = plan x (left→right), Y = up, Z = −plan y (road / front towards +Z). */
-import { useEffect, useMemo, useRef, useState } from "react";
+/** 1.13 – 3D house (three.js) built from the plan.
+ *  Elevation styles: Modern (stone + wood + black frames, deep overhangs with downlights), Contemporary
+ *  (two-tone, tiles, fins, pergola), Traditional Tamil Nadu (tile roof, thinnai, pillars) and Basic.
+ *  Light: Day / Evening / Night. Views: Exterior, Interior, Walkthrough (first person, walls stop you,
+ *  doors open, stairs to other floors, jump to a room), Exploded, Structure.
+ *  Stable view: no overlapping faces (no flicker), logarithmic depth, steady camera (resets only when the
+ *  plan's shape or the view mode changes – not when a colour is picked), shadows drawn once.
+ *  Downloads: current view PNG, Front / Left / Right / Rear images, one sheet with all views, GLB, video. */
+import { useEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { api } from "../../lib/api";
-import { Camera, Download, Film, Footprints, Layers3, Moon, RotateCcw, Sun } from "lucide-react";
+import {
+  ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Camera, ChevronsDown, ChevronsUp, Download, Film, Footprints, Images,
+  Layers3, LogOut, Moon, RotateCcw, Sun, Sunset,
+} from "lucide-react";
 import { toast } from "../ui";
-import { WALL_T, type Plan } from "../../lib/plan";
+import type { Plan } from "../../lib/plan";
+import {
+  build, collide, DEFAULT_FINISH, extent, PLINTH, roomAt, STYLE_FINISH, walkSegments,
+  type Finishes, type LightMode, type Mode, type Style,
+} from "./house3d/build";
+import * as T from "./house3d/textures";
 
-const PLINTH = 1.5, SLAB = 0.42, PARAPET = 3, HEADROOM = 8, EYE = 5.4;
-const SILL: Record<string, number> = { window: 3, vent: 5.5 };
+export type { Finishes };
+export { DEFAULT_FINISH };
+const EYE = 5.3;
 
-export type Finishes = { ext: string; int: string; floor: string; door: string; frame: string; roof: string; plinth: string };
-export const DEFAULT_FINISH: Finishes = { ext: "#f3eadb", int: "#fbfaf7", floor: "#e7e0d3", door: "#8b5a2b", frame: "#f8fafc", roof: "#cfcac2", plinth: "#8d8d8d" };
-export const SWATCHES: Record<keyof Finishes, [string, string][]> = {
-  ext: [["#f3eadb", "Cream"], ["#ffffff", "White"], ["#d9d4cc", "Grey"], ["#e9d7b9", "Beige"], ["#cfe3f2", "Light blue"], ["#b5654a", "Brick"], ["#a39e93", "Stone"]],
+export const SWATCHES: Record<Exclude<keyof Finishes, "style">, [string, string][]> = {
+  ext: [["#efe7d8", "Cream"], ["#ffffff", "White"], ["#f5f5f3", "Off-white"], ["#d9d4cc", "Grey"], ["#f2deb0", "Sandal"], ["#e9d7b9", "Beige"], ["#cfe3f2", "Light blue"], ["#b5654a", "Brick"]],
   int: [["#fbfaf7", "Off-white"], ["#fff7e6", "Ivory"], ["#eef5ec", "Mint"], ["#f1ecf7", "Lilac"], ["#f7ecec", "Blush"]],
-  floor: [["#e7e0d3", "Vitrified beige"], ["#f5f5f4", "White marble"], ["#9ca3af", "Granite grey"], ["#b08a62", "Wood"], ["#d6c7a1", "Kota stone"]],
-  door: [["#8b5a2b", "Teak"], ["#5b3a1e", "Walnut"], ["#d2b48c", "Oak"], ["#e5e7eb", "White"]],
-  frame: [["#f8fafc", "White UPVC"], ["#1f2937", "Black alu."], ["#8b5a2b", "Wood"]],
-  roof: [["#cfcac2", "Concrete"], ["#b9473a", "Weathering tile"], ["#e5e7eb", "White coat"]],
-  plinth: [["#8d8d8d", "Grey"], ["#6b4f3a", "Brown"], ["#2f2f2f", "Black granite"]],
+  floor: [["#e7e0d3", "Vitrified beige"], ["#f5f5f4", "White marble"], ["#9ca3af", "Granite grey"], ["#b08a62", "Wood"], ["#d6c7a1", "Kota stone"], ["#b5523a", "Red oxide"]],
+  door: [["#9a6a3f", "Teak"], ["#5b3a1e", "Walnut"], ["#d2b48c", "Oak"], ["#6b3f1f", "Rosewood"], ["#e5e7eb", "White"]],
+  frame: [["#1d2024", "Black alu."], ["#3a3f46", "Grey alu."], ["#f8fafc", "White UPVC"], ["#6b3f1f", "Wood"]],
+  roof: [["#cfcac2", "Concrete"], ["#d6d2ca", "Light concrete"], ["#b9473a", "Weathering tile"], ["#e5e7eb", "White coat"]],
+  plinth: [["#3b3a38", "Charcoal"], ["#8d8d8d", "Grey"], ["#6b4f3a", "Brown"], ["#7a2e1f", "Maroon"], ["#2f2f2f", "Black granite"]],
 };
-const FIN_LABEL: Record<keyof Finishes, string> = { ext: "Exterior walls", int: "Interior walls", floor: "Flooring", door: "Doors", frame: "Window frames", roof: "Terrace", plinth: "Plinth" };
-
-type Mode = "exterior" | "interior" | "walk" | "exploded" | "structure";
-
-/** subtle plaster / grass speckle so surfaces don't look flat (generated, no image files) */
-function noiseTex(base: string, amount = 18, size = 128, rep = 1) {
-  const c = document.createElement("canvas"); c.width = c.height = size;
-  const g = c.getContext("2d")!;
-  g.fillStyle = base; g.fillRect(0, 0, size, size);
-  const img = g.getImageData(0, 0, size, size);
-  for (let i = 0; i < img.data.length; i += 4) {
-    const n = (Math.random() - 0.5) * amount;
-    img.data[i] += n; img.data[i + 1] += n; img.data[i + 2] += n;
-  }
-  g.putImageData(img, 0, 0);
-  const t = new THREE.CanvasTexture(c);
-  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(rep, rep); t.colorSpace = THREE.SRGBColorSpace;
-  return t;
-}
-function skyTex(night: boolean) {
-  const c = document.createElement("canvas"); c.width = 2; c.height = 256;
-  const g = c.getContext("2d")!;
-  const gr = g.createLinearGradient(0, 0, 0, 256);
-  if (night) { gr.addColorStop(0, "#020617"); gr.addColorStop(1, "#1e293b"); }
-  else { gr.addColorStop(0, "#5ea9e6"); gr.addColorStop(0.6, "#bfe0f7"); gr.addColorStop(1, "#eef6fb"); }
-  g.fillStyle = gr; g.fillRect(0, 0, 2, 256);
-  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
-  return t;
-}
-
-function build(plan: Plan, fin: Finishes, o: { upTo: number; only: number | null; mode: Mode; furniture: boolean; surround: boolean; roof: boolean; edges: boolean; structure?: any }) {
-  const root = new THREE.Group();
-  const H = plan.floor_height_ft || 10;
-  const b = plan.building;
-  const mats = new Map<string, THREE.Material>();
-  const plaster = noiseTex("#ffffff", 22, 128, 1);
-  const mat = (col: string, extra: Partial<THREE.MeshStandardMaterialParameters> = {}) => {
-    const k = col + JSON.stringify(extra);
-    if (!mats.has(k)) mats.set(k, new THREE.MeshStandardMaterial({ color: col, roughness: 0.85, metalness: 0, map: plaster, ...extra }));
-    return mats.get(k)!;
-  };
-  const edgeMat = new THREE.LineBasicMaterial({ color: "#3f3f46", transparent: true, opacity: 0.45 });
-  const glass = new THREE.MeshPhysicalMaterial({ color: "#9fd3f5", transparent: true, opacity: 0.38, roughness: 0.05, metalness: 0.1 });
-  const box = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, m: THREE.Material, parent: THREE.Object3D, name = "") => {
-    const w = Math.abs(x1 - x0), d = Math.abs(y1 - y0), h = Math.abs(z1 - z0);
-    if (w < 0.01 || d < 0.01 || h < 0.01) return;
-    const g = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), m);
-    // plan (x, y, z-up) → world (X, Y-up, Z = −y), offset by the building position on the plot
-    g.position.set(b.x + (x0 + x1) / 2, (z0 + z1) / 2, -(b.y + (y0 + y1) / 2));
-    g.castShadow = true; g.receiveShadow = true; g.name = name;
-    if (o.edges && m !== glass) g.add(new THREE.LineSegments(new THREE.EdgesGeometry(g.geometry), edgeMat));
-    parent.add(g);
-    return g;
-  };
-  if (o.mode === "structure" && o.structure) return structureModel(plan, o.structure, root, box, mat);
-  const levels = plan.levels;
-  const nShow = Math.min(levels.length, o.upTo);
-  const gap = o.mode === "exploded" ? 6 : 0;
-  // plinth
-  const ext0 = extent(levels[0].rooms);
-  box(ext0.x0 - 0.4, ext0.y0 - 0.4, 0, ext0.x1 + 0.4, ext0.y1 + 0.4, PLINTH, mat(fin.plinth), root, "plinth");
-  for (let li = 0; li < nShow; li++) {
-    if (o.only != null && li !== o.only) continue;
-    const lv = levels[li];
-    const g = new THREE.Group();
-    g.name = lv.name;
-    root.add(g);
-    const z = PLINTH + li * H + li * gap;
-    const e = extent(lv.rooms);
-    const topLevel = li === nShow - 1 || o.only != null;
-    const cutInterior = o.mode === "interior" && topLevel;
-    const wallTop = cutInterior ? z + 4.5 : z + H - SLAB;
-    // floors
-    for (const r of lv.rooms) {
-      const col = r.type === "parking" ? "#bdbdbd" : r.type === "toilet" || r.type === "common_toilet" ? "#dbe7ef" : r.type === "terrace" ? fin.roof : fin.floor;
-      box(r.x, r.y, z - 0.05, r.x + r.w, r.y + r.d, z, mat(col, { roughness: 0.5 }), g, `floor ${r.name}`);
-    }
-    // walls with openings
-    for (const w of lv.walls) {
-      if (w.kind === "parapet") {
-        alongWall(w, (s, e2, c0, horiz, th) => seg(horiz, s, e2, c0, th, z, z + PARAPET, mat(fin.ext), g));
-        continue;
-      }
-      const th = (WALL_T[w.kind] || 0.5) / 2;
-      const horiz = w.y1 === w.y2;
-      const a0 = horiz ? Math.min(w.x1, w.x2) : Math.min(w.y1, w.y2);
-      const a1 = horiz ? Math.max(w.x1, w.x2) : Math.max(w.y1, w.y2);
-      const c0 = horiz ? w.y1 : w.x1;
-      const m = mat(w.kind === "ext" ? fin.ext : fin.int);
-      const ops = lv.openings.filter((op) => (horiz ? op.y1 === op.y2 && Math.abs(op.y1 - c0) < 0.01 : op.x1 === op.x2 && Math.abs(op.x1 - c0) < 0.01))
-        .map((op) => ({ s: horiz ? Math.min(op.x1, op.x2) : Math.min(op.y1, op.y2), e: horiz ? Math.max(op.x1, op.x2) : Math.max(op.y1, op.y2), op }))
-        .filter((q) => q.e > a0 + 0.01 && q.s < a1 - 0.01).sort((p, q) => p.s - q.s);
-      let cur = a0;
-      for (const { s, e: e2, op } of ops) {
-        seg(horiz, cur, Math.max(cur, s), c0, th, z, wallTop, m, g);
-        const isWin = op.type === "window" || op.type === "vent";
-        const sill = isWin ? SILL[op.type] : 0;
-        const head = Math.min(isWin ? sill + op.h : op.h, H - SLAB);
-        const s2 = Math.max(cur, s), e3 = Math.min(e2, a1);
-        seg(horiz, s2, e3, c0, th, z, z + Math.min(sill, wallTop - z), m, g);
-        if (z + head < wallTop) seg(horiz, s2, e3, c0, th, z + head, wallTop, m, g);
-        if (isWin && z + sill < wallTop) {
-          const top = Math.min(z + head, wallTop);
-          seg(horiz, s2, e3, c0, 0.06, z + sill, top, glass, g);
-          // frame
-          const fm = mat(fin.frame, { roughness: 0.4 });
-          seg(horiz, s2, s2 + 0.18, c0, th * 0.6, z + sill, top, fm, g);
-          seg(horiz, e3 - 0.18, e3, c0, th * 0.6, z + sill, top, fm, g);
-          seg(horiz, s2, e3, c0, th * 0.6, z + sill, z + sill + 0.18, fm, g);
-          seg(horiz, s2, e3, c0, th * 0.6, top - 0.18, top, fm, g);
-          seg(horiz, (s2 + e3) / 2 - 0.06, (s2 + e3) / 2 + 0.06, c0, th * 0.6, z + sill, top, fm, g);
-          // sunshade (chajja) on the outside of external walls
-          if (w.kind === "ext" && !cutInterior) {
-            const out = outward(lv, op.room, horiz, c0);
-            if (horiz) box(s2 - 0.75, c0 + out * th, z + head + 0.35, e3 + 0.75, c0 + out * (th + 1.75), z + head + 0.6, mat("#bdb7ad"), g);
-            else box(c0 + out * th, s2 - 0.75, z + head + 0.35, c0 + out * (th + 1.75), e3 + 0.75, z + head + 0.6, mat("#bdb7ad"), g);
-          }
-        } else if (!isWin && op.type !== "opening") {
-          seg(horiz, s2, e3, c0, 0.12, z, z + Math.min(head, wallTop - z), mat(fin.door, { roughness: 0.6 }), g, true);
-        }
-        cur = Math.max(cur, e2);
-      }
-      seg(horiz, cur, a1, c0, th, z, wallTop, m, g);
-    }
-    // parking: columns + beam instead of walls on open sides
-    for (const r of lv.rooms.filter((q) => q.type === "parking")) {
-      for (const [cx, cy] of [[r.x, r.y], [r.x + r.w - 0.75, r.y], [r.x, r.y + r.d - 0.75], [r.x + r.w - 0.75, r.y + r.d - 0.75]])
-        box(cx, cy, z, cx + 0.75, cy + 0.75, z + H - SLAB, mat("#e6e1d8"), g);
-    }
-    // stairs
-    for (const r of lv.rooms.filter((q) => q.type === "stair" && q.d >= 7 && q.w >= 3)) {
-      const steps = Math.max(8, Math.round(H / 0.5));
-      const half = Math.ceil(steps / 2);
-      const run = (r.d - 3.5) / half;
-      const wHalf = r.w / 2 - 0.1;
-      for (let k = 0; k < half; k++) { // up along +y on the left half, landing, back on the right half
-        box(r.x + 0.1, r.y + 0.5 + k * run, z, r.x + 0.1 + wHalf, r.y + 0.5 + (k + 1) * run, z + (k + 1) * (H / steps), mat("#d6d3d1"), g);
-      }
-      box(r.x + 0.1, r.y + r.d - 3.0, z + half * (H / steps) - 0.4, r.x + r.w - 0.1, r.y + r.d - 0.1, z + half * (H / steps), mat("#d6d3d1"), g);
-      for (let k = 0; k < steps - half; k++) {
-        box(r.x + r.w / 2, r.y + r.d - 3.0 - (k + 1) * run, z + (half + k) * (H / steps), r.x + r.w - 0.1, r.y + r.d - 3.0 - k * run,
-          z + (half + k + 1) * (H / steps), mat("#d6d3d1"), g);
-      }
-    }
-    if (o.furniture) furnish(lv.rooms, z, box, mat, g);
-    // slab over this floor
-    const slabOn = !cutInterior && (li < nShow - 1 || o.roof);
-    if (slabOn) {
-      const stair = lv.rooms.find((r) => r.type === "stair");
-      for (const r of lv.rooms) {
-        if (r.type === "terrace" || r.type === "balcony" || r.type === "sitout") continue;
-        if (stair && r.id === stair.id && li < levels.length - 1 && li < nShow - 1) continue; // stair opening
-        box(r.x - 0.4, r.y - 0.4, z + H - SLAB, r.x + r.w + 0.4, r.y + r.d + 0.4, z + H, mat(li === nShow - 1 ? fin.roof : "#cfcac2"), g);
-      }
-    }
-    // terrace parapet + head room on the top floor
-    if (li === levels.length - 1 && topLevel && o.roof && o.mode !== "interior") {
-      const zt = z + H;
-      box(e.x0 - 0.4, e.y0 - 0.4, zt, e.x1 + 0.4, e.y0 + 0.1, zt + PARAPET, mat(fin.ext), g);
-      box(e.x0 - 0.4, e.y1 - 0.1, zt, e.x1 + 0.4, e.y1 + 0.4, zt + PARAPET, mat(fin.ext), g);
-      box(e.x0 - 0.4, e.y0, zt, e.x0 + 0.1, e.y1, zt + PARAPET, mat(fin.ext), g);
-      box(e.x1 - 0.1, e.y0, zt, e.x1 + 0.4, e.y1, zt + PARAPET, mat(fin.ext), g);
-      const st = lv.rooms.find((r) => r.type === "stair");
-      if (st && levels.length > 1) {
-        box(st.x, st.y, zt, st.x + st.w, st.y + st.d, zt + HEADROOM, mat(fin.ext), g);
-        box(st.x - 0.6, st.y - 0.6, zt + HEADROOM, st.x + st.w + 0.6, st.y + st.d + 0.6, zt + HEADROOM + SLAB, mat(fin.roof), g);
-      }
-    }
-  }
-  if (o.surround) surroundings(plan, root, mat);
-  return root;
-
-  function seg(horiz: boolean, s: number, e2: number, c0: number, th: number, zb: number, zt: number, m: THREE.Material, parent: THREE.Object3D, door = false) {
-    if (e2 - s < 0.02 || zt - zb < 0.02) return;
-    const mesh = horiz ? box(s, c0 - th, zb, e2, c0 + th, zt, m, parent) : box(c0 - th, s, zb, c0 + th, e2, zt, m, parent);
-    if (mesh && door) mesh.name = "door";
-  }
-}
-
-function structureModel(plan: Plan, st: any, root: THREE.Group,
-  box: (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, m: THREE.Material, p: THREE.Object3D, n?: string) => any,
-  mat: (c: string, e?: any) => THREE.Material) {
-  const H = plan.floor_height_ft || 10, n = plan.levels.length, MM = 1 / 304.8;
-  const depth = (st.inputs?.foundation_depth_m || 1.5) / 0.3048;
-  const cM = mat("#e11d48", { roughness: 0.6 }), bM = mat("#2563eb", { roughness: 0.6 }), fM = mat("#f59e0b"), pM = mat("#a8a29e");
-  const sM = new THREE.MeshStandardMaterial({ color: "#94a3b8", transparent: true, opacity: 0.35, roughness: 0.8 });
-  for (const f of st.footings || []) {
-    const B = f.B_m / 0.3048, D = f.D_mm * MM;
-    box(f.x - B / 2 - 0.33, f.y - B / 2 - 0.33, -depth - 0.33, f.x + B / 2 + 0.33, f.y + B / 2 + 0.33, -depth, pM, root, "PCC");
-    box(f.x - B / 2, f.y - B / 2, -depth, f.x + B / 2, f.y + B / 2, -depth + D, fM, root, `footing ${f.mark}`);
-  }
-  for (const c of st.columns || []) {
-    const b = c.b_mm * MM, D = c.D_mm * MM;
-    box(c.x - b / 2, c.y - D / 2, -depth, c.x + b / 2, c.y + D / 2, 1.5 + n * H, cM, root, `column ${c.mark}`);
-  }
-  const lvIndex: Record<string, number> = Object.fromEntries((st.levels || []).map((l: string, i: number) => [l, i]));
-  for (const bm of st.beams || []) {
-    const z = 1.5 + ((lvIndex[bm.level] ?? 0) + 1) * H, t = bm.b_mm * MM / 2, Dd = bm.D_mm * MM;
-    if (bm.dir === "h") box(bm.x1, bm.y1 - t, z - Dd, bm.x2, bm.y1 + t, z, bM, root, `beam ${bm.mark}`);
-    else box(bm.x1 - t, bm.y1, z - Dd, bm.x1 + t, bm.y2, z, bM, root, `beam ${bm.mark}`);
-  }
-  for (const sl of st.slabs || []) {
-    const z = 1.5 + ((lvIndex[sl.level] ?? 0) + 1) * H;
-    box(sl.x, sl.y, z - sl.D_mm * MM, sl.x + sl.w, sl.y + sl.d, z, sM, root, `slab ${sl.mark}`);
-  }
-  // plinth beams at ground level on the beam lines
-  for (const bm of (st.beams || []).filter((b: any) => (lvIndex[b.level] ?? 0) === 0)) {
-    if (bm.dir === "h") box(bm.x1, bm.y1 - 0.38, 0.5, bm.x2, bm.y1 + 0.38, 1.5, mat("#60a5fa"), root, "plinth beam");
-    else box(bm.x1 - 0.38, bm.y1, 0.5, bm.x1 + 0.38, bm.y2, 1.5, mat("#60a5fa"), root, "plinth beam");
-  }
-  return root;
-}
-
-function alongWall(w: { x1: number; y1: number; x2: number; y2: number }, fn: (s: number, e: number, c0: number, horiz: boolean, th: number) => void) {
-  const horiz = w.y1 === w.y2;
-  fn(horiz ? Math.min(w.x1, w.x2) : Math.min(w.y1, w.y2), horiz ? Math.max(w.x1, w.x2) : Math.max(w.y1, w.y2), horiz ? w.y1 : w.x1, horiz, 0.25);
-}
-
-function extent(rooms: { x: number; y: number; w: number; d: number }[]) {
-  return { x0: Math.min(...rooms.map((r) => r.x)), x1: Math.max(...rooms.map((r) => r.x + r.w)), y0: Math.min(...rooms.map((r) => r.y)), y1: Math.max(...rooms.map((r) => r.y + r.d)) };
-}
-
-function outward(lv: Plan["levels"][number], roomId: string, horiz: boolean, c0: number) {
-  const r = lv.rooms.find((q) => q.id === roomId);
-  if (!r) return -1;
-  return horiz ? (r.y + r.d / 2 > c0 ? -1 : 1) : (r.x + r.w / 2 > c0 ? -1 : 1);
-}
-
-function furnish(rooms: Plan["levels"][number]["rooms"], z: number,
-  box: (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, m: THREE.Material, p: THREE.Object3D, n?: string) => any,
-  mat: (c: string, e?: any) => THREE.Material, g: THREE.Object3D) {
-  for (const r of rooms) {
-    const { x, y, w, d, type } = r;
-    if (type === "bedroom" && w >= 8 && d >= 8) {
-      const bw = Math.min(5, w - 3), bl = Math.min(6.5, d - 2.5), bx = x + (w - bw) / 2, by = y + d - bl - 0.6;
-      box(bx, by, z, bx + bw, by + bl, z + 1.6, mat("#e8dcc8"), g, "bed");
-      box(bx, by + bl - 0.4, z, bx + bw, by + bl, z + 3.2, mat("#7a5230"), g, "headboard");
-      box(bx + 0.3, by + bl - 1.6, z + 1.6, bx + bw - 0.3, by + bl - 0.6, z + 2.0, mat("#ffffff"), g, "pillow");
-      if (w >= 10) box(x + 0.4, y + 0.6, z, x + 2.3, y + 4.6, z + 7, mat("#a0714f"), g, "wardrobe");
-    } else if ((type === "hall" || type === "lounge") && w >= 8 && d >= 8) {
-      box(x + 0.6, y + 1, z, x + 3.1, y + Math.min(8, d - 1.5), z + 2.6, mat("#6b7a99"), g, "sofa");
-      box(x + 4, y + d / 2 - 1, z, x + 6.5, y + d / 2 + 1, z + 1.4, mat("#7a5230"), g, "table");
-      box(x + w - 1.4, y + d / 2 - 2.5, z, x + w - 0.6, y + d / 2 + 2.5, z + 2.0, mat("#3f3f46"), g, "tv unit");
-    } else if (type === "dining" && w >= 7 && d >= 7) {
-      box(x + w / 2 - 2, y + d / 2 - 1.25, z, x + w / 2 + 2, y + d / 2 + 1.25, z + 2.5, mat("#8b5a2b"), g, "dining");
-    } else if (type === "kitchen") {
-      box(x + 0.3, y + 0.3, z, x + 2.3, y + d - 0.3, z + 2.8, mat("#4b5563"), g, "counter");
-      box(x + 0.3, y + d - 2.3, z, x + Math.max(2.4, w - 0.3), y + d - 0.3, z + 2.8, mat("#4b5563"), g, "counter");
-    } else if ((type === "toilet" || type === "common_toilet") && w >= 3.5 && d >= 4) {
-      box(x + w - 2, y + d - 2.6, z, x + w - 0.6, y + d - 0.6, z + 1.4, mat("#ffffff"), g, "wc");
-      box(x + 0.4, y + d - 1.6, z + 2.4, x + 2, y + d - 0.4, z + 2.9, mat("#ffffff"), g, "basin");
-    } else if (type === "parking" && w >= 9 && d >= 14) {
-      const cx = x + (w - 6) / 2, cy = y + (d - 13.5) / 2;
-      box(cx, cy, z + 0.6, cx + 6, cy + 13.5, z + 3.2, mat("#b91c1c", { roughness: 0.35, metalness: 0.4 }), g, "car");
-      box(cx + 0.5, cy + 3.5, z + 3.2, cx + 5.5, cy + 9.5, z + 4.8, mat("#1f2937", { roughness: 0.2 }), g, "car roof");
-    }
-  }
-}
-
-function surroundings(plan: Plan, root: THREE.Object3D, mat: (c: string, e?: any) => THREE.Material) {
-  const P = plan.plot;
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(P.w + 80, P.d + 80), mat("#8fbf73"));
-  ground.rotation.x = -Math.PI / 2; ground.position.set(P.w / 2, -0.02, -P.d / 2); ground.receiveShadow = true; root.add(ground);
-  const site = new THREE.Mesh(new THREE.PlaneGeometry(P.w, P.d), mat("#cbbf9f"));
-  site.rotation.x = -Math.PI / 2; site.position.set(P.w / 2, 0.0, -P.d / 2); site.receiveShadow = true; root.add(site);
-  const road = new THREE.Mesh(new THREE.PlaneGeometry(P.w + 80, 22), mat("#4b5563", { roughness: 0.95 }));
-  road.rotation.x = -Math.PI / 2; road.position.set(P.w / 2, 0.01, 11 + 3); root.add(road);
-  const cw = mat("#e7e1d6");
-  const add = (x0: number, z0: number, x1: number, z1: number, h: number) => {
-    const m = new THREE.Mesh(new THREE.BoxGeometry(Math.abs(x1 - x0) || 0.5, h, Math.abs(z1 - z0) || 0.5), cw);
-    m.position.set((x0 + x1) / 2, h / 2, -(z0 + z1) / 2); m.castShadow = true; m.receiveShadow = true; root.add(m);
-  };
-  const gate = Math.min(12, P.w * 0.4), g0 = P.w / 2 - gate / 2;
-  add(0, 0, g0, 0, 3.5); add(g0 + gate, 0, P.w, 0, 3.5); // front with gate opening
-  add(0, P.d, P.w, P.d, 3.5); add(0, 0, 0, P.d, 3.5); add(P.w, 0, P.w, P.d, 3.5);
-  const gateM = new THREE.Mesh(new THREE.BoxGeometry(gate, 3.2, 0.15), mat("#1f2937", { metalness: 0.6, roughness: 0.4 }));
-  gateM.position.set(P.w / 2, 1.6, 0); root.add(gateM);
-  for (const [tx, tz] of [[-6, 4], [P.w + 6, 6], [-8, -P.d * 0.6], [P.w + 7, -P.d * 0.7]]) { // simple trees
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.45, 6), mat("#6b4f3a")); trunk.position.set(tx, 3, tz); root.add(trunk);
-    const top = new THREE.Mesh(new THREE.SphereGeometry(3.6, 14, 10), mat("#3f7d3a")); top.position.set(tx, 8, tz); top.castShadow = true; root.add(top);
-  }
-}
+const FIN_LABEL: Record<Exclude<keyof Finishes, "style">, string> = { ext: "Exterior walls", int: "Interior walls", floor: "Flooring", door: "Doors", frame: "Window frames", roof: "Terrace", plinth: "Plinth" };
+const STYLES: [Style, string, string][] = [
+  ["modern", "Modern", "Stone + wood cladding, black frames, deep roof overhang with lights"],
+  ["contemporary", "Contemporary", "Two-tone, grey tiles, wooden fins, terrace pergola"],
+  ["traditional", "Traditional TN", "Tiled sloping roof, thinnai, round pillars, arches"],
+  ["basic", "Basic", "Simple plaster finish (earlier look)"],
+];
+type View = "front" | "rear" | "left" | "right" | "top" | "iso";
+type Ctx = {
+  renderer: THREE.WebGLRenderer; scene: THREE.Scene; camera: THREE.PerspectiveCamera; controls: OrbitControls;
+  model: THREE.Object3D | null; sun: THREE.DirectionalLight; hemi: THREE.HemisphereLight; raf: number; roomLights: THREE.Light[];
+};
 
 export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
   plan: Plan; finishes?: Partial<Finishes>; onFinishes?: (f: Finishes) => void; pid?: number; designId?: number;
 }) {
   const host = useRef<HTMLDivElement>(null);
-  const ctx = useRef<{ renderer: THREE.WebGLRenderer; scene: THREE.Scene; camera: THREE.PerspectiveCamera; controls: OrbitControls; model: THREE.Object3D | null; sun: THREE.DirectionalLight; amb: THREE.HemisphereLight; raf: number } | null>(null);
+  const ctx = useRef<Ctx | null>(null);
   const [mode, setMode] = useState<Mode>("exterior");
   const [upTo, setUpTo] = useState(plan.levels.length);
   const [only, setOnly] = useState<number | null>(null);
-  const [night, setNight] = useState(false);
+  const [light, setLight] = useState<LightMode>("day");
   const [furniture, setFurniture] = useState(true);
   const [surround, setSurround] = useState(true);
   const [roof, setRoof] = useState(true);
@@ -327,8 +66,26 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
   const [cut, setCut] = useState(false);
   const [rotate, setRotate] = useState(false);
   const [recording, setRecording] = useState(false);
-  const [edges, setEdges] = useState(true);
+  const [edges, setEdges] = useState(false);
+  const [flat, setFlat] = useState(false);
   const [structure, setStructure] = useState<any>(null);
+  const [busy, setBusy] = useState(false);
+  const [walkInfo, setWalkInfo] = useState<{ level: number; room: string; stair: boolean }>({ level: 0, room: "", stair: false });
+  const fin: Finishes = { ...DEFAULT_FINISH, ...(finishes || {}) };
+  const style: Style = (fin.style as Style) || "modern";
+  const finKey = JSON.stringify(fin);
+  const keys = useRef<Record<string, boolean>>({});
+  const walk = useRef({ li: 0, x: 0, y: 0, yaw: 0, pitch: 0, h: 0, segs: new Map<number, ReturnType<typeof walkSegments>>(), label: "" });
+
+  // geometry key: the camera is reset only when the SHAPE of the plan changes (not on colour changes)
+  const planKey = useMemo(() => JSON.stringify({ l: plan.levels.map((l) => [l.rooms, l.openings, l.walls]), b: plan.building, p: plan.plot, h: plan.floor_height_ft }), [plan]);
+  const planRef = useRef(plan); planRef.current = plan;
+  const lightRef = useRef(light); lightRef.current = light;
+  const centre = useMemo(() => {
+    const e = extent(plan.levels[0].rooms);
+    return new THREE.Vector3(plan.building.x + (e.x0 + e.x1) / 2, 0, -(plan.building.y + (e.y0 + e.y1) / 2));
+  }, [planKey]);  // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {  // latest saved structural design of this floor plan (for the Structure view)
     if (mode !== "structure" || !pid) return;
     api<any[]>(`/api/projects/${pid}/structural`).then(async (list) => {
@@ -337,162 +94,373 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
       setStructure((await api<any>(`/api/structural/${v.id}`)).result);
     }).catch((e) => toast(e.message, "err"));
   }, [mode, pid, designId]);
-  const fin: Finishes = { ...DEFAULT_FINISH, ...(finishes || {}) };
-  const finKey = JSON.stringify(fin);
-  const keys = useRef<Record<string, boolean>>({});
 
-  // scene once
+  // ------------------------------------------------------------------ scene (once)
   useEffect(() => {
     const el = host.current!;
-    const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
-    renderer.setPixelRatio(Math.min(2, window.devicePixelRatio));
-    renderer.setSize(el.clientWidth, el.clientHeight);
+    const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true, powerPreference: "high-performance" });
+    renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    renderer.setSize(el.clientWidth, el.clientHeight, false);
+    Object.assign(renderer.domElement.style, { width: "100%", height: "100%", display: "block" });
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.autoUpdate = false;  // the house does not move: shadows are drawn once, no shimmer
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.0;
-    renderer.localClippingEnabled = true;
     el.appendChild(renderer.domElement);
     const scene = new THREE.Scene();
     const pmrem = new THREE.PMREMGenerator(renderer);
-    scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;  // soft reflections / ambient light
-    const camera = new THREE.PerspectiveCamera(45, el.clientWidth / el.clientHeight, 0.3, 2000);
+    scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    const camera = new THREE.PerspectiveCamera(45, el.clientWidth / Math.max(1, el.clientHeight), 0.5, 3000);
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
+    controls.dampingFactor = 0.09;
+    controls.rotateSpeed = 0.65;
+    controls.zoomSpeed = 0.9;
+    controls.panSpeed = 0.8;
+    controls.minDistance = 6;
+    controls.maxDistance = 900;
     controls.maxPolarAngle = Math.PI * 0.495;
-    const amb = new THREE.HemisphereLight("#ffffff", "#8a8a7a", 0.9);
-    scene.add(amb);
-    const sun = new THREE.DirectionalLight("#fff6e5", 2.2);
+    controls.screenSpacePanning = true;
+    const hemi = new THREE.HemisphereLight("#ffffff", "#8a8a7a", 0.7);
+    const sun = new THREE.DirectionalLight("#fff6e5", 2.4);
     sun.castShadow = true;
-    sun.shadow.mapSize.set(4096, 4096);
-    sun.shadow.bias = -0.0004;
-    sun.shadow.normalBias = 0.02;
-    const sc = sun.shadow.camera as THREE.OrthographicCamera;
-    sc.left = -90; sc.right = 90; sc.top = 90; sc.bottom = -90; sc.far = 400;
-    scene.add(sun, sun.target);
-    const c = { renderer, scene, camera, controls, model: null as THREE.Object3D | null, sun, amb, raf: 0 };
+    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.bias = -0.0006;
+    sun.shadow.normalBias = 0.06;
+    scene.add(hemi, sun, sun.target);
+    const c: Ctx = { renderer, scene, camera, controls, model: null, sun, hemi, raf: 0, roomLights: [] };
     ctx.current = c;
     const clock = new THREE.Clock();
     const loop = () => {
-      const dt = Math.min(0.05, clock.getDelta());
-      const k = keys.current;
-      if (camera.userData.walk) { // walkthrough: W/S forward-back, A/D turn, arrows too
-        const dir = new THREE.Vector3(); camera.getWorldDirection(dir); dir.y = 0; dir.normalize();
-        const sp = 9 * dt;
-        if (k.w || k.arrowup) { camera.position.addScaledVector(dir, sp); controls.target.addScaledVector(dir, sp); }
-        if (k.s || k.arrowdown) { camera.position.addScaledVector(dir, -sp); controls.target.addScaledVector(dir, -sp); }
-        if (k.a || k.arrowleft || k.d || k.arrowright) {
-          const ang = (k.a || k.arrowleft ? 1 : -1) * 1.6 * dt;
-          const off = controls.target.clone().sub(camera.position).applyAxisAngle(new THREE.Vector3(0, 1, 0), ang);
-          controls.target.copy(camera.position).add(off);
+      const dt = Math.min(0.1, clock.getDelta());
+      if (camera.userData.walk) walkStep(dt);
+      else {
+        if (camera.userData.spin) {
+          const off = camera.position.clone().sub(controls.target).applyAxisAngle(new THREE.Vector3(0, 1, 0), 0.3 * dt);
+          camera.position.copy(controls.target).add(off);
         }
+        if (controls.target.y < 0) controls.target.y = 0;
+        controls.update();
       }
-      if (camera.userData.spin) {
-        const off = camera.position.clone().sub(controls.target).applyAxisAngle(new THREE.Vector3(0, 1, 0), 0.35 * dt);
-        camera.position.copy(controls.target).add(off);
-      }
-      controls.update();
       renderer.render(scene, camera);
       c.raf = requestAnimationFrame(loop);
     };
     loop();
-    const onResize = () => { renderer.setSize(el.clientWidth, el.clientHeight); camera.aspect = el.clientWidth / el.clientHeight; camera.updateProjectionMatrix(); };
+    const onResize = () => {
+      const w = el.clientWidth, h = el.clientHeight;
+      if (!w || !h) return;
+      const cur = renderer.getSize(new THREE.Vector2());
+      if (Math.abs(cur.x - w) < 1 && Math.abs(cur.y - h) < 1) return;  // no resize loop (was a cause of shaking)
+      renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
+    };
     const ro = new ResizeObserver(onResize); ro.observe(el);
-    const kd = (e: KeyboardEvent) => { keys.current[e.key.toLowerCase()] = true; };
+    const typing = (e: KeyboardEvent) => { const t = e.target as HTMLElement; return t && (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA"); };
+    const kd = (e: KeyboardEvent) => {
+      if (typing(e)) return;
+      const k = e.key.toLowerCase();
+      if (camera.userData.walk) {
+        if (["arrowup", "arrowdown", "arrowleft", "arrowright", " "].includes(k)) e.preventDefault();
+        if (k === "escape") { setMode("exterior"); return; }
+        if (k === "e") stairGo(1);
+        if (k === "q") stairGo(-1);
+      }
+      keys.current[k] = true;
+    };
     const ku = (e: KeyboardEvent) => { keys.current[e.key.toLowerCase()] = false; };
     window.addEventListener("keydown", kd); window.addEventListener("keyup", ku);
+    // drag to look around in the walkthrough
+    let drag: { x: number; y: number } | null = null;
+    const pd = (e: PointerEvent) => { if (camera.userData.walk) { drag = { x: e.clientX, y: e.clientY }; renderer.domElement.setPointerCapture(e.pointerId); } };
+    const pm = (e: PointerEvent) => {
+      if (!drag || !camera.userData.walk) return;
+      const w = walk.current;
+      w.yaw += (e.clientX - drag.x) * 0.0042; w.pitch = Math.max(-1.1, Math.min(1.1, w.pitch - (e.clientY - drag.y) * 0.0035));
+      drag = { x: e.clientX, y: e.clientY };
+    };
+    const pu = () => { drag = null; };
+    renderer.domElement.addEventListener("pointerdown", pd); renderer.domElement.addEventListener("pointermove", pm);
+    window.addEventListener("pointerup", pu);
     return () => {
-      cancelAnimationFrame(c.raf); ro.disconnect(); window.removeEventListener("keydown", kd); window.removeEventListener("keyup", ku);
-      controls.dispose(); renderer.dispose(); el.removeChild(renderer.domElement); ctx.current = null;
+      cancelAnimationFrame(c.raf); ro.disconnect();
+      window.removeEventListener("keydown", kd); window.removeEventListener("keyup", ku); window.removeEventListener("pointerup", pu);
+      controls.dispose(); disposeModel(c.model); renderer.dispose(); pmrem.dispose();
+      if (renderer.domElement.parentElement === el) el.removeChild(renderer.domElement);
+      ctx.current = null;
     };
   }, []);
 
-  // (re)build the model
-  const centre = useMemo(() => {
-    const e = extent(plan.levels[0].rooms);
-    return new THREE.Vector3(plan.building.x + (e.x0 + e.x1) / 2, 0, -(plan.building.y + (e.y0 + e.y1) / 2));
-  }, [plan]);
-  useEffect(() => {
-    const c = ctx.current; if (!c) return;
-    if (c.model) { c.scene.remove(c.model); c.model.traverse((o: any) => o.geometry?.dispose?.()); }
-    if (mode === "structure" && !structure) return;
-    const m = build(plan, fin, { upTo, only, mode, furniture, surround: surround && mode !== "structure", roof, edges, structure });
+  function disposeModel(m: THREE.Object3D | null) {
+    if (!m) return;
     m.traverse((o: any) => {
-      if (o.material) { o.material.wireframe = wire; }
+      o.geometry?.dispose?.();
+      const ms = Array.isArray(o.material) ? o.material : o.material ? [o.material] : [];
+      ms.forEach((x: THREE.Material) => x.dispose());  // textures are shared and kept
     });
-    c.scene.add(m); c.model = m;
-    applyClip();
-  }, [plan, finKey, upTo, only, mode, furniture, surround, roof, wire, edges, structure]);
+  }
 
-  // sky & light
+  // ------------------------------------------------------------------ (re)build the model
   useEffect(() => {
     const c = ctx.current; if (!c) return;
-    c.scene.background = skyTex(night);
-    c.scene.fog = new THREE.Fog(night ? "#0b1324" : "#cfe6f7", 150, 420);
-    c.amb.intensity = night ? 0.15 : 0.55;
-    c.renderer.toneMappingExposure = night ? 0.8 : 1.0;
-    c.scene.environmentIntensity = night ? 0.15 : 0.6;
-    c.sun.intensity = night ? 0.25 : 2.2;
-    c.sun.color.set(night ? "#9db4ff" : "#fff6e5");
-    c.sun.position.set(centre.x + 60, 90, centre.z + 70); c.sun.target.position.copy(centre);
-    c.scene.children.filter((o) => o.userData.lamp).forEach((o) => c.scene.remove(o));
-    if (night) { // warm lights inside every floor
-      plan.levels.forEach((lv, i) => {
-        const e = extent(lv.rooms);
-        const l = new THREE.PointLight("#ffd9a0", 60, 40, 1.6);
-        l.position.set(plan.building.x + (e.x0 + e.x1) / 2, PLINTH + i * (plan.floor_height_ft || 10) + 7, -(plan.building.y + (e.y0 + e.y1) / 2));
-        l.userData.lamp = true; c.scene.add(l);
-      });
+    if (c.model) { c.scene.remove(c.model); disposeModel(c.model); c.model = null; }
+    if (mode === "structure" && !structure) return;
+    const walking = mode === "walk";
+    const { root } = build(plan, fin, {
+      upTo: walking ? plan.levels.length : upTo, only: walking ? null : only, mode, furniture: walking || furniture,
+      surround: surround && mode !== "structure", roof: walking || roof, edges, structure, style, light,
+    });
+    if (wire) root.traverse((o: any) => { const ms = Array.isArray(o.material) ? o.material : o.material ? [o.material] : []; ms.forEach((m: any) => { m.wireframe = true; }); });
+    c.scene.add(root); c.model = root;
+    applyClip();
+    c.renderer.shadowMap.needsUpdate = true;
+    walk.current.segs.clear();
+  }, [planKey, finKey, upTo, only, mode, furniture, surround, roof, wire, edges, structure, style, light]);  // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ------------------------------------------------------------------ sky & light
+  useEffect(() => {
+    const c = ctx.current; if (!c) return;
+    const P = plan.plot;
+    const span = Math.max(P.w, P.d) / 2 + 40;
+    c.scene.background = T.sky(light);
+    const fogCol = light === "night" ? "#0b1324" : light === "dusk" ? "#3a4a70" : "#cfe6f7";
+    c.scene.fog = new THREE.Fog(fogCol, 260, 900);
+    const walking = mode === "walk";
+    if (light === "day") {
+      c.hemi.color.set("#ffffff"); c.hemi.groundColor.set("#8a8a7a"); c.hemi.intensity = walking ? 1.1 : 0.75;
+      c.sun.color.set("#fff4e0"); c.sun.intensity = 2.5; c.renderer.toneMappingExposure = 1.0; c.scene.environmentIntensity = 0.55;
+      c.sun.position.set(centre.x + 70, 110, centre.z + 80);
+    } else if (light === "dusk") {
+      c.hemi.color.set("#7c8fc4"); c.hemi.groundColor.set("#3b3226"); c.hemi.intensity = walking ? 0.8 : 0.35;
+      c.sun.color.set("#ffae6b"); c.sun.intensity = 0.9; c.renderer.toneMappingExposure = 1.15; c.scene.environmentIntensity = 0.25;
+      c.sun.position.set(centre.x - 110, 32, centre.z + 50);
+    } else {
+      c.hemi.color.set("#41507a"); c.hemi.groundColor.set("#14161c"); c.hemi.intensity = walking ? 0.55 : 0.16;
+      c.sun.color.set("#9db4ff"); c.sun.intensity = 0.3; c.renderer.toneMappingExposure = 1.05; c.scene.environmentIntensity = 0.1;
+      c.sun.position.set(centre.x + 40, 120, centre.z - 60);
     }
-  }, [night, centre, plan]);
+    c.sun.target.position.copy(centre);
+    const sc = c.sun.shadow.camera;
+    sc.left = -span; sc.right = span; sc.top = span; sc.bottom = -span; sc.near = 1; sc.far = 600;
+    sc.updateProjectionMatrix();
+    c.renderer.shadowMap.needsUpdate = true;
+  }, [light, centre, plan.plot, mode]);
 
   useEffect(() => { const c = ctx.current; if (c) c.camera.userData.spin = rotate; }, [rotate]);
   useEffect(() => { applyClip(); }, [cut]);
-  useEffect(() => { view(mode === "walk" ? "walk" : mode === "interior" ? "top" : "iso"); }, [mode, plan]);
+  // camera: only when the view mode or the plan's shape changes
+  useEffect(() => {
+    if (mode === "walk") startWalk();
+    else { const c = ctx.current; if (c) { c.camera.userData.walk = false; c.controls.enabled = true; clearRoomLights(); } view(mode === "interior" ? "top" : "iso"); }
+  }, [mode, planKey]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   function applyClip() {
     const c = ctx.current; if (!c || !c.model) return;
-    const plane = new THREE.Plane(new THREE.Vector3(0, 0, -1), centre.z); // keeps the rear half: section cut through the middle
-    c.model.traverse((o: any) => { if (o.material) { o.material.clippingPlanes = cut ? [plane] : []; o.material.needsUpdate = true; } });
+    const plane = new THREE.Plane(new THREE.Vector3(0, 0, -1), centre.z);
+    c.model.traverse((o: any) => {
+      const ms = Array.isArray(o.material) ? o.material : o.material ? [o.material] : [];
+      ms.forEach((m: any) => { m.clippingPlanes = cut ? [plane] : []; m.needsUpdate = true; });
+    });
+    c.renderer.localClippingEnabled = cut;
+    c.renderer.shadowMap.needsUpdate = true;
   }
 
-  function view(v: "front" | "rear" | "left" | "right" | "top" | "iso" | "walk") {
-    const c = ctx.current; if (!c) return;
-    const H = plan.levels.length * (plan.floor_height_ft || 10) + PLINTH;
-    const R = Math.max(plan.plot.w, plan.plot.d) * 1.25 + H;
-    const t = centre.clone().setY(H / 2);
-    c.camera.userData.walk = v === "walk";
-    c.controls.maxPolarAngle = v === "top" ? Math.PI : Math.PI * 0.495;
-    const pos: Record<string, THREE.Vector3> = {
-      front: new THREE.Vector3(t.x, H * 0.55, t.z + R), rear: new THREE.Vector3(t.x, H * 0.55, t.z - R),
-      left: new THREE.Vector3(t.x - R, H * 0.55, t.z), right: new THREE.Vector3(t.x + R, H * 0.55, t.z),
-      top: new THREE.Vector3(t.x + 0.01, R * 1.3, t.z + 0.01), iso: new THREE.Vector3(t.x + R * 0.72, H * 0.9 + R * 0.35, t.z + R * 0.72),
+  function camFor(v: View) {
+    const p = planRef.current;
+    const H = p.levels.length * (p.floor_height_ft || 10) + PLINTH;
+    const R = Math.max(p.plot.w, p.plot.d) * 1.15 + H;
+    const t = centre.clone().setY(H / 2.2);
+    const pos: Record<View, THREE.Vector3> = {
+      front: new THREE.Vector3(t.x, H * 0.45, t.z + R), rear: new THREE.Vector3(t.x, H * 0.45, t.z - R),
+      left: new THREE.Vector3(t.x - R, H * 0.45, t.z), right: new THREE.Vector3(t.x + R, H * 0.45, t.z),
+      top: new THREE.Vector3(t.x, R * 1.4, t.z + 1.5), iso: new THREE.Vector3(t.x + R * 0.62, H * 0.6 + R * 0.28, t.z + R * 0.78),  // top: road at the bottom
     };
-    if (v === "walk") { // stand at the front door, eye height, looking in
-      const lv = plan.levels[0];
-      const door = lv.openings.find((o) => o.type === "main_door") || lv.openings[0];
-      const dx = plan.building.x + (door ? (door.x1 + door.x2) / 2 : extent(lv.rooms).x0 + 3);
-      const dy = plan.building.y + (door ? door.y1 : extent(lv.rooms).y0);
-      c.camera.position.set(dx, PLINTH + EYE, -(dy - 4));
-      c.controls.target.set(dx, PLINTH + EYE, -(dy + 6));
-      c.camera.fov = 70;
-    } else {
-      c.camera.position.copy(pos[v]); c.controls.target.copy(t); c.camera.fov = 45;
-    }
-    c.camera.updateProjectionMatrix();
+    return { pos: pos[v], target: t, R, H };
   }
 
+  function view(v: View) {
+    const c = ctx.current; if (!c) return;
+    c.camera.userData.walk = false; c.controls.enabled = true;
+    c.controls.maxPolarAngle = v === "top" ? Math.PI : Math.PI * 0.495;
+    const { pos, target } = camFor(v);
+    c.camera.position.copy(pos); c.controls.target.copy(target);
+    c.camera.fov = 45; c.camera.near = 0.5; c.camera.updateProjectionMatrix();
+    c.controls.update();
+  }
+
+  // ------------------------------------------------------------------ walkthrough
+  function segsFor(li: number) {
+    const w = walk.current;
+    if (!w.segs.has(li)) w.segs.set(li, walkSegments(planRef.current, li));
+    return w.segs.get(li)!;
+  }
+  function floorZ(li: number) { const p = planRef.current; return PLINTH + li * (p.floor_height_ft || 10) + 0.04; }
+  function baseHeight(li: number, x: number, y: number) {
+    const p = planRef.current;
+    if (li > 0) return floorZ(li);
+    const lx = x - p.building.x, ly = y - p.building.y;
+    if (roomAt(p.levels[0].rooms, lx, ly)) return floorZ(0);
+    const e = extent(p.levels[0].rooms);
+    const dIn = Math.max(e.x0 - lx, lx - e.x1, e.y0 - ly, ly - e.y1, 0);
+    return dIn < 0.5 ? PLINTH : dIn < 3.4 ? PLINTH * (1 - (dIn - 0.5) / 2.9) : 0;  // the entrance steps
+  }
+  function startWalk() {
+    const c = ctx.current; if (!c) return;
+    const p = planRef.current;
+    const lv = p.levels[0];
+    const door = lv.openings.find((o) => o.type === "main_door") || lv.openings.find((o) => o.type === "door");
+    const e = extent(lv.rooms);
+    const w = walk.current;
+    w.li = 0; w.pitch = -0.04; w.yaw = 0;
+    // start just inside the gate, in line with the main door, looking at the house
+    w.x = p.building.x + (door && Math.abs(door.y1 - door.y2) < 1e-6 ? (door.x1 + door.x2) / 2 : (e.x0 + e.x1) / 2);
+    w.y = Math.min(3, Math.max(1.5, p.building.y - 1.5));
+    const park = lv.rooms.find((r) => r.type === "parking" && r.w >= 9 && r.d >= 14);
+    if (park) {  // do not start inside the car: walk beside it
+      const cx = p.building.x + park.x + park.w / 2;
+      if (Math.abs(w.x - cx) < 4.2) w.x = cx + (w.x >= cx ? 4.2 : -4.2);
+    }
+    w.h = baseHeight(0, w.x, w.y);
+    c.camera.userData.walk = true; c.controls.enabled = false;
+    c.camera.fov = 72; c.camera.near = 0.1; c.camera.updateProjectionMatrix();
+    placeCam();
+    roomLightsFor(0);
+  }
+  function placeCam() {
+    const c = ctx.current; if (!c) return;
+    const w = walk.current;
+    c.camera.position.set(w.x, w.h + EYE, -w.y);
+    const dir = new THREE.Vector3(Math.sin(w.yaw) * Math.cos(w.pitch), Math.sin(w.pitch), -Math.cos(w.yaw) * Math.cos(w.pitch));
+    c.camera.lookAt(c.camera.position.clone().add(dir));
+  }
+  function walkStep(dt: number) {
+    const w = walk.current, k = keys.current;
+    const f = (k.w || k.arrowup ? 1 : 0) - (k.s || k.arrowdown ? 1 : 0);
+    const st = (k.d ? 1 : 0) - (k.a ? 1 : 0);
+    const turn = (k.arrowright || k.l ? 1 : 0) - (k.arrowleft || k.j ? 1 : 0);
+    w.yaw += turn * 1.7 * dt;
+    if (f || st) {
+      const sp = (k.shift ? 13 : 6.5) * dt;
+      const dx = (f * Math.sin(w.yaw) + st * Math.cos(w.yaw)) * sp, dy = (f * Math.cos(w.yaw) - st * Math.sin(w.yaw)) * sp;
+      [w.x, w.y] = collide(segsFor(w.li), w.x, w.y, dx, dy, 0.85);
+    }
+    const target = baseHeight(w.li, w.x, w.y);
+    w.h += (target - w.h) * Math.min(1, dt * 7);
+    placeCam();
+    // where am I?
+    const p = planRef.current;
+    const r = roomAt(p.levels[w.li].rooms, w.x - p.building.x, w.y - p.building.y);
+    const label = `${w.li}|${r ? r.name : ""}|${r?.type === "stair" ? 1 : 0}`;
+    if (label !== w.label) { w.label = label; setWalkInfo({ level: w.li, room: r ? r.name : w.li === 0 ? "Outside" : "", stair: r?.type === "stair" }); }
+  }
+  function stairGo(dir: 1 | -1) {
+    const p = planRef.current, w = walk.current;
+    const to = w.li + dir;
+    if (to < 0 || to >= p.levels.length) return;
+    const here = roomAt(p.levels[w.li].rooms, w.x - p.building.x, w.y - p.building.y);
+    if (!here || here.type !== "stair") { toast("Walk to the staircase first, then go up / down"); return; }
+    const st = p.levels[to].rooms.find((r) => r.type === "stair") || p.levels[to].rooms[0];
+    w.li = to;
+    w.x = p.building.x + st.x + st.w / 2; w.y = p.building.y + st.y + Math.min(st.d - 1.5, 2.5);
+    w.h = floorZ(to); w.label = "";
+    faceCentre(to);
+    roomLightsFor(to);
+  }
+  function goRoom(v: string) {
+    const [li, id] = v.split(":"); const p = planRef.current;
+    const r = p.levels[Number(li)]?.rooms.find((q) => q.id === id); if (!r) return;
+    const w = walk.current;
+    w.li = Number(li); w.x = p.building.x + r.x + r.w / 2; w.y = p.building.y + r.y + r.d / 2; w.h = floorZ(w.li); w.label = "";
+    faceCentre(w.li);
+    roomLightsFor(w.li);
+  }
+  function faceCentre(li: number) {  // look towards the middle of the floor (you see the door, not a blank wall)
+    const p = planRef.current, w = walk.current;
+    const e = extent(p.levels[li].rooms);
+    const cx = p.building.x + (e.x0 + e.x1) / 2, cy = p.building.y + (e.y0 + e.y1) / 2;
+    if (Math.hypot(cx - w.x, cy - w.y) > 1.5) w.yaw = Math.atan2(cx - w.x, cy - w.y);
+    w.pitch = -0.05;
+  }
+  function clearRoomLights() {
+    const c = ctx.current; if (!c) return;
+    c.roomLights.forEach((l) => c.scene.remove(l)); c.roomLights = [];
+  }
+  function roomLightsFor(li: number) {  // soft ceiling light in each room of the floor you are on
+    const c = ctx.current; if (!c) return;
+    clearRoomLights();
+    const p = planRef.current;
+    const z = floorZ(li) + (p.floor_height_ft || 10) - 1.4;
+    p.levels[li].rooms.filter((r) => !["terrace", "balcony", "sitout", "parking"].includes(r.type)).slice(0, 12).forEach((r) => {
+      const l = new THREE.PointLight("#fff1dc", lightRef.current === "day" ? 14 : 22, Math.max(r.w, r.d) * 1.6, 1.6);
+      l.position.set(p.building.x + r.x + r.w / 2, z, -(p.building.y + r.y + r.d / 2));
+      c.scene.add(l); c.roomLights.push(l);
+    });
+  }
+  const hold = (k: string) => ({
+    onPointerDown: (e: RPointerEvent) => { e.preventDefault(); keys.current[k] = true; },
+    onPointerUp: () => { keys.current[k] = false; }, onPointerLeave: () => { keys.current[k] = false; }, onPointerCancel: () => { keys.current[k] = false; },
+  });
+
+  // ------------------------------------------------------------------ downloads
+  const fileBase = () => `Nexora_3D_${style}`;
+  const save = (url: string, name: string) => { const a = document.createElement("a"); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove(); };
   const png = () => {
     const c = ctx.current; if (!c) return;
     c.renderer.render(c.scene, c.camera);
-    const a = document.createElement("a"); a.href = c.renderer.domElement.toDataURL("image/png"); a.download = "Nexora_3D_view.png"; a.click();
+    save(c.renderer.domElement.toDataURL("image/png"), `${fileBase()}_view.png`);
+  };
+  /** render one preset view at a fixed size; returns a PNG data URL */
+  function shot(v: View, W = 1800, Hh = 1100): string {
+    const c = ctx.current!;
+    const r = c.renderer, size = r.getSize(new THREE.Vector2()), pr = r.getPixelRatio();
+    const { pos, target, R, H } = camFor(v);
+    let cam: THREE.Camera;
+    if (flat && v !== "iso" && v !== "top") {  // true elevation: no perspective
+      const half = Math.max(R * 0.42, H * 0.9);
+      const o = new THREE.OrthographicCamera(-half * (W / Hh), half * (W / Hh), half, -half, 0.5, 3000);
+      o.position.copy(pos).setY(H * 0.45); o.lookAt(target.clone().setY(H * 0.45)); cam = o;
+    } else {
+      const p = new THREE.PerspectiveCamera(v === "iso" ? 42 : 38, W / Hh, 0.5, 3000);
+      p.position.copy(pos); p.lookAt(target); cam = p;
+    }
+    r.setPixelRatio(1); r.setSize(W, Hh, false);
+    r.render(c.scene, cam);
+    const url = r.domElement.toDataURL("image/png");
+    r.setPixelRatio(pr); r.setSize(size.x, size.y, false);
+    return url;
+  }
+  const views = async (sheet: boolean) => {
+    const c = ctx.current; if (!c || mode === "walk") return toast("Leave the walkthrough first", "err");
+    setBusy(true);
+    try {
+      const list: [View, string][] = [["front", "Front Elevation"], ["left", "Left Side Elevation"], ["right", "Right Side Elevation"], ["rear", "Rear Elevation"], ["iso", "3D View"]];
+      const shots = list.map(([v, l]) => [shot(v), l] as [string, string]);
+      if (!sheet) {
+        for (const [i, [u, l]] of shots.entries()) { save(u, `${fileBase()}_${l.replace(/\s+/g, "_")}.png`); await new Promise((r) => setTimeout(r, 350 + i * 50)); }
+        toast("5 images downloaded (front, left, right, rear, 3D)");
+        return;
+      }
+      const W = 1800, Hh = 1100, pad = 40, head = 110;
+      const cv = document.createElement("canvas"); cv.width = W * 2 + pad * 3; cv.height = head + (Hh + 70) * 3 + pad;
+      const g = cv.getContext("2d")!;
+      g.fillStyle = "#ffffff"; g.fillRect(0, 0, cv.width, cv.height);
+      g.fillStyle = "#0f2350"; g.font = "bold 54px Arial"; g.fillText("3D Elevation Views", pad, 72);
+      g.font = "28px Arial"; g.fillStyle = "#475569";
+      g.fillText(`${STYLES.find((s) => s[0] === style)?.[1]} style · ${light === "day" ? "Day" : light === "dusk" ? "Evening" : "Night"} · concept visual from the plan`, pad + 560, 70);
+      const imgs = await Promise.all(shots.map(([u]) => new Promise<HTMLImageElement>((res) => { const im = new Image(); im.onload = () => res(im); im.src = u; })));
+      imgs.forEach((im, i) => {
+        const col = i % 2, row = Math.floor(i / 2);
+        const x = i === 4 ? pad + (W + pad) / 2 : pad + col * (W + pad), y = head + row * (Hh + 70);
+        g.drawImage(im, x, y, W, Hh);
+        g.strokeStyle = "#cbd5e1"; g.lineWidth = 2; g.strokeRect(x, y, W, Hh);
+        g.fillStyle = "#0f2350"; g.font = "bold 32px Arial"; g.fillText(shots[i][1], x, y + Hh + 44);
+      });
+      save(cv.toDataURL("image/png"), `${fileBase()}_All_Views.png`);
+    } finally { setBusy(false); }
   };
   const glb = () => {
     const c = ctx.current; if (!c?.model) return;
     new GLTFExporter().parse(c.model, (res: any) => {
-      const blob = new Blob([res as ArrayBuffer], { type: "model/gltf-binary" });
-      const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "Nexora_3D_model.glb"; a.click();
+      save(URL.createObjectURL(new Blob([res as ArrayBuffer], { type: "model/gltf-binary" })), `${fileBase()}_model.glb`);
     }, (err: any) => toast(String(err), "err"), { binary: true });
   };
   const video = async () => {
@@ -502,43 +470,88 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
     const rec = new MediaRecorder(canvas.captureStream(30), { mimeType: MediaRecorder.isTypeSupported("video/webm;codecs=vp9") ? "video/webm;codecs=vp9" : "video/webm" });
     const chunks: Blob[] = [];
     rec.ondataavailable = (e) => chunks.push(e.data);
-    rec.onstop = () => {
-      const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob(chunks, { type: "video/webm" })); a.download = "Nexora_3D_walkaround.webm"; a.click();
-      setRecording(false); setRotate(false);
-    };
+    rec.onstop = () => { save(URL.createObjectURL(new Blob(chunks, { type: "video/webm" })), `${fileBase()}_walkaround.webm`); setRecording(false); setRotate(false); };
     view("iso"); setRotate(true); setRecording(true); rec.start();
-    toast("Recording a 15 s turntable video…");
-    setTimeout(() => rec.stop(), 15000);
+    toast("Recording a 20 s turntable video…");
+    setTimeout(() => rec.stop(), 20000);
   };
 
-  const modes: [Mode, string, any][] = [["exterior", "Exterior View", Layers3], ["interior", "Interior View", Layers3], ["walk", "Walkthrough", Footprints],
-    ["exploded", "Exploded View", Layers3], ["structure", "Structure (RCC frame)", Layers3]];
+  const pickStyle = (s: Style) => onFinishes?.({ ...fin, ...STYLE_FINISH[s], style: s });
+  const modes: [Mode, string, any][] = [["exterior", "Exterior", Layers3], ["interior", "Interior", Layers3], ["walk", "Walkthrough", Footprints],
+    ["exploded", "Exploded", Layers3], ["structure", "Structure (RCC)", Layers3]];
+  const lvName = plan.levels[walkInfo.level]?.name || "";
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap gap-1.5">
+      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+        {STYLES.map(([s, l, d]) => (
+          <button key={s} onClick={() => pickStyle(s)} disabled={!onFinishes}
+            className={`rounded-lg border p-2.5 text-left transition ${style === s ? "border-brand-500 bg-brand-50 ring-2 ring-brand-500" : "border-line bg-white hover:bg-slate-50"}`}>
+            <div className="text-sm font-bold text-navy-ink">{l}</div><div className="text-[11px] leading-snug text-slate-500">{d}</div>
+          </button>
+        ))}
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5">
         {modes.map(([m, l, I]) => (
           <button key={m} onClick={() => setMode(m)} className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold ${mode === m ? "bg-brand-600 text-white" : "bg-brand-50 text-navy-ink"}`}><I size={15} />{l}</button>
         ))}
         <span className="flex-1" />
-        <button className="btn-outline btn-sm" onClick={() => setNight(!night)}>{night ? <Sun size={14} /> : <Moon size={14} />}{night ? "Day" : "Night"}</button>
-      </div>
-      <div className="relative overflow-hidden rounded-lg border border-line">
-        <div ref={host} className="h-[520px] w-full touch-none" />
-        <div className="absolute bottom-2 left-3 rounded bg-white/80 px-2 py-1 text-xs text-slate-600">
-          {mode === "walk" ? "Walkthrough: W / S or ↑ ↓ to walk, A / D or ← → to turn, drag to look" : "Drag to rotate · scroll / pinch to zoom · right-drag to pan"}
+        <div className="inline-flex overflow-hidden rounded-lg border border-line text-sm">
+          {([["day", "Day", Sun], ["dusk", "Evening", Sunset], ["night", "Night", Moon]] as [LightMode, string, any][]).map(([k, l, I]) => (
+            <button key={k} onClick={() => setLight(k)} className={`inline-flex items-center gap-1 px-2.5 py-1.5 font-semibold ${light === k ? "bg-navy-ink text-white" : "bg-white text-navy-ink"}`}><I size={14} />{l}</button>
+          ))}
         </div>
+      </div>
+      <div className="relative overflow-hidden rounded-lg border border-line bg-slate-900">
+        <div ref={host} className="h-[560px] w-full touch-none select-none" />
+        {mode === "walk" ? (
+          <>
+            <div className="absolute left-3 top-3 rounded-lg bg-black/60 px-3 py-1.5 text-sm text-white">
+              <b>{walkInfo.room || "—"}</b>{lvName && <span className="text-white/70"> · {lvName}</span>}
+            </div>
+            <div className="absolute right-3 top-3 flex flex-col items-end gap-2">
+              <button className="inline-flex items-center gap-1 rounded-lg bg-white/90 px-2.5 py-1.5 text-xs font-semibold text-navy-ink" onClick={() => setMode("exterior")}><LogOut size={14} />Exit (Esc)</button>
+              <select className="rounded-lg bg-white/90 px-2 py-1.5 text-xs" value="" onChange={(e) => { if (e.target.value) goRoom(e.target.value); }}>
+                <option value="">Go to room…</option>
+                {plan.levels.map((l, li) => <optgroup key={li} label={l.name}>{l.rooms.map((r) => <option key={r.id} value={`${li}:${r.id}`}>{r.name}</option>)}</optgroup>)}
+              </select>
+            </div>
+            {walkInfo.stair && (
+              <div className="absolute left-1/2 top-3 flex -translate-x-1/2 gap-2">
+                {walkInfo.level < plan.levels.length - 1 && <button className="inline-flex items-center gap-1 rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-bold text-white" onClick={() => stairGo(1)}><ChevronsUp size={15} />Up to {plan.levels[walkInfo.level + 1].name} (E)</button>}
+                {walkInfo.level > 0 && <button className="inline-flex items-center gap-1 rounded-lg bg-brand-600 px-3 py-1.5 text-xs font-bold text-white" onClick={() => stairGo(-1)}><ChevronsDown size={15} />Down to {plan.levels[walkInfo.level - 1].name} (Q)</button>}
+              </div>
+            )}
+            <div className="absolute bottom-3 right-3 grid grid-cols-3 gap-1 opacity-90">
+              <span /><button className="rounded-lg bg-white/85 p-2.5" {...hold("w")}><ArrowUp size={18} /></button><span />
+              <button className="rounded-lg bg-white/85 p-2.5" {...hold("arrowleft")}><ArrowLeft size={18} /></button>
+              <button className="rounded-lg bg-white/85 p-2.5" {...hold("s")}><ArrowDown size={18} /></button>
+              <button className="rounded-lg bg-white/85 p-2.5" {...hold("arrowright")}><ArrowRight size={18} /></button>
+            </div>
+            <div className="absolute bottom-3 left-3 max-w-[60%] rounded bg-black/55 px-2 py-1 text-[11px] text-white">
+              W / S walk · A / D step sideways · ← → turn · drag to look · Shift = faster · walls stop you, doors are open · stairs: E up / Q down
+            </div>
+          </>
+        ) : (
+          <div className="absolute bottom-2 left-3 rounded bg-white/85 px-2 py-1 text-xs text-slate-600">Drag to rotate · scroll / pinch to zoom · right-drag to pan</div>
+        )}
         {recording && <div className="absolute right-3 top-3 rounded bg-red-600 px-2 py-1 text-xs font-bold text-white">● REC</div>}
       </div>
       <div className="flex flex-wrap items-center gap-1.5 text-sm">
         <span className="mr-1 text-xs font-semibold text-slate-500"><Camera size={13} className="mr-1 inline" />Camera</span>
         {(["iso", "front", "left", "right", "rear", "top"] as const).map((v) => (
-          <button key={v} className="btn-outline btn-sm" onClick={() => view(v)}>{{ iso: "3D", front: "Front", left: "Left side", right: "Right side", rear: "Rear", top: "Top" }[v]}</button>
+          <button key={v} className="btn-outline btn-sm" disabled={mode === "walk"} onClick={() => view(v)}>{{ iso: "3D", front: "Front", left: "Left side", right: "Right side", rear: "Rear", top: "Top" }[v]}</button>
         ))}
-        <button className="btn-ghost btn-sm" onClick={() => view("iso")}><RotateCcw size={14} />Reset</button>
+        <button className="btn-ghost btn-sm" disabled={mode === "walk"} onClick={() => view("iso")}><RotateCcw size={14} />Reset</button>
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-line bg-slate-50 p-2 text-sm">
+        <span className="mr-1 text-xs font-semibold text-slate-500"><Download size={13} className="mr-1 inline" />Download</span>
+        <button className="btn-outline btn-sm" onClick={png}><Download size={14} />This view (PNG)</button>
+        <button className="btn-outline btn-sm" disabled={busy} onClick={() => views(false)}><Images size={14} />Front · Sides · Rear · 3D (5 PNG)</button>
+        <button className="btn-outline btn-sm" disabled={busy} onClick={() => views(true)}><Images size={14} />All views on one sheet</button>
+        <label className="ml-1 flex items-center gap-1.5 text-xs"><input type="checkbox" className="h-4 w-4 accent-brand-600" checked={flat} onChange={(e) => setFlat(e.target.checked)} />Flat elevations (no perspective)</label>
         <span className="flex-1" />
-        <button className="btn-outline btn-sm" onClick={png}><Download size={14} />Image (PNG)</button>
         <button className="btn-outline btn-sm" onClick={glb}><Download size={14} />3D model (GLB)</button>
-        <button className="btn-outline btn-sm" disabled={recording} onClick={video}><Film size={14} />Video</button>
+        <button className="btn-outline btn-sm" disabled={recording || mode === "walk"} onClick={video}><Film size={14} />Video</button>
       </div>
       <div className="grid gap-3 lg:grid-cols-2">
         <div className="rounded-lg border border-line p-3 text-sm">
@@ -554,8 +567,8 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
               </select></label>
           </div>
           <div className="grid grid-cols-2 gap-1.5 text-xs">
-            {([["Furniture", furniture, setFurniture], ["Surroundings (plot, road, trees)", surround, setSurround], ["Roof / terrace", roof, setRoof],
-              ["Section cut (half)", cut, setCut], ["Wireframe", wire, setWire], ["Auto rotate", rotate, setRotate], ["Edge lines (architectural)", edges, setEdges]] as [string, boolean, (v: boolean) => void][]).map(([l, v, f]) => (
+            {([["Furniture & car", furniture, setFurniture], ["Surroundings (garden, road, gate)", surround, setSurround], ["Roof / terrace", roof, setRoof],
+              ["Section cut (half)", cut, setCut], ["Wireframe", wire, setWire], ["Auto rotate", rotate, setRotate], ["Edge lines (line drawing look)", edges, setEdges]] as [string, boolean, (v: boolean) => void][]).map(([l, v, f]) => (
               <label key={l} className="flex items-center gap-2"><input type="checkbox" className="h-4 w-4 accent-brand-600" checked={v} onChange={(e) => f(e.target.checked)} />{l}</label>
             ))}
           </div>
@@ -563,7 +576,7 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
         <div className="rounded-lg border border-line p-3 text-sm">
           <div className="mb-2 text-xs font-semibold text-navy-ink">Material &amp; colour options</div>
           <div className="space-y-1.5">
-            {(Object.keys(SWATCHES) as (keyof Finishes)[]).map((k) => (
+            {(Object.keys(SWATCHES) as Exclude<keyof Finishes, "style">[]).map((k) => (
               <div key={k} className="flex flex-wrap items-center gap-1.5">
                 <span className="w-28 shrink-0 text-xs text-slate-500">{FIN_LABEL[k]}</span>
                 {SWATCHES[k].map(([col, name]) => (
@@ -573,7 +586,17 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
               </div>
             ))}
           </div>
-          <p className="mt-2 text-[11px] text-slate-500">Colours are saved with the design (press Save). Concept visual – not a photo-real render.</p>
+          <p className="mt-2 text-[11px] text-slate-500">Style and colours are saved with the design (press Save). Doors and windows are exactly where the plan and the 2D elevation show them.</p>
+          <details className="mt-2 text-[11px] text-slate-600">
+            <summary className="cursor-pointer font-semibold text-navy-ink">Need a photo-quality render? (free, Blender)</summary>
+            <ol className="ml-4 mt-1 list-decimal space-y-0.5">
+              <li>Download <b>3D model (GLB)</b> here.</li>
+              <li>Install Blender (free, blender.org) → File → Import → glTF 2.0 → pick the .glb.</li>
+              <li>Render Properties → Render Engine: <b>Cycles</b>. World → Color → use a sky texture (Nishita) for daylight or dusk.</li>
+              <li>Add a Camera in front of the house (Numpad 0 to look through it), then Render → Render Image (F12) → Image → Save As.</li>
+            </ol>
+            <p className="mt-1">The browser view is a clear, accurate concept visual of your plan; Blender gives real-photo lighting.</p>
+          </details>
         </div>
       </div>
     </div>

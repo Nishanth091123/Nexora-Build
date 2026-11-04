@@ -93,6 +93,18 @@ def save_report(project_id: int, body: SaveIn, user: User = Depends(get_current_
     return report_out(r) | {"result": res}
 
 
+@router.post("/projects/{project_id}/vastu/report-pdf")
+def report_pdf_now(project_id: int, body: SaveIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """1.13: the report for what is on the screen – downloaded without saving a report first."""
+    p = require_any(db, user, project_id, ("vastu",))
+    plan, d = _plan(db, project_id, body)
+    res = engine.analyse(plan)
+    data = report.to_pdf(plan, res, {"name": p.name}, {"version": d.version if d else "-", "date": datetime.now().strftime("%d %b %Y")})
+    name = f"{p.code}_Vastu_Report.pdf"
+    return Response(data, media_type="application/pdf",
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"})
+
+
 @router.get("/projects/{project_id}/vastu/reports")
 def list_reports(project_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     require_any(db, user, project_id, ("vastu",))

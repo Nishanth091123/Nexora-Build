@@ -1,4 +1,5 @@
 """Phase 2 – rate library + estimates (quick estimate, detailed BOQ, versions, Excel/PDF)."""
+import logging
 import re
 from urllib.parse import quote
 
@@ -18,6 +19,7 @@ from ..security import get_current_user, require_owner, require_project
 from .projects import project_out
 
 router = APIRouter(prefix="/api", tags=["estimate"])
+log = logging.getLogger("nexora.estimate")
 
 KINDS = {"material", "labour", "equipment", "extra"}
 
@@ -331,10 +333,39 @@ def load_estimate(db: Session, user: User, estimate_id: int) -> tuple[Estimate, 
     return e, p
 
 
+V18_KEYS = ("floor_boq", "area_statement", "key_quantities", "payment_schedule")
+
+
+def upgrade_result(db: Session, e: Estimate) -> dict:
+    """1.13: estimates saved before 1.8 have no floor-wise BOQ / area statement / payment schedule.
+    They are worked out once from the SAME inputs and the SAME saved rates (totals unchanged) and kept."""
+    res = e.result or {}
+    if all(k in res for k in V18_KEYS):
+        return res
+    try:
+        rates = e.rates_snapshot or rates_dict(rates_for(db, e.rate_state or DEFAULT_STATE)[2])
+        fresh = calculate(e.inputs or {}, rates)
+    except Exception as ex:  # an old estimate that can no longer be worked out: show what is saved
+        log.info("estimate %s upgrade skipped: %s", e.id, ex)
+        return res
+    new = dict(res)
+    g = (res.get("totals") or {}).get("grand_total") or fresh["totals"]["grand_total"]
+    for k in V18_KEYS:
+        new[k] = fresh[k]
+    for x in new["payment_schedule"]:
+        x["amount"] = round(g * x["pct"] / 100, 0)
+    e.result = new  # new dict → saved
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+    return new
+
+
 @router.get("/estimates/{estimate_id}")
 def get_estimate(estimate_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     e, _ = load_estimate(db, user, estimate_id)
-    return est_summary(e) | {"result": e.result, "inputs": e.inputs}
+    return est_summary(e) | {"result": upgrade_result(db, e), "inputs": e.inputs}
 
 
 def export_payload(e: Estimate, p: Project, db: Session | None = None):
@@ -346,7 +377,8 @@ def export_payload(e: Estimate, p: Project, db: Session | None = None):
     return ({"name": p.name, "code": p.code, "location": p.location, "district": p.district, "state": p.state,
              "client_name": p.client_name, "floors": p.floors, "company": company,
              "plot": f"{p.plot_width:g} x {p.plot_length:g} {p.unit}" if p.plot_width and p.plot_length else ""},
-            {"title": e.title, "version": e.version, "rate_state": e.rate_state, "result": e.result,
+            {"title": e.title, "version": e.version, "rate_state": e.rate_state,
+             "result": upgrade_result(db, e) if db is not None else e.result,
              "date": e.created_at.strftime("%d-%m-%Y")})
 
 
@@ -375,6 +407,35 @@ def export_pdf(estimate_id: int, fmt: str = "detailed", user: User = Depends(get
     name = f"{p.code}_{tag}_v{e.version}.pdf"
     return Response(data, media_type="application/pdf",
                     headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"})
+
+
+class ExportIn(BaseModel):
+    inputs: dict
+    state: str = DEFAULT_STATE
+    title: str = "Estimate (not saved)"
+
+
+@router.post("/projects/{project_id}/estimate/export")
+def export_unsaved(project_id: int, body: ExportIn, kind: str = "pdf", user: User = Depends(get_current_user),
+                   db: Session = Depends(get_db)):
+    """1.13: download what is on the screen now, without saving a version first.
+    kind: excel | pdf | bank | client."""
+    from ..estimate.exports import to_pdf_bank, to_pdf_client
+    p = require_project(db, user, project_id, "estimate")
+    result, _ = run_calc(db, body.inputs, body.state)
+    from datetime import datetime as _dt
+    tmp = Estimate(title=body.title, version=0, rate_state=result["rates_state"], result=result, created_at=_dt.now())
+    proj, est = export_payload(tmp, p, db)  # tmp is never added to the database
+    est["version"] = "draft"
+    fn = {"excel": to_excel, "pdf": to_pdf, "bank": to_pdf_bank, "client": to_pdf_client}.get(kind)
+    if not fn:
+        raise HTTPException(400, "kind must be excel, pdf, bank or client")
+    data = fn(proj, est)
+    tag = {"excel": "BOQ", "pdf": "Estimate", "bank": "Bank_Loan_Estimate", "client": "Client_Estimate"}[kind]
+    ext = "xlsx" if kind == "excel" else "pdf"
+    mt = ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" if kind == "excel" else "application/pdf")
+    name = f"{p.code}_{tag}_draft.{ext}"
+    return Response(data, media_type=mt, headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"})
 
 
 @router.post("/estimates/{estimate_id}/hide")

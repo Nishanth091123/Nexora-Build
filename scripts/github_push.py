@@ -63,6 +63,13 @@ def main() -> int:
         git("rm", "--cached", "-q", ".env")
         print("[FIXED] .env was tracked earlier – removed from git (your file stays on the PC)")
 
+    # 1b) client details + documents (local_data) never leave this PC
+    if git("check-ignore", "-q", "local_data/clients.db", check=False).returncode != 0:
+        sys.exit("[STOP] local_data/ (your client data) is NOT ignored by git. Add the line  local_data/  to .gitignore")
+    if any(t.replace("\\", "/").startswith("local_data/") for t in tracked):
+        git("rm", "-r", "--cached", "-q", "local_data")
+        print("[FIXED] client data was tracked earlier – removed from git (your files stay on the PC)")
+
     # 2) list exactly what would be uploaded, scan it for keys
     files = git("ls-files", "--cached", "--others", "--exclude-standard", capture=True).stdout.splitlines()
     secrets = env_values()

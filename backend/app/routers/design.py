@@ -290,6 +290,55 @@ def sheets_preview(project_id: int, body: PlanIn, user: User = Depends(get_curre
     return sheets.sheet_previews(plan) | {"warnings": plan.get("warnings", [])}
 
 
+class ExportIn(BaseModel):
+    plan: dict
+    version: str | int | None = None
+
+
+@router.post("/projects/{project_id}/design/export")
+def export_current(project_id: int, body: ExportIn, kind: str = "sheets_pdf", style: str = "paper", page: str = "",
+                   user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """1.13: download what is on the screen now (saved or not).
+    kind: sheets_pdf (whole A3 set, or one sheet with page=site / plan_0 / elevation / section / schedule / title)
+          | sheets_dxf | plan_pdf | plan_dxf."""
+    from datetime import date as _date
+
+    from ..design import sheets
+    p = require_any(db, user, project_id, ("design", "estimate"))
+    try:
+        plan = recompute(body.plan)
+    except PlanError as e:
+        raise HTTPException(422, {"message": str(e), "questions": [str(e)]})
+    except (KeyError, TypeError, ValueError) as e:
+        raise HTTPException(400, f"Invalid plan: {e}")
+    ver = body.version if body.version not in (None, "") else "draft"
+    meta = {"version": ver, "date": _date.today().strftime("%d-%m-%Y")}
+    tag = f"v{ver}" if ver != "draft" else "draft"
+    st = "cad" if style == "cad" else "paper"
+    if kind == "sheets_pdf":
+        data = sheets.sheet_set_pdf(plan, _proj(p, db), meta, style=st)
+        label = "Drawing_Set"
+        if page:
+            pages = sheets.sheet_pages(plan)
+            if page not in pages:
+                raise HTTPException(400, f"page must be one of {', '.join(pages)}")
+            data = sheets.pdf_pages(data, [pages[page]])
+            label = {"title": "Title_Sheet", "site": "Site_Plan", "elevation": "Front_Elevation", "section": "Section",
+                     "schedule": "Door_Window_Schedule"}.get(page) or \
+                (plan["levels"][int(page.split("_")[1])]["name"].replace(" ", "_") + "_Plan")
+        mt, ext = "application/pdf", "pdf"
+        name = f"{p.code}_{label}_{tag}{'_CAD' if st == 'cad' else ''}.{ext}"
+    elif kind == "sheets_dxf":
+        data, mt, name = sheets.sheets_dxf(plan, _proj(p, db), meta), "application/dxf", f"{p.code}_Drawing_Set_{tag}.dxf"
+    elif kind == "plan_pdf":
+        data, mt, name = exports.to_pdf(plan, _proj(p, db), meta), "application/pdf", f"{p.code}_Plan_{tag}.pdf"
+    elif kind == "plan_dxf":
+        data, mt, name = exports.to_dxf(plan, _proj(p), meta), "application/dxf", f"{p.code}_Plan_{tag}.dxf"
+    else:
+        raise HTTPException(400, "kind must be sheets_pdf, sheets_dxf, plan_pdf or plan_dxf")
+    return Response(data, media_type=mt, headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"})
+
+
 @router.get("/designs/{design_id}/sheets.pdf")
 def design_sheets_pdf(design_id: int, style: str = "paper", user: User = Depends(get_current_user),
                       db: Session = Depends(get_db)):

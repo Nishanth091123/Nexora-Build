@@ -374,12 +374,17 @@ export default function EstimatePage() {
 
   const doExport = async (kind: "excel" | "pdf" | "bank" | "client") => {
     setExportOpen(false);
-    if (!saved || dirty) return toast("Save this estimate first (Save button) – exports come from a saved version", "err");
     const ext = kind === "excel" ? "xlsx" : "pdf";
-    const path = kind === "excel" ? "excel" : kind === "pdf" ? "pdf" : `pdf?fmt=${kind}`;
     const tag = { excel: "BOQ", pdf: "Estimate", bank: "Bank_Loan_Estimate", client: "Client_Estimate" }[kind];
-    try { await downloadFile(`/api/estimates/${saved.id}/${path}`, `${currentProject?.code}_${tag}_v${saved.version}.${ext}`); }
-    catch (e: any) { toast(e.message, "err"); }
+    try {
+      if (!saved || dirty) {  // 1.13: what is on the screen now – no need to save first
+        if (!result || !inputs) return toast("Calculate the estimate first", "err");
+        await downloadPost(`/api/projects/${pid}/estimate/export?kind=${kind}`, { inputs, state }, `${currentProject?.code}_${tag}_draft.${ext}`);
+        return;
+      }
+      const path = kind === "excel" ? "excel" : kind === "pdf" ? "pdf" : `pdf?fmt=${kind}`;
+      await downloadFile(`/api/estimates/${saved.id}/${path}`, `${currentProject?.code}_${tag}_v${saved.version}.${ext}`);
+    } catch (e: any) { toast(e.message, "err"); }
   };
   const applySchedule = async (stages: { stage: string; pct: number }[] | null) => {
     const inp = { ...(inputs || {}), payment_schedule: stages };
@@ -677,8 +682,8 @@ export default function EstimatePage() {
       {tab === "boq" && (result ? <Card title="Bill of Quantities (click a row for rate analysis)" icon={<ClipboardList size={20} />}>{filters}{boqTable}</Card> : noResult)}
       {tab === "rates" && <RateLibrary defaultState={state} />}
       {tab === "quick" && pid && <QuickEstimate pid={pid} defaults={defaults} state={state} onUseDetailed={applyQuick} />}
-      {tab === "floorboq" && (result ? <FloorBoqPanel result={result} /> : noResult)}
-      {tab === "payment" && (result ? <PaymentSchedulePanel result={result} onApply={applySchedule} busy={busy} /> : noResult)}
+      {tab === "floorboq" && (result ? <FloorBoqPanel result={result} onExport={doExport} onRecalc={() => calculate()} /> : noResult)}
+      {tab === "payment" && (result ? <PaymentSchedulePanel result={result} onApply={applySchedule} busy={busy} onExport={doExport} onRecalc={() => calculate()} /> : noResult)}
       {tab === "loan" && pid && <LoanDocsPanel pid={pid} canUpload={!!currentProject?.permissions?.edit} />}
       {tab === "bbs" && pid && <BbsTab pid={pid} code={currentProject?.code || "Nexora"} />}
       {tab === "compare" && (

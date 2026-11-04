@@ -11,7 +11,8 @@ import NorthDial from "../components/design/NorthDial";
 import Plan3D from "../components/design/Plan3D";
 import PlanSvg from "../components/design/PlanSvg";
 import { Badge, Card, Empty, Modal, toast } from "../components/ui";
-import { api, downloadFile, fmtDateTime, inr } from "../lib/api";
+import { api, downloadFile, downloadPost, fmtDateTime, inr } from "../lib/api";
+import { savePng, saveSvg } from "../lib/designExport";
 import { useAuth } from "../lib/auth";
 import { useI18n } from "../lib/i18n";
 import type { Plan } from "../lib/plan";
@@ -117,6 +118,10 @@ export default function VastuPage() {
 
   const saveReport = async (download: boolean) => {
     if (!pid || !designId) return;
+    if (download) {  // 1.13: download straight away – saving is a separate button
+      return downloadPost(`/api/projects/${pid}/vastu/report-pdf`, { design_id: designId, north_deg: north }, `${currentProject?.code}_Vastu_Report.pdf`)
+        .catch((e) => toast(e.message, "err"));
+    }
     try {
       const r = await api<any>(`/api/projects/${pid}/vastu/reports`, { body: { design_id: designId, north_deg: north } });
       setReports([r, ...reports]);
@@ -193,7 +198,13 @@ export default function VastuPage() {
               <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1.35fr_1fr]">
                 <div className="min-w-0">
                   {plan.levels.length > 1 && <div className="mb-2 flex flex-wrap gap-2">{plan.levels.map((l, i) => <button key={i} onClick={() => setLevel(i)} className={`rounded-lg px-3 py-1 text-xs font-medium ${i === level ? "bg-navy-900 text-white" : "bg-slate-100"}`}>{l.name}</button>)}</div>}
-                  {view === "2d" ? <div className="aspect-[4/5] w-full rounded-lg border border-line bg-white p-1"><PlanSvg plan={plan} level={level} vastuGrid highlight={highlight} /></div>
+                  {view === "2d" ? <>
+                    <div id="vastu-plan" className="aspect-[4/5] w-full rounded-lg border border-line bg-white p-1"><PlanSvg plan={plan} level={level} vastuGrid highlight={highlight} /></div>
+                    <div className="mt-2 flex flex-wrap gap-1.5 text-xs">
+                      <button className="btn-outline btn-sm" onClick={() => { const sv = document.querySelector("#vastu-plan svg") as SVGSVGElement | null; if (sv) savePng(sv, `${currentProject?.code}_Vastu_Plan_${plan.levels[level]?.name.replace(/\s+/g, "_")}.png`, 2400).catch((e) => toast(e.message, "err")); }}><Download size={13} />Vastu plan (PNG)</button>
+                      <button className="btn-outline btn-sm" onClick={() => { const sv = document.querySelector("#vastu-plan svg"); if (sv) saveSvg(new XMLSerializer().serializeToString(sv), `${currentProject?.code}_Vastu_Plan.svg`); }}><Download size={13} />SVG</button>
+                      <button className="btn-outline btn-sm" onClick={() => saveReport(true)}><Download size={13} />Report (PDF)</button>
+                    </div></>
                     : <Plan3D plan={plan} />}
                   <div className="mt-2 flex flex-wrap gap-3 text-xs text-slate-600">
                     <span className="flex items-center gap-1"><span className="h-3 w-3 rounded-sm border-2 border-emerald-600" />matched</span>

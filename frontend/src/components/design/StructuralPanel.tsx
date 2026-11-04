@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import { Building2, Calculator, Download, Save, TriangleAlert } from "lucide-react";
 import { Badge, Card, Empty, Field, toast } from "../ui";
-import { api, ApiError, downloadFile, fmtDateTime, num } from "../../lib/api";
+import { api, ApiError, downloadPost, fmtDateTime, num } from "../../lib/api";
+import { savePng } from "../../lib/designExport";
 
 type Prev = Record<string, { paper: string; cad: string; title: string }>;
 type Res = any;
@@ -40,10 +41,14 @@ export default function StructuralPanel({ pid, saved, dirty, code }: {
     try { const r = await api<any>(`/api/structural/${id}`); show(r); const i = r.result.inputs; setF({ fck: String(i.fck), fy: String(i.fy), sbc_kn_m2: String(i.sbc_kn_m2), seismic_zone: i.seismic_zone, foundation_depth_m: String(i.foundation_depth_m), live_load: String(i.live_load) }); }
     catch (e: any) { toast(e.message, "err"); }
   };
-  const dl = (kind: "pdf" | "cadpdf" | "dxf") => {
-    if (!sid) return toast("Save the structural design first (Save button)", "err");
-    const path = kind === "dxf" ? "dxf" : kind === "cadpdf" ? "pdf?style=cad" : "pdf";
-    downloadFile(`/api/structural/${sid.id}/${path}`, `${code}_Structural_v${sid.version}${kind === "cadpdf" ? "_CAD" : ""}.${kind === "dxf" ? "dxf" : "pdf"}`).catch((e) => toast(e.message, "err"));
+  // 1.13: downloads come from the design on the screen (saved or not), the whole set or one sheet
+  const dl = (kind: "pdf" | "cadpdf" | "dxf", page = "") => {
+    if (!saved) return toast("Save the floor plan first (Design → Save) – the structure is designed from a saved plan", "err");
+    const q = new URLSearchParams({ kind: kind === "dxf" ? "dxf" : "pdf", style: kind === "cadpdf" ? "cad" : "paper", ...(page ? { page } : {}) });
+    const tag = sid ? `v${sid.version}` : "draft";
+    const nm = page ? `Structural_${(prev[page]?.title || page).replace(/[^A-Za-z0-9]+/g, "_")}` : "Structural";
+    downloadPost(`/api/projects/${pid}/structural/export?${q}`, body(), `${code}_${nm}_${tag}${kind === "cadpdf" ? "_CAD" : ""}.${kind === "dxf" ? "dxf" : "pdf"}`)
+      .catch((e) => toast(e.message, "err"));
   };
   const set = (k: string) => (e: any) => setF({ ...f, [k]: e.target.value });
   const s = res?.summary;
@@ -90,8 +95,8 @@ export default function StructuralPanel({ pid, saved, dirty, code }: {
                 <div key={k} className="card p-3 text-center"><div className="text-xs text-slate-500">{k}</div><div className="text-xl font-extrabold text-navy-ink">{v}</div></div>
               ))}
             </div>
-            <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-xs text-red-800">
-              <b><TriangleAlert size={13} className="mr-1 inline" />PRELIMINARY DESIGN</b> – gravity loads only (IS 456). Must be checked and signed by a qualified structural engineer before construction.
+            <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+              <TriangleAlert size={13} className="mr-1 inline" />For your study and reference – gravity loads only (IS 456); wind / earthquake not included. (This note is only on screen, not on the drawings.)
               {res.warnings.length > 0 && <ul className="mt-1 ml-4 list-disc">{res.warnings.map((w: string) => <li key={w}>{w}</li>)}</ul>}
             </div>
             <Card title="Drawings" action={<div className="flex flex-wrap gap-2">
@@ -106,7 +111,13 @@ export default function StructuralPanel({ pid, saved, dirty, code }: {
               <div className={`overflow-auto rounded-lg border border-line p-2 ${cad ? "bg-black" : "bg-white"}`}>
                 <div className="mx-auto max-w-4xl" dangerouslySetInnerHTML={{ __html: prev[sheet]?.[cad ? "cad" : "paper"] || "" }} />
               </div>
-              {!sid && <p className="mt-2 text-xs text-amber-700">Preview only – press Save to download the PDF / DXF.</p>}
+              <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+                <span className="font-semibold text-slate-500">This sheet:</span>
+                <button className="btn-outline btn-sm" onClick={() => dl(cad ? "cadpdf" : "pdf", sheet)}><Download size={13} />PDF (A3)</button>
+                <button className="btn-outline btn-sm" onClick={() => savePng(prev[sheet]?.[cad ? "cad" : "paper"] || "", `${code}_${sheet.replace(/[^A-Za-z0-9]+/g, "_")}.png`, 3000, cad ? "#000000" : "#ffffff").catch((e) => toast(e.message, "err"))}><Download size={13} />PNG</button>
+                <button className="btn-ghost btn-sm" onClick={() => dl("pdf", "notes")}><Download size={13} />Notes &amp; quantities sheet</button>
+                {!sid && <span className="text-[11px] text-amber-700">Not saved – downloads are marked “draft”.</span>}
+              </div>
             </Card>
             <div className="grid gap-4 2xl:grid-cols-2">
               <Card title="Column Schedule">{tbl(["Mark", "Size (mm)", "Main bars", "Ties", "Pu (kN)", "Nos"], res.column_schedule.map((r: any) => [r.mark, `${r.b_mm} x ${r.D_mm}`, r.bars, r.ties, r.Pu_kn, r.count]))}</Card>

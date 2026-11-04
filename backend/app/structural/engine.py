@@ -443,9 +443,8 @@ def design(plan: dict, raw: dict) -> dict:
         f"Loads: live {inp['live_load']} kN/m² (roof {inp['roof_live_load']}), floor finish {inp['floor_finish']} kN/m², "
         f"masonry {inp['wall_density']} kN/m³, safe bearing capacity {sbc:g} kN/m² (given), foundation depth "
         f"{inp['foundation_depth_m']} m.",
-        "Gravity loads only (IS 456). Wind / earthquake analysis is not part of this preliminary design.",
+        "Gravity loads only (IS 456). Wind / earthquake (IS 875-3 / IS 1893) are not included in this design.",
         "Lap length 50 d (tension), development length 47 d (Fe500, M20). Hooks 135° for ties and stirrups.",
-        "PRELIMINARY DESIGN – to be checked and signed by a qualified structural engineer before construction.",
     ]
     return {
         "inputs": inp, "floor_height_m": round(H, 2), "levels": [lv["name"] for lv in plan["levels"]],

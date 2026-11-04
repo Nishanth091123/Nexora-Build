@@ -124,6 +124,25 @@ def bbs_export_file(bid: int, kind: str, user: User = Depends(get_current_user),
     return Response(data, media_type=mt, headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"})
 
 
+@router.post("/projects/{project_id}/bbs/export/{kind}")
+def bbs_export_unsaved(project_id: int, kind: str, body: BbsIn, user: User = Depends(get_current_user),
+                       db: Session = Depends(get_db)):
+    """1.13: download the schedule on the screen without saving it first."""
+    p = _need(db, user, project_id, "estimate", "design", "site")
+    res = _calc(body)
+    title = body.title.strip()[:200] or "BBS"
+    if kind == "excel":
+        data, mt, ext = bbs_export.to_excel(_proj(p), title, res), \
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx"
+    elif kind == "pdf":
+        data, mt, ext = bbs_export.to_pdf(_proj(p), title, res), "application/pdf", "pdf"
+    else:
+        raise HTTPException(404, "Use excel or pdf")
+    safe = re.sub(r"[^A-Za-z0-9_-]+", "_", title)[:40]
+    name = f"{p.code}_BBS_{safe}.{ext}"
+    return Response(data, media_type=mt, headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"})
+
+
 # ================================================================ plan approval checklist
 COMMON = [
     ("title_deed", "Sale deed / title document (copy)"),

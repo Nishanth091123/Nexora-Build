@@ -579,6 +579,41 @@ def _window_elev(d: Dwg, x0: float, x1: float, z: float, h: float, vent: bool):
     d.rect(x0 - 0.75, z + h - 0.1, x1 - x0 + 1.5, 0.45, "SHADOW", "#e4e4e7", 0)
 
 
+SEE_THROUGH = {"terrace", "balcony", "sitout", "parking", "portico", "open", "garden"}
+
+
+def front_openings(lv: dict) -> list[dict]:
+    """1.13: openings that are really seen from the road (front = smallest y): on a wall running along x,
+    with nothing enclosed between the road and the opening (parking / sit-out / balcony are open).
+    Internal doors near the front are NOT drawn any more (that was the window/door mix-up).
+    The same rule is used by the 3D model, so 2D elevation and 3D always match."""
+    rooms = lv.get("rooms", [])
+    out = []
+    for o in lv.get("openings", []):
+        if abs(o["y1"] - o["y2"]) > 0.01:
+            continue
+        if o["type"] not in ("window", "vent", "main_door", "door", "pooja_door", "toilet_door"):
+            continue
+        yo = o["y1"]
+        xm = (o["x1"] + o["x2"]) / 2
+        blocked = False
+        for r in rooms:
+            if r["x"] - 0.01 <= xm <= r["x"] + r["w"] + 0.01 and r["y"] + r["d"] <= yo + 0.01 and r["y"] < yo - 0.05:
+                if r["type"] not in SEE_THROUGH:
+                    blocked = True
+                    break
+        if blocked:
+            continue
+        # the room the opening belongs to must be BEHIND the wall (wall is its front face)
+        own = next((r for r in rooms if r["id"] == o.get("room")), None)
+        if own and abs(own["y"] - yo) > 0.05:
+            # the opening is on the room's far (back) wall – seen from the road only if that room is open
+            if own["type"] not in SEE_THROUGH and own["y"] < yo:
+                continue
+        out.append(o)
+    return out
+
+
 def front_elevation(plan: dict) -> Dwg:
     d = Dwg("Front Elevation")
     zs = _levels_z(plan)
@@ -605,21 +640,25 @@ def front_elevation(plan: dict) -> Dwg:
             d.rect(x0, z0, x1 - x0, z1 - z0 - SLAB, "OUTLINE", "#fafaf9")
         d.rect(x0 - 0.5, z1 - SLAB, x1 - x0 + 1.0, SLAB, "SLAB", "#a1a1aa")
         d.line(x0, z0 + 7.5, x1, z0 + 7.5, "HATCH")  # lintel band line
-        for o in lv.get("openings", []):
-            if o["y1"] != o["y2"] or o["y1"] > y0 + 6.01:
-                continue
+        for o in front_openings(lv):
             ox0, ox1 = min(o["x1"], o["x2"]), max(o["x1"], o["x2"])
             if o["type"] in ("window", "vent"):
                 sz = z0 + SILL[o["type"]]
                 _window_elev(d, ox0, ox1, sz, o["h"], o["type"] == "vent")
                 mz = sz - 1.0
-            elif o["type"] in ("main_door", "door"):
+            elif o["type"] == "main_door":
                 d.rect(ox0 - 0.25, z0, ox1 - ox0 + 0.5, o["h"] + 0.25, "DOOR", "#fde68a")
                 d.rect(ox0, z0, (ox1 - ox0) / 2, o["h"], "DOOR", "#d6b48a")
                 d.rect((ox0 + ox1) / 2, z0, (ox1 - ox0) / 2, o["h"], "DOOR", "#d6b48a")
                 for k in (0.25, 0.55):
                     d.rect(ox0 + 0.25, z0 + o["h"] * k, (ox1 - ox0) / 2 - 0.5, o["h"] * 0.22, "DOOR")
                     d.rect((ox0 + ox1) / 2 + 0.25, z0 + o["h"] * k, (ox1 - ox0) / 2 - 0.5, o["h"] * 0.22, "DOOR")
+                mz = z0 + o["h"] + 0.5
+            elif o["type"] in ("door", "pooja_door", "toilet_door"):  # single shutter
+                d.rect(ox0 - 0.2, z0, ox1 - ox0 + 0.4, o["h"] + 0.2, "DOOR", "#fde68a")
+                d.rect(ox0, z0, ox1 - ox0, o["h"], "DOOR", "#d6b48a")
+                for k in (0.2, 0.55):
+                    d.rect(ox0 + 0.3, z0 + o["h"] * k, ox1 - ox0 - 0.6, o["h"] * 0.25, "DOOR")
                 mz = z0 + o["h"] + 0.5
             else:
                 continue
@@ -1070,6 +1109,28 @@ def dwgs_dxf(dwgs: list, footer: str) -> bytes:
     return ("\r\n".join(out) + "\r\n").encode("ascii", "replace")
 
 
+def sheet_pages(plan: dict) -> dict:
+    """1.13: preview key -> page number (1-based) in sheet_set_pdf, so each sheet can be downloaded alone."""
+    n = len(plan["levels"])
+    return {"title": 1, "site": 2, **{f"plan_{i}": 3 + i for i in range(n)}, "elevation": 3 + n, "section": 4 + n,
+            "schedule": 5 + n}
+
+
+def pdf_pages(data: bytes, pages: list[int]) -> bytes:
+    """Keep only the given pages (1-based) of a PDF."""
+    from pypdf import PdfReader, PdfWriter
+    r = PdfReader(io.BytesIO(data))
+    w = PdfWriter()
+    for pg in pages:
+        if 1 <= pg <= len(r.pages):
+            w.add_page(r.pages[pg - 1])
+    if not len(w.pages):
+        raise ValueError("No such sheet")
+    out = io.BytesIO()
+    w.write(out)
+    return out.getvalue()
+
+
 def sheet_previews(plan: dict) -> dict:
     """SVG previews (paper and CAD-screen colours) + tables for the Design page."""
     sched = schedule(plan)
@@ -1080,4 +1141,5 @@ def sheet_previews(plan: dict) -> dict:
         "svgs": {k: to_svg(v) for k, v in dw.items()},
         "svgs_cad": {k: to_svg(v, style="cad") for k, v in dw.items()},
         "levels": [lv["name"] for lv in plan["levels"]],
+        "pages": sheet_pages(plan),
     }

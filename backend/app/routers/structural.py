@@ -66,6 +66,36 @@ def save(project_id: int, body: CalcIn, user: User = Depends(get_current_user), 
     return out(s, res, plan)
 
 
+@router.post("/projects/{project_id}/structural/export")
+def export_current(project_id: int, body: CalcIn, kind: str = "pdf", style: str = "paper", page: str = "",
+                   user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """1.13: download the structural design on the screen (saved or not) – whole set, one sheet (page=key) or DXF."""
+    from datetime import date as _date
+
+    from ..design.sheets import dwgs_dxf, pdf_pages
+    p = require_any(db, user, project_id, ("design",))
+    plan = recompute(_design(db, project_id, body.design_id).plan)
+    r = _run(plan, body.inputs)
+    meta = {"version": "draft", "date": _date.today().strftime("%d-%m-%Y")}
+    if kind == "dxf":
+        dw = [sheets.column_layout(r, plan), sheets.foundation_plan(r, plan), sheets.footing_detail(r), sheets.column_section(r),
+              sheets.beam_detail(r)] + [sheets.beam_layout(r, plan, l) for l in r["levels"]] + [sheets.slab_layout(r, plan, l) for l in r["levels"]]
+        data = dwgs_dxf(dw, f"{p.name} - structural")
+        return Response(data, media_type="application/dxf",
+                        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(p.code + '_Structural.dxf')}"})
+    st = "cad" if style == "cad" else "paper"
+    data = sheets.structural_pdf(r, plan, _proj(p, db), meta, st)
+    label = "Structural"
+    if page:
+        pages = sheets.sheet_pages(r)
+        if page not in pages:
+            raise HTTPException(400, "Unknown sheet")
+        data = pdf_pages(data, [pages[page]])
+        label = "Structural_" + "".join(ch if ch.isalnum() else "_" for ch in page)
+    name = f"{p.code}_{label}{'_CAD' if st == 'cad' else ''}.pdf"
+    return Response(data, media_type="application/pdf", headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"})
+
+
 @router.get("/projects/{project_id}/structural")
 def list_versions(project_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     require_any(db, user, project_id, ("design", "estimate"))
@@ -108,6 +138,6 @@ def dxf(sid: int, user: User = Depends(get_current_user), db: Session = Depends(
     r = s.result
     dw = [sheets.column_layout(r, plan), sheets.foundation_plan(r, plan), sheets.footing_detail(r), sheets.column_section(r),
           sheets.beam_detail(r)] + [sheets.beam_layout(r, plan, l) for l in r["levels"]] + [sheets.slab_layout(r, plan, l) for l in r["levels"]]
-    data = dwgs_dxf(dw, f"{p.name} - structural v{s.version} - PRELIMINARY")
+    data = dwgs_dxf(dw, f"{p.name} - structural v{s.version} - structural")
     name = f"{p.code}_Structural_v{s.version}.dxf"
     return Response(data, media_type="application/dxf", headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"})

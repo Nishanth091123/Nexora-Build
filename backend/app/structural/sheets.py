@@ -249,11 +249,6 @@ def structural_pdf(res: dict, plan: dict, project: dict, meta: dict, style: str 
             c.drawString(x + 3 * mm, yy - 3.5 * mm, lab)
             yy -= 20 * mm
             c.line(x, yy, W - M, yy)
-        c.setFillColor(colors.HexColor("#b91c1c"))
-        c.setFont("Helvetica-Bold", 8)
-        c.drawString(x + 3 * mm, M + 20 * mm, "PRELIMINARY DESIGN – NOT FOR CONSTRUCTION")
-        c.setFont("Helvetica", 7)
-        c.drawString(x + 3 * mm, M + 16 * mm, "until checked and signed by a qualified structural engineer.")
         c.setFont("Helvetica-Bold", 22)
         c.setFillColor(navy)
         c.drawRightString(W - M - 4 * mm, M + 2 * mm, no)
@@ -357,6 +352,16 @@ def structural_pdf(res: dict, plan: dict, project: dict, meta: dict, style: str 
     c.showPage()
     c.save()
     return buf.getvalue()
+
+
+def sheet_pages(res: dict) -> dict:
+    """1.13: preview key -> page (1-based) in structural_pdf."""
+    n = len(res["levels"])
+    out = {"columns": 1, "foundation": 2, "footing": 2, "column_sections": 3, "beam_detail": 4, "notes": 4 + 2 * n}
+    for i, lvn in enumerate(res["levels"]):
+        out[f"beams:{lvn}"] = 4 + i
+        out[f"slabs:{lvn}"] = 4 + n + i
+    return out
 
 
 def previews(res: dict, plan: dict) -> dict:

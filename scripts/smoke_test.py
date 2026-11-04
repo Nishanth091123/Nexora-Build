@@ -97,7 +97,7 @@ except httpx.ConnectError:
         sys.exit("[ERROR] Backend did not start in 2 minutes.")
 check("health", r.status_code == 200 and r.json().get("status") == "ok", r.text)
 _v = tuple(int(x) for x in (r.json().get("version", "0.0").split("-")[0].split(".") + ["0"])[:2] if x.isdigit())
-check("backend is the 1.12 version (not an old one still running)", _v >= (1, 12), r.text)
+check("backend is the 1.13 version (not an old one still running)", _v >= (1, 13), r.text)
 
 login = input("Owner username [nishanth_s]: ").strip() or "nishanth_s"
 pw = getpass.getpass("Owner password (hidden): ")
@@ -234,6 +234,12 @@ for fmt in ("bank", "client"):
 r = c.get(f"/api/estimates/{e18.get('id')}/excel")
 check("Excel has floor-wise BOQ", r.status_code == 200 and b"Floor-wise BOQ" in __import__("zipfile").ZipFile(__import__("io").BytesIO(r.content)).read("xl/workbook.xml"),
       r.text[:200] if r.status_code != 200 else "")
+# ---------------- 1.13: estimate download without saving + old estimates get the floor-wise BOQ ----------------
+for kind, magic in (("bank", b"%PDF"), ("excel", b"PK")):
+    r = c.post(f"/api/projects/{pid}/estimate/export?kind={kind}", json={"inputs": inp, "state": "Tamil Nadu"})
+    check(f"1.13 estimate {kind} download without saving", r.status_code == 200 and r.content[:len(magic)] == magic, r.text[:200] if r.status_code != 200 else "")
+r = c.get(f"/api/estimates/{eid}")
+check("1.13 saved estimate shows floor-wise BOQ + payment schedule", r.status_code == 200 and r.json()["result"].get("floor_boq") and r.json()["result"].get("payment_schedule"), r.text[:200])
 custom = [{"stage": "Advance", "pct": 20}, {"stage": "Structure", "pct": 50}, {"stage": "Finishing", "pct": 30}]
 r = c.post(f"/api/projects/{pid}/estimate/calculate", json={"inputs": {**inp, "payment_schedule": custom}, "state": "Tamil Nadu"})
 check("custom payment schedule", r.status_code == 200 and [x["pct"] for x in r.json()["payment_schedule"]] == [20, 50, 30], r.text[:200])
@@ -321,6 +327,17 @@ if plan:
         for path, magic in (("pdf", b"%PDF"), ("pdf?style=cad", b"%PDF"), ("dxf", b"SECTION")):
             r = c.get(f"/api/structural/{sd['id']}/{path}", timeout=180)
             check(f"structural {path}", r.status_code == 200 and magic in r.content[:200], r.text[:200] if r.status_code != 200 else "")
+    # ---------------- 1.13: downloads from the screen (no save), one sheet, 3D style ----------------
+    for q, magic in (("kind=plan_pdf", b"%PDF"), ("kind=sheets_pdf&page=elevation", b"%PDF"), ("kind=sheets_pdf&page=plan_0&style=cad", b"%PDF"), ("kind=sheets_dxf", b"SECTION")):
+        r = c.post(f"/api/projects/{pid}/design/export?{q}", json={"plan": plan}, timeout=180)
+        check(f"1.13 design download ({q})", r.status_code == 200 and magic in r.content[:200], r.text[:200] if r.status_code != 200 else "")
+    if sd.get("id"):
+        for q in ("kind=pdf&page=columns", "kind=pdf&page=notes", "kind=dxf"):
+            r = c.post(f"/api/projects/{pid}/structural/export?{q}", json={"design_id": d2, "inputs": {"sbc_kn_m2": 150, "seismic_zone": "III"}}, timeout=180)
+            check(f"1.13 structural download ({q})", r.status_code == 200 and (b"%PDF" in r.content[:10] or b"SECTION" in r.content[:200]), r.text[:200] if r.status_code != 200 else "")
+    p4 = json.loads(json.dumps(plan)); p4["finishes"] = {"style": "traditional", "ext": "#f2deb0"}
+    r = c.post(f"/api/projects/{pid}/designs", json={"plan": p4, "title": "SMOKE 3D style"})
+    check("1.13 3D elevation style saved", r.status_code == 200 and (r.json().get("plan") or {}).get("finishes", {}).get("style") == "traditional", r.text[:200])
     r = c.get(f"/api/projects/{pid}/project-pdf?design_id={d2}", timeout=180)
     check("one complete PDF (drawings + estimate)", r.status_code == 200 and r.content[:4] == b"%PDF" and r.content.count(b"/Type /Page") > 8,
           r.text[:200] if r.status_code != 200 else "")
@@ -355,6 +372,8 @@ if plan and d2:
             check("vastu analysis", ok, r.text[:300])
             r = c.post(f"/api/projects/{pid}/vastu/apply", json={"design_id": up["id"]})
             check("vastu apply suggestions", r.status_code == 200 and "after" in r.json(), r.text[:200])
+            r = c.post(f"/api/projects/{pid}/vastu/report-pdf", json={"design_id": up["id"], "north_deg": 90})
+            check("1.13 vastu report download without saving", r.status_code == 200 and r.content[:4] == b"%PDF", r.text[:200] if r.status_code != 200 else "")
             r = c.post(f"/api/projects/{pid}/vastu/reports", json={"design_id": up["id"], "north_deg": 90})
             rid = r.json().get("id") if r.status_code == 200 else None
             check("vastu report saved", bool(rid), r.text[:200])
@@ -500,6 +519,8 @@ check("BBS asks for missing sizes", r.status_code == 422 and "questions" in r.te
 r = c.post(f"/api/projects/{pid}/bbs", json={"title": "SMOKE BBS", "members": [col]})
 bb = r.json() if r.status_code == 200 else {}
 check("BBS saved", bb.get("total_kg", 0) > 0, r.text[:200])
+r = c.post(f"/api/projects/{pid}/bbs/export/excel", json={"title": "SMOKE BBS", "members": [col]})
+check("1.13 BBS download without saving", r.status_code == 200 and r.content[:2] == b"PK", r.text[:200] if r.status_code != 200 else "")
 r = c.get(f"/api/bbs/{bb.get('id')}/pdf")
 check("BBS PDF with drawings", r.status_code == 200 and r.content[:4] == b"%PDF", r.text[:200] if r.status_code != 200 else "")
 r = c.get(f"/api/bbs/{bb.get('id')}/excel")
@@ -595,6 +616,9 @@ check("too many rooms -> options offered", r.status_code == 422 and "suggestions
 # ---------------- 1.8: Clients & Projects (owner only) ----------------
 r = c.get("/api/settings/company")
 check("company name + proprietor", r.status_code == 200 and "proprietor" in r.json(), r.text[:200])
+r = c.get("/api/clients/where")
+check("1.13 clients kept on this PC", r.status_code == 200 and r.json().get("local") is True, r.text[:200])
+st0 = c.get("/api/clients/stats").json().get("projects", -1)
 r = c.post("/api/clients", json={"name": "SMOKE CLIENT", "phone": "90000 00001", "location": "Thiruvarur"})
 cl = r.json() if r.status_code == 200 else {}
 check("client created", str(cl.get("code", "")).startswith("C-"), r.text[:200])
@@ -613,9 +637,15 @@ if cl.get("id"):
     check("project note added", r.status_code == 200, r.text[:200])
     r = c.get("/api/clients/stats")
     check("client stats", r.status_code == 200 and r.json().get("clients", 0) >= 1, r.text[:200])
-    r = c.post(f"/api/trash/client/{cl['id']}")
+    check("1.13 total projects ignore the test project", r.json().get("projects") == st0, f"{st0} -> {r.json().get('projects')}")
+    docs = c.get(f"/api/clients/{cl['id']}").json().get("documents", [])
+    if docs:
+        r = c.get(docs[0]["url"])
+        check("1.13 client document download (PC)", r.status_code == 200 and r.content[:4] == b"%PDF", r.text[:120])
+    r = c.delete(f"/api/clients/{cl['id']}")
     check("client to Recycle Bin", r.status_code == 200, r.text[:200])
-    CLEANUP.append({"entity": "client", "id": cl["id"]})  # cleaned up at the end, in one go
+    r = c.post("/api/clients/bin/purge", json={"kind": "client", "id": cl["id"]})
+    check("1.13 client deleted permanently (local backup first)", r.status_code == 200 and r.json().get("backup"), r.text[:200])
 was = c.get("/api/owner-only").json().get("modules", [])
 r = c.put("/api/owner-only", json={"modules": sorted(set(was) | {"vastu"})})
 check("owner-only module switch", r.status_code == 200 and "vastu" in r.json()["modules"], r.text[:200])
@@ -639,4 +669,4 @@ if fail:
     print("Failed:", ", ".join(fail), "\nSend this output to Claude.")
     sys.exit(1)
 else:
-    print("NEXORA 1.12 API: ALL GOOD")
+    print("NEXORA 1.13 API: ALL GOOD")

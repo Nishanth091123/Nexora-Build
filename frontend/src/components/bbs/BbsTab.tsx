@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Calculator, Download, FileSpreadsheet, Plus, Save, Trash2, TriangleAlert, X } from "lucide-react";
 import { Badge, Card, Empty, toast } from "../ui";
 import OwnerDelete from "../OwnerDelete";
-import { api, ApiError, downloadFile, num } from "../../lib/api";
+import { api, ApiError, downloadPost, num } from "../../lib/api";
 
 type Bars = { dia: number | string; nos: number | string }[];
 type Member = Record<string, any> & { type: string; mark: string };
@@ -211,10 +211,10 @@ export default function BbsTab({ pid, code }: { pid: number; code: string }) {
       {res && (
         <>
           <Card title={`Schedule – ${num(res.total_kg, 0)} kg steel (with ${res.wastage_pct}% wastage)`} icon={<FileSpreadsheet size={20} />}
-            action={id ? <div className="flex gap-2">
-              <button className="btn-outline btn-sm" onClick={() => downloadFile(`/api/bbs/${id}/excel`, `${code}_BBS.xlsx`).catch((e) => toast(e.message, "err"))}><FileSpreadsheet size={14} />Excel</button>
-              <button className="btn-outline btn-sm" onClick={() => downloadFile(`/api/bbs/${id}/pdf`, `${code}_BBS.pdf`).catch((e) => toast(e.message, "err"))}><Download size={14} />PDF (with drawings)</button>
-            </div> : <span className="text-xs text-slate-500">Save to download Excel / PDF</span>}>
+            action={<div className="flex gap-2">
+              <button className="btn-outline btn-sm" onClick={() => downloadPost(`/api/projects/${pid}/bbs/export/excel`, body(), `${code}_BBS.xlsx`).catch((e) => toast(e.message, "err"))}><FileSpreadsheet size={14} />Excel</button>
+              <button className="btn-outline btn-sm" onClick={() => downloadPost(`/api/projects/${pid}/bbs/export/pdf`, body(), `${code}_BBS.pdf`).catch((e) => toast(e.message, "err"))}><Download size={14} />PDF (with drawings)</button>
+            </div>}>
             <div className="overflow-x-auto rounded-lg border border-line">
               <table className="w-full min-w-[860px]">
                 <thead><tr>{["Mark", "Description", "Shape", "Dia", "Nos/member", "Members", "Total nos", "Cut length (mm)", "Total (m)", "Weight (kg)"].map((h) => <th key={h} className="table-th">{h}</th>)}</tr></thead>

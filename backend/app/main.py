@@ -28,9 +28,14 @@ async def lifespan(app: FastAPI):
         try:
             n = clients.link_existing_clients(db)
             if n:
-                log.info("Linked %d project(s) to client records", n)
+                log.info("Clients: %d record(s) moved to this PC / linked", n)
         except Exception as e:  # never stop the app for this
             log.warning("client link skipped: %s", e)
+        try:
+            from .local_clients import daily_backup
+            daily_backup()
+        except Exception as e:
+            log.warning("client backup skipped: %s", e)
     start_auto_backups()
     start_alerts()
     log.info("Ready. Storage backend: %s", storage.name)
@@ -103,4 +108,6 @@ def root():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "app": config.APP_NAME, "version": config.APP_VERSION, "storage": storage.name}
+    from .local_clients import ONLINE
+    return {"status": "ok", "app": config.APP_NAME, "version": config.APP_VERSION, "storage": storage.name,
+            "clients": "off" if ONLINE else "pc"}
