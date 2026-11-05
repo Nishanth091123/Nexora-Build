@@ -92,39 +92,55 @@ def masters(level: dict) -> set:
     return set()
 
 
-def analyse(plan: dict) -> dict:
+def analyse(plan: dict, site: dict | None = None, rules: dict | None = None, lang: str = "en") -> dict:
+    """1.16: floor-wise scores, 8 + 16 zones, main door 32-pada, site / fixture checks (asked when unknown),
+    remedies, owner's own rules and Tamil text (lang="ta")."""
+    from . import more as M
+    ta = lang == "ta"
+    tr = (lambda en, t: t if ta else en)
+    zn = (lambda z: M.ZONE_TA.get(z, z) if ta else ZONE_NAME.get(z, z))
     comp = plan["compass"]
     bw, bd = plan["building"]["w"], plan["building"]["d"]
+    RL = M.effective_rules(RULES, rules)
     rooms_out, checks = [], []
     zone_rooms: dict[str, list[str]] = {}
+    zones16: list[dict] = []
     master_done = False
+
+    def room_msg(status, z, good):
+        best = " / ".join(zn(g) for g in sorted(good, key=lambda q: (ZONES + ["C"]).index(q)))
+        if ta:
+            return {"matched": f"{zn(z)} – நல்ல இடம்", "partly": f"{zn(z)} – பரவாயில்லை; {best} சிறந்தது",
+                    "not_matched": f"{zn(z)} – தவிர்க்கவும்; {best} பரிந்துரை"}[status], best
+        return {"matched": f"{ZONE_NAME[z]} – good placement", "partly": f"{ZONE_NAME[z]} – acceptable; {best} is better",
+                "not_matched": f"{ZONE_NAME[z]} – avoid; {best} preferred"}[status], best
+
     for li, lv in enumerate(plan["levels"]):
         mids = masters(lv) if not master_done else set()
         if mids:
             master_done = True
         for r in lv["rooms"]:
-            z = zone_of(comp, bw, bd, r["x"] + r["w"] / 2, r["y"] + r["d"] / 2)
+            cx, cy = r["x"] + r["w"] / 2, r["y"] + r["d"] / 2
+            z = zone_of(comp, bw, bd, cx, cy)
+            z16 = M.zone16_of(comp, bw, bd, cx, cy)
             kind = _room_kind(r, mids)
             rooms_out.append({"id": r["id"], "level": li, "level_name": lv["name"], "name": r["name"], "type": r["type"],
-                              "kind": kind, "zone": z, "zone_name": ZONE_NAME[z]})
+                              "kind": kind, "zone": z, "zone_name": zn(z), "zone16": z16})
+            zones16.append({"level": li, "room": r["name"], "zone16": z16})
             zone_rooms.setdefault(z, []).append(r["name"] if li == 0 else f"{r['name']} ({lv['name']})")
-            for key, title, types, good, ok, bad, why in RULES:
+            for key, title, types, good, ok, bad, why in RL:
                 if kind not in types:
                     continue
-                if z in good:
-                    status = "matched"
-                elif z in bad:
-                    status = "not_matched"
-                else:
-                    status = "partly"
-                best = " / ".join(ZONE_NAME[g] for g in sorted(good, key=ZONES.index))
-                msg = ({"matched": f"{ZONE_NAME[z]} – good placement",
-                        "partly": f"{ZONE_NAME[z]} – acceptable; {best} is better",
-                        "not_matched": f"{ZONE_NAME[z]} – avoid; {best} preferred"}[status])
-                checks.append({"rule": key, "title": title, "room": r["name"], "room_id": r["id"], "level": li,
-                               "level_name": lv["name"], "zone": z, "status": status, "message": msg, "why": why,
-                               "suggest_zones": sorted(good, key=ZONES.index)})
-    # entrance – the main door on the ground floor
+                status = "matched" if z in good else "not_matched" if z in bad else "partly"
+                msg, best = room_msg(status, z, good)
+                checks.append({"rule": key, "title": tr(title, M.TITLE_TA.get(key, title)), "room": r["name"], "room_id": r["id"],
+                               "level": li, "level_name": lv["name"], "zone": z, "zone16": z16, "status": status,
+                               "message": msg, "why": tr(why, M.WHY_TA.get(key, why)),
+                               "current": zn(z), "better": "" if status == "matched" else best,
+                               "remedy": "" if status == "matched" else tr(*M.REMEDY[key]),
+                               "suggest_zones": sorted(good, key=lambda q: (ZONES + ["C"]).index(q))})
+    # entrance – the main door on the ground floor + its pada
+    door = None
     for li, lv in enumerate(plan["levels"]):
         doors = [o for o in lv.get("openings", []) if o["type"] == "main_door"]
         if doors:
@@ -133,7 +149,6 @@ def analyse(plan: dict) -> dict:
             room = next((r for r in lv["rooms"] if r["id"] == o["room"]), None)
             rcx = room["x"] + room["w"] / 2 if room else bw / 2
             rcy = room["y"] + room["d"] / 2 if room else bd / 2
-            # the door faces away from the room it opens into
             if o["y1"] == o["y2"]:
                 nx, ny = 0.0, (-1.0 if rcy > cy else 1.0)
             else:
@@ -142,82 +157,132 @@ def analyse(plan: dict) -> dict:
             z = ZONES[int(((b + 22.5) % 360) // 45)]
             key, title, good, ok, bad, why = ENTRANCE
             status = "matched" if z in good else "not_matched" if z in bad else "partly"
-            msg = {"matched": f"Faces {ZONE_NAME[z]} – auspicious",
-                   "partly": f"Faces {ZONE_NAME[z]} – acceptable (choose the right pada)",
-                   "not_matched": f"Faces {ZONE_NAME[z]} – avoid; North/East preferred"}[status]
-            checks.insert(0, {"rule": key, "title": title, "room": "Main door", "room_id": o["room"], "level": li,
-                              "level_name": lv["name"], "zone": z, "status": status, "message": msg, "why": why,
-                              "suggest_zones": ["N", "NE", "E"]})
+            msg = tr({"matched": f"Faces {ZONE_NAME[z]} – auspicious",
+                      "partly": f"Faces {ZONE_NAME[z]} – acceptable (choose the right pada)",
+                      "not_matched": f"Faces {ZONE_NAME[z]} – avoid; North/East preferred"}[status],
+                     {"matched": f"{zn(z)} நோக்கி – சுபம்", "partly": f"{zn(z)} நோக்கி – பரவாயில்லை (சரியான பதம் தேர்வு செய்யவும்)",
+                      "not_matched": f"{zn(z)} நோக்கி – தவிர்க்கவும்; வடக்கு / கிழக்கு சிறந்தது"}[status])
+            checks.insert(0, {"rule": key, "title": tr(title, M.TITLE_TA[key]), "room": tr("Main door", "முதன்மை வாசல்"),
+                              "room_id": o["room"], "level": li, "level_name": lv["name"], "zone": z, "status": status,
+                              "message": msg, "why": tr(why, M.WHY_TA[key]), "current": zn(z),
+                              "better": "" if status == "matched" else tr("North / East / North-East", "வடக்கு / கிழக்கு / வடகிழக்கு"),
+                              "remedy": "" if status == "matched" else tr(*M.REMEDY[key]), "suggest_zones": ["N", "NE", "E"]})
+            door = M.door_pada(plan, o, nx, ny, lang)
+            checks.insert(1, {"rule": "door_pada", "title": tr("Main door pada (32 padas)", M.TITLE_TA["door_pada"]),
+                              "room": f"{door['code']} {door['name']}", "room_id": o["room"], "level": li,
+                              "level_name": lv["name"], "zone": "", "status": door["status"], "message": door["advice"],
+                              "why": tr("Each side is divided into 8 padas; N3-N4, E3-E4, S3-S4, W3-W4 are preferred for the door.",
+                                        "ஒவ்வொரு பக்கமும் 8 பதங்கள்; N3-N4, E3-E4, S3-S4, W3-W4 வாசலுக்கு சிறந்தவை."),
+                              "current": f"{door['code']} {door['name']}",
+                              "better": "" if door["status"] == "matched" else door["target"],
+                              "remedy": "" if door["status"] == "matched" else tr(*M.REMEDY["door_pada"]), "suggest_zones": []})
             break
-    # zone rules (whole building, ground floor)
-    g0 = [r for r in rooms_out if r["level"] == 0]
-    centre_bad = [r["name"] for r in g0 if r["zone"] == "C" and r["type"] in ("toilet", "common_toilet", "stair", "kitchen")]
-    checks.append({"rule": "brahmasthan", "title": "Centre (Brahmasthan)", "room": ", ".join(centre_bad) or "—",
-                   "room_id": None, "level": 0, "level_name": plan["levels"][0]["name"], "zone": "C",
-                   "status": "not_matched" if centre_bad else "matched",
-                   "message": (f"{', '.join(centre_bad)} in the centre – keep it open" if centre_bad
-                               else "Centre is free of toilet / staircase / kitchen"),
-                   "why": "The Brahmasthan should stay open and light.", "suggest_zones": []})
-    ne_bad = [r["name"] for r in g0 if r["zone"] == "NE" and r["type"] in ("toilet", "common_toilet", "stair", "kitchen", "store")]
-    checks.append({"rule": "ne_light", "title": "North-East kept light", "room": ", ".join(ne_bad) or "—", "room_id": None,
-                   "level": 0, "level_name": plan["levels"][0]["name"], "zone": "NE",
-                   "status": "not_matched" if ne_bad else "matched",
-                   "message": (f"{', '.join(ne_bad)} in North-East – move if possible" if ne_bad
-                               else "No toilet / staircase / kitchen / store in North-East"),
-                   "why": "North-East (Eesanya) should be the lightest, cleanest part.", "suggest_zones": []})
-    sw = [r for r in g0 if r["zone"] == "SW"]
-    sw_heavy = [r["name"] for r in sw if r["kind"] in ("master", "bedroom", "stair", "store")]
-    sw_bad = [r["name"] for r in sw if r["type"] in ("toilet", "common_toilet", "kitchen", "terrace", "sitout", "parking")]
-    checks.append({"rule": "sw_heavy", "title": "South-West kept heavy", "room": ", ".join(sw_heavy or sw_bad) or "—",
-                   "room_id": None, "level": 0, "level_name": plan["levels"][0]["name"], "zone": "SW",
-                   "status": "not_matched" if sw_bad and not sw_heavy else "matched" if sw_heavy else "partly",
-                   "message": (f"{', '.join(sw_heavy)} in South-West – good" if sw_heavy
-                               else f"{', '.join(sw_bad)} in South-West – better a bedroom or staircase" if sw_bad
-                               else "South-West has no heavy room"),
-                   "why": "South-West should carry the heaviest rooms.", "suggest_zones": []})
-    checks.append({"rule": "shape", "title": "Plot & building shape", "room": "—", "room_id": None, "level": 0,
-                   "level_name": "", "zone": "", "status": "matched",
-                   "message": "Rectangular plot and building – good",
-                   "why": "Square / rectangular plots are preferred.", "suggest_zones": []})
+    # whole-building zone rules – checked on EVERY floor (1.16 floor-wise)
+    for li, lv in enumerate(plan["levels"]):
+        g0 = [r for r in rooms_out if r["level"] == li]
+        centre_bad = [r["name"] for r in g0 if r["zone"] == "C" and r["type"] in ("toilet", "common_toilet", "stair", "kitchen")]
+        st = "not_matched" if centre_bad else "matched"
+        checks.append({"rule": "brahmasthan", "title": tr("Centre (Brahmasthan)", M.TITLE_TA["brahmasthan"]),
+                       "room": ", ".join(centre_bad) or "—", "room_id": None, "level": li, "level_name": lv["name"], "zone": "C",
+                       "status": st, "message": (tr(f"{', '.join(centre_bad)} in the centre – keep it open",
+                                                    f"{', '.join(centre_bad)} மையத்தில் – திறந்து வைக்கவும்") if centre_bad
+                                                 else tr("Centre is free of toilet / staircase / kitchen",
+                                                         "மையத்தில் கழிவறை / படிக்கட்டு / சமையலறை இல்லை")),
+                       "why": tr("The Brahmasthan should stay open and light.", M.WHY_TA["brahmasthan"]),
+                       "current": tr("Centre", "மையம்"), "better": tr("Keep open", "திறந்து வைக்கவும்") if centre_bad else "",
+                       "remedy": tr(*M.REMEDY["brahmasthan"]) if centre_bad else "", "suggest_zones": []})
+        ne_bad = [r["name"] for r in g0 if r["zone"] == "NE" and r["type"] in ("toilet", "common_toilet", "stair", "kitchen", "store")]
+        checks.append({"rule": "ne_light", "title": tr("North-East kept light", M.TITLE_TA["ne_light"]),
+                       "room": ", ".join(ne_bad) or "—", "room_id": None, "level": li, "level_name": lv["name"], "zone": "NE",
+                       "status": "not_matched" if ne_bad else "matched",
+                       "message": (tr(f"{', '.join(ne_bad)} in North-East – move if possible", f"{', '.join(ne_bad)} வடகிழக்கில் – முடிந்தால் மாற்றவும்")
+                                   if ne_bad else tr("No toilet / staircase / kitchen / store in North-East",
+                                                     "வடகிழக்கில் கழிவறை / படிக்கட்டு / சமையலறை / ஸ்டோர் இல்லை")),
+                       "why": tr("North-East (Eesanya) should be the lightest, cleanest part.", M.WHY_TA["ne_light"]),
+                       "current": zn("NE"), "better": tr("Light / open use", "இலேசான பயன்பாடு") if ne_bad else "",
+                       "remedy": tr(*M.REMEDY["ne_light"]) if ne_bad else "", "suggest_zones": []})
+        sw = [r for r in g0 if r["zone"] == "SW"]
+        sw_heavy = [r["name"] for r in sw if r["kind"] in ("master", "bedroom", "stair", "store")]
+        sw_bad = [r["name"] for r in sw if r["type"] in ("toilet", "common_toilet", "kitchen", "terrace", "sitout", "parking")]
+        st = "not_matched" if sw_bad and not sw_heavy else "matched" if sw_heavy else "partly"
+        checks.append({"rule": "sw_heavy", "title": tr("South-West kept heavy", M.TITLE_TA["sw_heavy"]),
+                       "room": ", ".join(sw_heavy or sw_bad) or "—", "room_id": None, "level": li, "level_name": lv["name"],
+                       "zone": "SW", "status": st,
+                       "message": (tr(f"{', '.join(sw_heavy)} in South-West – good", f"{', '.join(sw_heavy)} தென்மேற்கில் – நல்லது") if sw_heavy
+                                   else tr(f"{', '.join(sw_bad)} in South-West – better a bedroom or staircase",
+                                           f"{', '.join(sw_bad)} தென்மேற்கில் – படுக்கையறை / படிக்கட்டு சிறந்தது") if sw_bad
+                                   else tr("South-West has no heavy room", "தென்மேற்கில் கனமான அறை இல்லை")),
+                       "why": tr("South-West should carry the heaviest rooms.", M.WHY_TA["sw_heavy"]),
+                       "current": zn("SW"), "better": tr("Bedroom / staircase / store", "படுக்கையறை / படிக்கட்டு / ஸ்டோர்") if st != "matched" else "",
+                       "remedy": tr(*M.REMEDY["sw_heavy"]) if st != "matched" else "", "suggest_zones": []})
+    # site / fixtures (asked when not known – never guessed)
+    sc, questions = M.site_checks(plan, site or {}, lang)
+    checks += sc
+    if not any(c["rule"] == "plot_shape" for c in checks):
+        checks.append({"rule": "shape", "title": tr("Building shape", "கட்டட வடிவம்"), "room": "—", "room_id": None, "level": 0,
+                       "level_name": "", "zone": "", "status": "matched",
+                       "message": tr("Rectangular building – good", "செவ்வக கட்டடம் – நல்லது"),
+                       "why": tr("Square / rectangular shapes are preferred.", M.WHY_TA["shape"]), "current": "", "better": "",
+                       "remedy": "", "suggest_zones": []})
 
     matched = sum(1 for c in checks if c["status"] == "matched")
     partly = sum(1 for c in checks if c["status"] == "partly")
     total = len(checks)
-    # direction overview
     overview = {}
     for side, zones in SIDES.items():
         cs = [c for c in checks if c["zone"] in zones and c["rule"] not in ("shape",)]
         bad = sum(1 for c in cs if c["status"] == "not_matched")
         good = sum(1 for c in cs if c["status"] == "matched")
-        if bad and bad >= good:
-            st = "Needs Attention"
-        elif bad or any(c["status"] == "partly" for c in cs):
-            st = "Good"
-        else:
-            st = "Excellent"
+        st = "Needs Attention" if bad and bad >= good else "Good" if bad or any(c["status"] == "partly" for c in cs) else "Excellent"
         overview[side] = {"status": st, "matched": good, "not_matched": bad,
                           "rooms": [n for z in zones for n in zone_rooms.get(z, [])][:8]}
-    # suggestions
+    floors = []
+    for li, lv in enumerate(plan["levels"]):
+        cs = [c for c in checks if c["level"] == li]
+        floors.append({"level": li, "name": lv["name"], "score": M.score_of(cs), "matched": sum(1 for c in cs if c["status"] == "matched"),
+                       "partly": sum(1 for c in cs if c["status"] == "partly"),
+                       "not_matched": sum(1 for c in cs if c["status"] == "not_matched"), "total": len(cs)})
+    cs = [c for c in checks if c["level"] == -1]
+    if cs:
+        floors.append({"level": -1, "name": tr("Site & fixtures", "மனை & பொருத்தங்கள்"), "score": M.score_of(cs),
+                       "matched": sum(1 for c in cs if c["status"] == "matched"), "partly": sum(1 for c in cs if c["status"] == "partly"),
+                       "not_matched": sum(1 for c in cs if c["status"] == "not_matched"), "total": len(cs)})
     suggestions = []
     for c in checks:
         if c["status"] == "not_matched":
             if c["suggest_zones"]:
-                suggestions.append(f"{c['title']}: move {c['room']} ({c['level_name']}) towards "
-                                   f"{' / '.join(ZONE_NAME[z] for z in c['suggest_zones'])} – now {ZONE_NAME.get(c['zone'], c['zone'])}.")
+                suggestions.append(tr(f"{c['title']}: move {c['room']} ({c['level_name']}) towards "
+                                      f"{' / '.join(ZONE_NAME[z] for z in c['suggest_zones'])} – now {ZONE_NAME.get(c['zone'], c['zone'])}.",
+                                      f"{c['title']}: {c['room']} ({c['level_name']}) – {' / '.join(zn(z) for z in c['suggest_zones'])} பக்கம் மாற்றவும் "
+                                      f"(இப்போது {zn(c['zone'])})."))
             else:
                 suggestions.append(f"{c['title']}: {c['message']}.")
     for c in checks:
         if c["status"] == "partly" and c["suggest_zones"]:
-            suggestions.append(f"{c['title']}: {c['room']} is acceptable in {ZONE_NAME.get(c['zone'], c['zone'])}; "
-                               f"{' / '.join(ZONE_NAME[z] for z in c['suggest_zones'])} is better if you can.")
-    label = ("Most rules matched" if matched >= total * 0.75 else
-             "Many rules matched – some improvements possible" if matched >= total * 0.5 else
-             "Several rules not matched – see suggestions")
-    return {"checks": checks, "rooms": rooms_out, "overview": overview, "zones": {z: zone_rooms.get(z, []) for z in ZONES + ["C"]},
+            suggestions.append(tr(f"{c['title']}: {c['room']} is acceptable in {ZONE_NAME.get(c['zone'], c['zone'])}; "
+                                  f"{' / '.join(ZONE_NAME[z] for z in c['suggest_zones'])} is better if you can.",
+                                  f"{c['title']}: {c['room']} {zn(c['zone'])}-இல் பரவாயில்லை; முடிந்தால் "
+                                  f"{' / '.join(zn(z) for z in c['suggest_zones'])} சிறந்தது."))
+    label = (tr("Most rules matched", "பெரும்பாலான விதிகள் பொருந்துகின்றன") if matched >= total * 0.75 else
+             tr("Many rules matched – some improvements possible", "பல விதிகள் பொருந்துகின்றன – சில மேம்பாடுகள் சாத்தியம்") if matched >= total * 0.5 else
+             tr("Several rules not matched – see suggestions", "பல விதிகள் பொருந்தவில்லை – பரிந்துரைகளை பார்க்கவும்"))
+    tips_ta = ["வடகிழக்கு மூலையை இலேசாக, சுத்தமாக, திறந்து வைக்கவும் (கனமான பொருள், கழிவறை, படிக்கட்டு வேண்டாம்).",
+               "மேல்நிலை தண்ணீர் தொட்டியை கூரையின் தென்மேற்கில் வைக்கவும்.",
+               "சம்ப் / ஆழ்துளை கிணறு வடகிழக்கில்; செப்டிக் தொட்டி வடமேற்கில்.",
+               "தரையும் மனையும் வடக்கு / கிழக்கு / வடகிழக்கு நோக்கி சற்று சரிவாக இருக்கட்டும்.",
+               "வீட்டின் மையம் (பிரம்மஸ்தானம்) திறந்து இருக்கட்டும் – தூண், கழிவறை, படிக்கட்டு வேண்டாம்.",
+               "வடக்கு, கிழக்கு சுவர்களில் அதிக ஜன்னல்கள் – வெளிச்சமும் காற்றும்."]
+    return {"checks": checks, "rooms": rooms_out, "overview": overview, "overview8": M.overview8(checks),
+            "zones": {z: zone_rooms.get(z, []) for z in ZONES + ["C"]},
+            "zones16": zones16, "zone16_use": M.ZONE16_USE, "zone16_names": M.ZONE16_TA if ta else M.ZONE16_NAME,
+            "mandala": M.mandala_lines(plan), "door": door, "floors": floors, "score": M.score_of(checks),
+            "questions": questions, "lang": lang,
             "summary": {"matched": matched, "partly": partly, "not_matched": total - matched - partly, "total": total,
-                        "label": label},
-            "suggestions": suggestions, "tips": TIPS, "north_deg": plan.get("north_deg", north_of(comp)), "facing": plan.get("facing"),
-            "note": "Vastu guidance is traditional advice, not a building rule – structural safety and TNCDBR come first."}
+                        "label": label, "score": M.score_of(checks)},
+            "suggestions": suggestions, "tips": tips_ta if ta else TIPS,
+            "north_deg": plan.get("north_deg", north_of(comp)), "facing": plan.get("facing"),
+            "note": tr("Vastu guidance is traditional advice, not a building rule – structural safety and TNCDBR come first.",
+                       "வாஸ்து என்பது பாரம்பரிய வழிகாட்டல், கட்டட விதி அல்ல – கட்டமைப்பு பாதுகாப்பும் TNCDBR விதிகளும் முதன்மை.")}
 
 
 # ---------------------------------------------------------------- apply suggestions (designs only)
@@ -237,12 +302,13 @@ def _fits(r: dict, w: float, d: float) -> bool:
     return min(w, d) >= side - 0.01 and w * d >= area - 0.5
 
 
-def improve(plan: dict, max_steps: int = 6) -> dict:
+def improve(plan: dict, max_steps: int = 6, **kw) -> dict:
     """Swap whole rooms (same floor, no attached toilet / dress) when it improves the Vastu result."""
     import copy
 
     from ..design.geometry import add_openings
     p = copy.deepcopy(plan)
+    analyse = (lambda q: _analyse(q, kw.get("site"), kw.get("rules")))
     before = analyse(p)
     base = _score(before)
     changes = []
@@ -366,11 +432,14 @@ def _replan(plan: dict) -> dict:
     return _bare(p)
 
 
-def best_for_vastu(plan: dict) -> dict:
+_analyse = analyse  # (improve() binds the user's site answers / own rules around it)
+
+
+def best_for_vastu(plan: dict, **kw) -> dict:
     """Try: room swaps on the plan as it is, on its mirror image, on a fresh layout of the same rooms in the same
     building outline, and on that layout's mirror. Return the one that follows Vastu best (never a worse one)."""
-    before = analyse(plan)
-    base = improve(plan)
+    before = analyse(plan, kw.get("site"), kw.get("rules"))
+    base = improve(plan, **kw)
     best, best_score, how = base, _score(base["result"]), None
     tries = [("Rooms mirrored left ↔ right (same sizes, same road side)", lambda: _mirror(plan))]
     try:
@@ -381,7 +450,7 @@ def best_for_vastu(plan: dict) -> dict:
         pass
     for label, make in tries:
         try:
-            cand = improve(make())
+            cand = improve(make(), **kw)
         except Exception:
             continue
         sc = _score(cand["result"])
@@ -394,3 +463,33 @@ def best_for_vastu(plan: dict) -> dict:
         best["plan"].setdefault("notes", [])
         best["plan"]["notes"] = best["plan"]["notes"] + [f"Vastu: {how}"]
     return best
+
+
+def options_for_vastu(plan: dict, **kw) -> dict:
+    """1.16: up to 3 improved plan options (with scores) to compare side by side. Nothing is saved here."""
+    from . import more as M
+    cur = analyse(plan, kw.get("site"), kw.get("rules"))
+    cands = [("Rooms swapped (same layout)", lambda: plan),
+             ("Rooms mirrored left ↔ right", lambda: _mirror(plan))]
+    try:
+        fresh = _replan(plan)
+        cands += [("New room arrangement", lambda: fresh), ("New room arrangement, mirrored", lambda: _mirror(fresh))]
+    except Exception:
+        pass
+    seen, out = {tuple((r["id"], round(r["x"], 1), round(r["y"], 1)) for lv in plan["levels"] for r in lv["rooms"])}, []
+    for label, make in cands:
+        try:
+            c = improve(make(), **kw)
+        except Exception:
+            continue
+        sig = tuple((r["id"], round(r["x"], 1), round(r["y"], 1)) for lv in c["plan"]["levels"] for r in lv["rooms"])
+        if sig in seen:
+            continue
+        seen.add(sig)
+        res = c["result"]
+        if res["score"] < cur["score"]:  # never offer a worse plan
+            continue
+        out.append({"label": label, "changes": c["changes"], "plan": c["plan"], "score": res["score"],
+                    "summary": res["summary"], "floors": res["floors"], "remaining": c["remaining"]})
+    out.sort(key=lambda o: -o["score"])
+    return {"current": {"score": cur["score"], "summary": cur["summary"], "floors": cur["floors"]}, "options": out[:3]}

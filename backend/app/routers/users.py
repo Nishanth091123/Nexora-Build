@@ -139,6 +139,8 @@ class AccessIn(BaseModel):
     site: bool = False
     vastu: bool = False
     ai: bool = True
+    approval: bool = False
+    rates: bool = False
 
 
 @router.put("/access")

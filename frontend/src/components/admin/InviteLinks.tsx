@@ -4,7 +4,7 @@ import { Badge, Card, Field, Modal, toast } from "../ui";
 import { api, fmtDateTime } from "../../lib/api";
 import { useAuth } from "../../lib/auth";
 
-const MODS: [string, string][] = [["view", "View"], ["edit", "Edit / Docs"], ["design", "Design"], ["estimate", "Estimate"], ["site", "Site"], ["vastu", "Vastu"], ["ai", "AI"]];
+const MODS: [string, string][] = [["view", "View"], ["edit", "Edit / Docs"], ["design", "Design"], ["estimate", "Estimate"], ["site", "Site"], ["vastu", "Vastu"], ["ai", "AI"], ["approval", "Approval"], ["rates", "Material Rates"]];
 const PRESETS: Record<string, string[]> = {
   "Site Engineer": ["view", "site", "ai"], "Design Engineer": ["view", "design", "vastu", "ai"], "Quantity Surveyor": ["view", "estimate", "ai"],
   "Supervisor": ["view", "site"], "Viewer (client)": ["view"],

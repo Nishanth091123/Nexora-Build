@@ -197,7 +197,7 @@ function RolesSection({ counts }: { counts?: Record<string, number> }) {
 }
 
 // ---------------- Project access ----------------
-const MOD_LABEL: Record<string, string> = { view: "View", edit: "Edit/Docs", design: "Design", estimate: "Estimate", site: "Site", vastu: "Vastu", ai: "AI" };
+const MOD_LABEL: Record<string, string> = { view: "View", edit: "Edit/Docs", design: "Design", estimate: "Estimate", site: "Site", vastu: "Vastu", ai: "AI", approval: "Approval", rates: "Material Rates" };
 
 function AccessSection() {
   const { t } = useI18n();
@@ -261,7 +261,7 @@ function OwnerOnlySection() {
   };
   return (
     <Card title="Owner-only modules" icon={<Crown size={20} />}>
-      <p className="mb-3 text-sm text-slate-600">Switch ON = only you see this module. Other users lose it everywhere (menu and data), even if it is ticked below. Switch OFF = Project Access decides. <b>Clients</b> are always only yours.</p>
+      <p className="mb-3 text-sm text-slate-600">Switch ON = only you see this module. Other users lose it everywhere (menu and data), even if it is ticked below. Switch OFF = Project Access decides. <b>Approval</b> and <b>Material Rates</b> stay yours unless you tick them for a user below.</p>
       <div className="grid gap-2 sm:grid-cols-2">
         {choices.map((m) => (
           <div key={m} className="flex items-center justify-between rounded-lg border border-line px-3 py-2.5 text-sm">

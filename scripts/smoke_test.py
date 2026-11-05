@@ -96,8 +96,8 @@ except httpx.ConnectError:
     else:
         sys.exit("[ERROR] Backend did not start in 2 minutes.")
 check("health", r.status_code == 200 and r.json().get("status") == "ok", r.text)
-_v = tuple(int(x) for x in (r.json().get("version", "0.0").split("-")[0].split(".") + ["0"])[:2] if x.isdigit())
-check("backend is the 1.15 version (not an old one still running)", _v >= (1, 15), r.text)
+_v = tuple(int(x) for x in (r.json().get("version", "0.0").split("-")[0].split(".") + ["0", "0"])[:3] if x.isdigit())
+check("backend is the 1.16.1 version (not an old one still running)", _v >= (1, 16, 1), r.text)
 
 login = input("Owner username [nishanth_s]: ").strip() or "nishanth_s"
 pw = getpass.getpass("Owner password (hidden): ")
@@ -173,6 +173,11 @@ check("project detail + activity", d["project"]["id"] == pid and len(d["activity
 
 r = c.get("/api/users/access/matrix")
 check("access matrix", r.status_code == 200, r.text[:200])
+check("1.16 separate Approval + Material Rates permissions", r.status_code == 200 and {"approval", "rates"} <= set(r.json().get("modules", [])), r.text[:200])
+pp = c.get("/api/projects").json()["projects"]
+mine = next((x for x in pp if x["id"] == pid), {})
+check("1.16 owner has Approval + Rates", (mine.get("permissions") or {}).get("approval") is True and (mine.get("permissions") or {}).get("rates") is True, str(mine.get("permissions")))
+check("1.16 no client record made for a typed client name", mine.get("client_id") in (None, 0), str(mine.get("client_id")))
 
 _bk = c.get("/api/admin/backups").json().get("backups", [])
 before = _bk[0]["id"] if _bk else 0  # the list shows only the newest 60, so compare the newest id (not the count)
@@ -194,6 +199,7 @@ check("audit log", r.status_code == 200 and r.json()["total"] > 0)
 # ---------------- Phase 2: estimate ----------------
 r = c.get("/api/rates?state=Tamil Nadu")
 check("rate library (TN)", r.status_code == 200 and len(r.json()["items"]) > 50, r.text[:200])
+check("1.16 owner sees the rupee values", r.status_code == 200 and r.json().get("locked") is False and r.json()["items"][0].get("standard") is not None, r.text[:200])
 r = c.get("/api/rates?state=Kerala")
 check("other state falls back to TN", r.status_code == 200 and r.json()["using_fallback"] is True)
 r = c.get(f"/api/projects/{pid}/estimate-defaults")
@@ -238,6 +244,20 @@ check("Excel has floor-wise BOQ", r.status_code == 200 and b"Floor-wise BOQ" in 
 for kind, magic in (("bank", b"%PDF"), ("excel", b"PK")):
     r = c.post(f"/api/projects/{pid}/estimate/export?kind={kind}", json={"inputs": inp, "state": "Tamil Nadu"})
     check(f"1.13 estimate {kind} download without saving", r.status_code == 200 and r.content[:len(magic)] == magic, r.text[:200] if r.status_code != 200 else "")
+# ---------------- 1.16: download under every tab + part estimate ----------------
+for tab, fmt, magic in (("overview", "pdf", b"%PDF"), ("floorboq", "excel", b"PK"), ("takeoff", "pdf", b"%PDF"), ("material", "excel", b"PK"),
+                        ("cost", "pdf", b"%PDF"), ("boq", "pdf", b"%PDF"), ("payment", "pdf", b"%PDF"), ("compare", "excel", b"PK")):
+    r = c.post(f"/api/projects/{pid}/estimate/tab-export?tab={tab}&fmt={fmt}", json={"inputs": inp, "state": "Tamil Nadu"}, timeout=120)
+    check(f"1.16 estimate tab download ({tab} {fmt})", r.status_code == 200 and r.content[:len(magic)] == magic, r.text[:200] if r.status_code != 200 else "")
+r = c.post(f"/api/projects/{pid}/estimate/part", json={"inputs": inp, "state": "Tamil Nadu", "floor": "Ground Floor", "work": "slab"})
+pt = r.json() if r.status_code == 200 else {}
+check("1.16 part estimate (Ground Floor slab)", bool(pt.get("items")) and all(i["floor"] == "Ground Floor" for i in pt["items"])
+      and any(k["name"] == "Cement" for k in pt.get("key_materials", [])) and pt["totals"]["total"] > 0, r.text[:300])
+r = c.post(f"/api/projects/{pid}/estimate/part?fmt=pdf", json={"inputs": inp, "state": "Tamil Nadu", "floor": "Ground Floor", "work": "slab"})
+check("1.16 part estimate PDF", r.status_code == 200 and r.content[:4] == b"%PDF", r.text[:200] if r.status_code != 200 else "")
+check("1.16 file name has project code + name", "Ground_Floor_Slab_Estimate.pdf" in r.headers.get("content-disposition", ""), r.headers.get("content-disposition", ""))
+r = c.post(f"/api/projects/{pid}/estimate/part", json={"inputs": inp, "state": "Tamil Nadu", "floor": "all", "work": "bad"})
+check("1.16 part estimate refuses an unknown work", r.status_code == 400, r.text[:200])
 r = c.get(f"/api/estimates/{eid}")
 check("1.13 saved estimate shows floor-wise BOQ + payment schedule", r.status_code == 200 and r.json()["result"].get("floor_boq") and r.json()["result"].get("payment_schedule"), r.text[:200])
 custom = [{"stage": "Advance", "pct": 20}, {"stage": "Structure", "pct": 50}, {"stage": "Finishing", "pct": 30}]
@@ -378,6 +398,12 @@ if plan:
         r = c.post(f"/api/projects/{pid}/designs", json={"plan": p5, "title": "SMOKE materials"})
         f5 = (r.json().get("plan") or {}).get("finishes", {}) if r.status_code == 200 else {}
         check("1.15 material picks saved (and cleaned)", f5.get("mat") == {"ext_wall": "b:sky", "floor": li["ref"]} and list(f5.get("rooms", {})) == ["0:hall_1"], str(f5)[:200])
+        p6 = json.loads(json.dumps(plan))
+        p6["finishes"] = {"style": "modern", "plants": {"coconut": {"on": True, "count": 99, "place": "rear"}, "lawn": {"on": False}, "palm_x": {"on": True}, "neem": {"on": True, "count": 2, "place": "roof"}}}
+        r = c.post(f"/api/projects/{pid}/designs", json={"plan": p6, "title": "SMOKE plants"})
+        f6 = (r.json().get("plan") or {}).get("finishes", {}).get("plants", {}) if r.status_code == 200 else {}
+        check("1.16 trees & plants saved (and cleaned)", f6.get("coconut") == {"on": True, "count": 12, "place": "rear"} and f6.get("lawn") == {"on": False}
+              and "palm_x" not in f6 and f6.get("neem", {}).get("place") == "edge", str(f6)[:200])
         r = c.post(f"/api/trash/library_item/{li['id']}")
         check("1.15 own material to Recycle Bin", r.status_code == 200, r.text[:200])
         CLEANUP.append({"entity": "library_item", "id": li["id"]})
@@ -416,6 +442,28 @@ if plan and d2:
             r = c.post(f"/api/projects/{pid}/vastu/analyse", json={"design_id": up["id"]})
             ok = r.status_code == 200 and r.json()["result"]["summary"]["total"] >= 8
             check("vastu analysis", ok, r.text[:300])
+            vr = r.json()["result"] if ok else {}
+            check("1.16 vastu score + floor-wise scores", isinstance(vr.get("score"), int) and len(vr.get("floors", [])) >= 2, str(vr.get("floors"))[:200])
+            check("1.16 vastu 16-zone mandala + door pada", len(vr.get("mandala", [])) == 16 and (vr.get("door") or {}).get("code", "")[:1] in "NESW", str(vr.get("door"))[:200])
+            check("1.16 vastu asks site details (never guesses)", any(q["key"] == "sump" for q in vr.get("questions", [])), str(vr.get("questions"))[:200])
+            check("1.16 vastu 8-direction overview", set(vr.get("overview8", {})) == {"N", "NE", "E", "SE", "S", "SW", "W", "NW"}, str(vr.get("overview8"))[:200])
+            was_site = c.get(f"/api/projects/{pid}/vastu/site").json().get("site", {})
+            r = c.put(f"/api/projects/{pid}/vastu/site", json={"sump": "NE", "oh_tank": "SW", "gate": "XX", "bogus": 1})
+            check("1.16 vastu site answers saved (and cleaned)", r.status_code == 200 and r.json()["site"] == {"sump": "NE", "oh_tank": "SW"}, r.text[:200])
+            r = c.post(f"/api/projects/{pid}/vastu/analyse", json={"design_id": up["id"], "lang": "ta"})
+            vt = r.json()["result"] if r.status_code == 200 else {}
+            check("1.16 vastu in Tamil + sump checked", any(ch["rule"] == "sump" and ch["status"] == "matched" for ch in vt.get("checks", []))
+                  and "வாஸ்து" in vt.get("note", ""), r.text[:200])
+            c.put(f"/api/projects/{pid}/vastu/site", json=was_site)
+            r = c.post(f"/api/projects/{pid}/vastu/options", json={"design_id": up["id"]}, timeout=180)
+            check("1.16 vastu improved options (max 3, never worse)", r.status_code == 200 and len(r.json()["options"]) <= 3
+                  and all(o["score"] >= r.json()["current"]["score"] for o in r.json()["options"]), r.text[:200])
+            r = c.post(f"/api/projects/{pid}/vastu/report-html", json={"design_id": up["id"], "lang": "ta"}, timeout=180)
+            check("1.16 vastu Tamil report (print)", r.status_code == 200 and "வாஸ்து அறிக்கை" in r.text and "<svg" in r.text, r.text[:200])
+            was_rules = c.get("/api/vastu/rules").json().get("own", {})
+            r = c.put("/api/vastu/rules", json={"kitchen": {"good": ["SE", "NW"], "ok": ["E"]}, "nonsense": {"good": ["N"]}})
+            check("1.16 owner's own Vastu rules", r.status_code == 200 and list(r.json()["own"]) == ["kitchen"], r.text[:200])
+            c.put("/api/vastu/rules", json=was_rules)  # back as it was
             r = c.post(f"/api/projects/{pid}/vastu/apply", json={"design_id": up["id"]})
             check("vastu apply suggestions", r.status_code == 200 and "after" in r.json(), r.text[:200])
             r = c.post(f"/api/projects/{pid}/vastu/report-pdf", json={"design_id": up["id"], "north_deg": 90})
@@ -659,31 +707,14 @@ r = c.post(f"/api/projects/{pid}/design/generate", json={"requirements": {**(req
            "levels": [{"name": "Ground Floor", "bedrooms": 3, "attached_toilets": 3, "common_toilets": 0, "kitchen": True, "hall": True, "dining": True}]}})
 check("too many rooms -> options offered", r.status_code == 422 and "suggestions" in r.text, r.text[:200])
 
-# ---------------- 1.8: Clients & Projects (owner only) ----------------
+# ---------------- company (1.16: the Clients section is removed – client name stays on the project) ----------------
 r = c.get("/api/settings/company")
 check("company name + proprietor", r.status_code == 200 and "proprietor" in r.json(), r.text[:200])
-st0 = c.get("/api/clients/stats").json().get("projects", -1)
-r = c.post("/api/clients", json={"name": "SMOKE CLIENT", "phone": "90000 00001", "location": "Thiruvarur"})
-cl = r.json() if r.status_code == 200 else {}
-check("client created", str(cl.get("code", "")).startswith("C-"), r.text[:200])
-if cl.get("id"):
-    r = c.put(f"/api/projects/{pid}/client", json={"client_id": cl["id"]})
-    check("project linked to client", r.status_code == 200 and r.json().get("client_name") == "SMOKE CLIENT", r.text[:200])
-    r = c.get(f"/api/clients/{cl['id']}")
-    check("client shows its project", r.status_code == 200 and any(p["id"] == pid for p in r.json()["projects"]), r.text[:200])
-    r = c.get("/api/clients?q=SMOKE")
-    check("client search", r.status_code == 200 and any(x["id"] == cl["id"] for x in r.json()["clients"]), r.text[:200])
-    r = c.put(f"/api/projects/{pid}/workflow", json={"key": "client_meeting", "done": True, "date": "2026-11-01"})
-    check("workflow stage done", r.status_code == 200 and r.json()["stages"][0]["done"] is True, r.text[:200])
-    r = c.post(f"/api/projects/{pid}/notes", json={"activity": "SMOKE note", "remarks": "test"})
-    check("project note added", r.status_code == 200, r.text[:200])
-    r = c.get("/api/clients/stats")
-    check("client stats", r.status_code == 200 and r.json().get("clients", 0) >= 1, r.text[:200])
-    check("total projects ignore the test project", r.json().get("projects") == st0, f"{st0} -> {r.json().get('projects')}")
-    r = c.post(f"/api/trash/client/{cl['id']}")
-    check("client to Recycle Bin", r.status_code == 200, r.text[:200])
-    CLEANUP.append({"entity": "client", "id": cl["id"]})  # cleaned up at the end, in one go
-was = c.get("/api/owner-only").json().get("modules", [])
+r = c.get("/api/clients")
+check("1.16 Clients section removed", r.status_code in (404, 405), str(r.status_code))
+r0 = c.get("/api/owner-only")
+check("owner-only switches load", r0.status_code == 200, f"{r0.status_code} {r0.text[:120]}")
+was = r0.json().get("modules", []) if r0.status_code == 200 else []
 r = c.put("/api/owner-only", json={"modules": sorted(set(was) | {"vastu"})})
 check("owner-only module switch", r.status_code == 200 and "vastu" in r.json()["modules"], r.text[:200])
 c.put("/api/owner-only", json={"modules": was})  # back as it was
@@ -706,4 +737,4 @@ if fail:
     print("Failed:", ", ".join(fail), "\nSend this output to Claude.")
     sys.exit(1)
 else:
-    print("NEXORA 1.15 API: ALL GOOD")
+    print("NEXORA 1.16 API: ALL GOOD")

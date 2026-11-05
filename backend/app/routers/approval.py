@@ -103,7 +103,7 @@ def approval_out(db: Session, c) -> dict:
 
 @router.get("/projects/{project_id}/approval")
 def get_approval(project_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    p = require_project(db, user, project_id, "view")
+    p = require_project(db, user, project_id, "approval")
     return approval_out(db, _permit(db, p))
 
 
@@ -114,7 +114,7 @@ class ApprovalIn(BaseModel):
 
 @router.put("/projects/{project_id}/approval")
 def put_approval(project_id: int, body: ApprovalIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    p = require_project(db, user, project_id, "edit")
+    p = require_project(db, user, project_id, "approval")
     c = _permit(db, p)
     if body.site_info is not None:
         c.site_info = {**(c.site_info or {}), **_clean_info(body.site_info)}
@@ -136,7 +136,7 @@ class StageIn(BaseModel):
 
 @router.put("/projects/{project_id}/approval/stage")
 def set_stage(project_id: int, body: StageIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    p = require_project(db, user, project_id, "edit")
+    p = require_project(db, user, project_id, "approval")
     if body.key not in STAGE_KEYS:
         raise HTTPException(400, "Unknown stage")
     c = _permit(db, p)
@@ -181,7 +181,7 @@ def _plan_info(db: Session, p, c, body: CheckIn) -> tuple[dict, dict]:
 @router.post("/projects/{project_id}/approval/check")
 def check(project_id: int, body: CheckIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """Rule check (required vs provided) + fee calculation for the plan on the screen."""
-    p = require_project(db, user, project_id, "view")
+    p = require_project(db, user, project_id, "approval")
     c = _permit(db, p)
     plan, info = _plan_info(db, p, c, body)
     res = ap.compliance(plan, info)
@@ -197,7 +197,7 @@ def check(project_id: int, body: CheckIn, user: User = Depends(get_current_user)
 def sheet(project_id: int, body: CheckIn, kind: str = "pdf", style: str = "paper", size: str = "",
           version: str = "draft", user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """The approval drawing (one sheet) for the plan on the screen – PDF (A1 / A2 / A3, paper or CAD colours) or DXF."""
-    p = require_project(db, user, project_id, "view")
+    p = require_project(db, user, project_id, "approval")
     c = _permit(db, p)
     plan, info = _plan_info(db, p, c, body)
     size = size if size in ap.SIZES else (info.get("sheet_size") if info.get("sheet_size") in ap.SIZES else "A1")

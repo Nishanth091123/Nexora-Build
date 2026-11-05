@@ -238,7 +238,7 @@ export default function ApprovalPanel({ pid, plan, saved, dirty, code, canEdit }
               </li>
             ))}
           </ol>
-          <p className="mt-2 text-[11px] text-slate-500">"Approval drawing ready" and "Application submitted" also tick the project tracker on the Clients page.</p>
+          <p className="mt-2 text-[11px] text-slate-500">"Approval drawing ready" and "Application submitted" are saved with the project.</p>
         </Card>
       </div>
 

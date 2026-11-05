@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from ..audit import log_action
 from ..db import get_db
 from ..models import LibraryItem, User
-from ..security import get_current_user, require_owner
+from ..security import get_current_user, has_rates_access, require_owner
 from .files import read_and_check, store
 
 router = APIRouter(prefix="/api/materials", tags=["materials"])
@@ -61,7 +61,11 @@ def _check(body: ItemIn) -> dict:
 @router.get("")
 def list_items(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     rows = db.query(LibraryItem).filter(LibraryItem.is_hidden.is_(False)).order_by(LibraryItem.category, LibraryItem.name).all()
-    return {"items": [item_out(i) for i in rows], "categories": CATEGORIES}
+    items = [item_out(i) for i in rows]
+    if not has_rates_access(db, user):  # 1.16: rates of own items only with Material Rates permission
+        for it in items:
+            it["rate"] = None
+    return {"items": items, "categories": CATEGORIES, "rates_locked": not has_rates_access(db, user)}
 
 
 @router.post("")
@@ -113,7 +117,7 @@ def image_from_url(iid: int, body: UrlIn, owner: User = Depends(require_owner), 
     if u.scheme not in ("http", "https") or not u.netloc or u.hostname in ("localhost", "127.0.0.1") or (u.hostname or "").startswith(("10.", "192.168.", "169.254.")):
         raise HTTPException(400, "Give a normal https:// link to a picture")
     try:
-        with httpx.Client(timeout=20, follow_redirects=True, headers={"User-Agent": "NexoraBuild/1.15 (material library)"}) as c:
+        with httpx.Client(timeout=20, follow_redirects=True, headers={"User-Agent": "NexoraBuild/1.16 (material library)"}) as c:
             r = c.get(body.url.strip())
     except Exception as e:
         raise HTTPException(400, f"Could not open the link ({type(e).__name__}). Save the picture and upload it instead.")

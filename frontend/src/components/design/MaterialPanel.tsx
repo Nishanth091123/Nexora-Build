@@ -11,10 +11,10 @@ import { CAT_LABEL, SLOTS, type Cat, type Item, type Picks, type Slot } from "./
 type Props = {
   plan: Plan; picks: Picks; items: Item[]; swatch: (it: Item) => string; isOwner: boolean; code: string;
   onPick: (slot: Slot, ref: string | null) => void; onRoomPick: (roomId: string, kind: "wall" | "floor", ref: string | null) => void;
-  onLibraryChanged: () => void; shot: () => string | null;
+  onLibraryChanged: () => void; shot: () => string | null; plantLines?: string[];
 };
 
-export default function MaterialPanel({ plan, picks, items, swatch, isOwner, code, onPick, onRoomPick, onLibraryChanged, shot }: Props) {
+export default function MaterialPanel({ plan, picks, items, swatch, isOwner, code, onPick, onRoomPick, onLibraryChanged, shot, plantLines = [] }: Props) {
   const [slot, setSlot] = useState<Slot>("ext_wall");
   const [room, setRoom] = useState("");  // "" = whole house
   const [roomKind, setRoomKind] = useState<"wall" | "floor">("wall");
@@ -89,7 +89,7 @@ export default function MaterialPanel({ plan, picks, items, swatch, isOwner, cod
         </div>
       </div>
       <AddItem open={addOpen} onClose={() => setAddOpen(false)} onSaved={onLibraryChanged} defaultCat={cats[0]} />
-      <Showcase open={show} onClose={() => setShow(false)} plan={plan} picks={picks} byRef={byRef} swatch={swatch} code={code} shot={shot} />
+      <Showcase open={show} onClose={() => setShow(false)} plan={plan} picks={picks} byRef={byRef} swatch={swatch} code={code} shot={shot} plantLines={plantLines} />
     </div>
   );
 }
@@ -151,8 +151,9 @@ function AddItem({ open, onClose, onSaved, defaultCat }: { open: boolean; onClos
 }
 
 // ---------------------------------------------------------------- showcase of what is picked
-function Showcase({ open, onClose, plan, picks, byRef, swatch, code, shot }: {
+function Showcase({ open, onClose, plan, picks, byRef, swatch, code, shot, plantLines }: {
   open: boolean; onClose: () => void; plan: Plan; picks: Picks; byRef: Map<string, Item>; swatch: (it: Item) => string; code: string; shot: () => string | null;
+  plantLines: string[];
 }) {
   const rows: { where: string; it: Item }[] = [];
   for (const sl of SLOTS) { const r = picks.mat?.[sl.key]; const it = r ? byRef.get(r) : undefined; if (it) rows.push({ where: sl.label, it }); }
@@ -164,7 +165,7 @@ function Showcase({ open, onClose, plan, picks, byRef, swatch, code, shot }: {
   const sheet = async (kind: "png" | "print") => {
     const img3d = shot();
     const W = 1600, rowH = 86, head = img3d ? 760 : 140;
-    const cv = document.createElement("canvas"); cv.width = W; cv.height = head + rows.length * rowH + 80;
+    const cv = document.createElement("canvas"); cv.width = W; cv.height = head + rows.length * rowH + 80 + (plantLines.length ? 60 + plantLines.length * 34 : 0);
     const g = cv.getContext("2d")!;
     g.fillStyle = "#fff"; g.fillRect(0, 0, W, cv.height);
     g.fillStyle = "#0f2350"; g.font = "bold 40px Arial"; g.fillText("Material & Colour Showcase", 40, 60);
@@ -181,6 +182,11 @@ function Showcase({ open, onClose, plan, picks, byRef, swatch, code, shot }: {
       g.fillText(`${it.name}${it.brand ? ` · ${it.brand}` : ""}${it.code ? ` · code ${it.code}` : ""}${it.custom ? "" : ` (${CAT_LABEL[it.cat]})`}`, 190, y + 58);
       y += rowH;
     }
+    if (plantLines.length) {  // 1.16 trees & plants
+      g.fillStyle = "#0f2350"; g.font = "bold 26px Arial"; g.fillText("Trees & plants", 40, y + 36); y += 56;
+      g.font = "22px Arial"; g.fillStyle = "#14532d";
+      for (const l of plantLines) { g.fillText(`• ${l}`, 60, y + 20); y += 34; }
+    }
     const url = cv.toDataURL("image/png");
     if (kind === "png") { const a = document.createElement("a"); a.href = url; a.download = `${code}_Material_Showcase.png`; a.click(); return; }
     const w = window.open("", "_blank");
@@ -190,7 +196,7 @@ function Showcase({ open, onClose, plan, picks, byRef, swatch, code, shot }: {
   };
   return (
     <Modal open={open} onClose={onClose} title="Showcase – your picks">
-      {!rows.length ? <p className="text-sm text-slate-500">Nothing picked yet – choose colours / materials in the library first.</p> : (
+      {!rows.length && !plantLines.length ? <p className="text-sm text-slate-500">Nothing picked yet – choose colours / materials in the library first.</p> : (
         <ul className="max-h-[420px] divide-y divide-line overflow-auto rounded-lg border border-line">
           {rows.map(({ where, it }, i) => (
             <li key={i} className="flex items-center gap-3 px-3 py-2 text-sm">
@@ -199,12 +205,13 @@ function Showcase({ open, onClose, plan, picks, byRef, swatch, code, shot }: {
                 <div className="truncate text-xs text-slate-600">{it.name}{it.brand ? ` · ${it.brand}` : ""}{it.code ? ` · code ${it.code}` : ""}{it.rate ? ` · ₹${it.rate}${it.unit ? `/${it.unit}` : ""}` : ""}</div></div>
             </li>
           ))}
+          {plantLines.map((l) => <li key={l} className="px-3 py-2 text-sm text-emerald-800">🌴 {l}</li>)}
         </ul>
       )}
       <div className="mt-4 flex flex-wrap justify-end gap-2">
         <button className="btn-ghost" onClick={onClose}><X size={14} />Close</button>
-        <button className="btn-outline" disabled={!rows.length} onClick={() => sheet("png")}><Download size={14} />Download (PNG)</button>
-        <button className="btn-primary" disabled={!rows.length} onClick={() => sheet("print")}><Printer size={14} />Print / Save as PDF</button>
+        <button className="btn-outline" disabled={!rows.length && !plantLines.length} onClick={() => sheet("png")}><Download size={14} />Download (PNG)</button>
+        <button className="btn-primary" disabled={!rows.length && !plantLines.length} onClick={() => sheet("print")}><Printer size={14} />Print / Save as PDF</button>
       </div>
     </Modal>
   );

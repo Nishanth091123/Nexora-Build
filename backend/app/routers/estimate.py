@@ -15,7 +15,7 @@ from ..estimate.engine import MissingInfo, calculate, levels_from_floors
 from ..estimate.exports import to_excel, to_pdf
 from ..estimate.rates_seed import DEFAULT_STATE
 from ..models import Estimate, Project, RateItem, User
-from ..security import get_current_user, require_owner, require_project
+from ..security import get_current_user, has_rates_access, require_owner, require_project, require_rates
 from .projects import project_out
 
 router = APIRouter(prefix="/api", tags=["estimate"])
@@ -52,7 +52,13 @@ def get_rates(state: str = DEFAULT_STATE, include_hidden: bool = False, user: Us
     used, fallback, rows = rates_for(db, state)
     if not include_hidden:
         rows = [r for r in rows if r.is_active]
-    return {"state": state, "rates_state": used, "using_fallback": fallback, "items": [rate_out(r) for r in rows]}
+    items = [rate_out(r) for r in rows]
+    locked = not has_rates_access(db, user)
+    if locked:  # 1.16: names/units only (estimate inputs need them) – the rupee values stay with the owner
+        for it in items:
+            it["basic"] = it["standard"] = it["premium"] = None
+            it["note"] = ""
+    return {"state": state, "rates_state": used, "using_fallback": fallback, "locked": locked, "items": items}
 
 
 @router.get("/rates/states")
@@ -96,7 +102,8 @@ class RateIn(BaseModel):
 
 
 @router.post("/rates")
-def add_rate(body: RateIn, owner: User = Depends(require_owner), db: Session = Depends(get_db)):
+def add_rate(body: RateIn, owner: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    require_rates(db, owner)
     if body.kind not in KINDS:
         raise HTTPException(400, f"kind must be one of {', '.join(sorted(KINDS))}")
     if body.state != DEFAULT_STATE and not db.query(RateItem).filter(RateItem.state == body.state).first():
@@ -127,7 +134,8 @@ class RatePatch(BaseModel):
 
 
 @router.patch("/rates/{rate_id}")
-def edit_rate(rate_id: int, body: RatePatch, owner: User = Depends(require_owner), db: Session = Depends(get_db)):
+def edit_rate(rate_id: int, body: RatePatch, owner: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    require_rates(db, owner)
     r = db.get(RateItem, rate_id)
     if not r:
         raise HTTPException(404, "Rate not found")
@@ -460,8 +468,9 @@ def excel_template(project_id: int, body: TemplateIn, user: User = Depends(get_c
     from ..estimate import excel_input
     p = require_project(db, user, project_id, "estimate")
     used, _, rows = rates_for(db, body.state)
-    data = excel_input.template(body.inputs or {}, [rate_out(r) for r in rows if r.is_active], used, p.name,
-                                user.role == "owner")
+    can_rates = has_rates_access(db, user)
+    data = excel_input.template(body.inputs or {}, [rate_out(r) for r in rows if r.is_active] if can_rates else [],
+                                used, p.name, can_rates)
     name = f"{p.code}_Estimate_Inputs.xlsx"
     return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"})
@@ -487,8 +496,8 @@ async def excel_import(project_id: int, file: UploadFile = File(...), state: str
         raise HTTPException(422, {"message": str(e), "questions": [str(e)]})
     changed = []
     if out["rates"]:
-        if user.role != "owner":
-            out["warnings"].append("Rates in the file were ignored – only the owner can change the rate library.")
+        if not has_rates_access(db, user):
+            out["warnings"].append("Rates in the file were ignored – Material Rates permission is needed.")
         else:
             for code, vals in out["rates"].items():
                 r = by_code[code]
@@ -526,3 +535,89 @@ def loan_docs(project_id: int, user: User = Depends(get_current_user), db: Sessi
         fs = [file_out(f) for f in files if f.category == f"loan_{key}"]
         items.append({"key": key, "label": label, "status": "uploaded" if fs else "pending", "files": fs})
     return {"items": items, "done": sum(i["status"] == "uploaded" for i in items), "total": len(items)}
+
+
+# ---------------------------------------------------------------- 1.16 downloads for every tab + part estimate
+class TabExportIn(BaseModel):
+    inputs: dict
+    state: str = DEFAULT_STATE
+    label: str = ""  # e.g. "v3" or "draft" – shown on the file
+
+
+def _file(data: bytes, fmt: str, stem: str) -> Response:
+    if fmt == "excel":
+        return Response(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(stem + '.xlsx')}"})
+    return Response(data, media_type="application/pdf",
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(stem + '.pdf')}"})
+
+
+def _proj(db: Session, p: Project) -> dict:
+    from datetime import datetime as _dt
+    tmp = Estimate(title="", version=0, rate_state="", result={}, created_at=_dt.now())
+    proj = export_payload(tmp, p, None)[0]  # db=None: only the project/company block is used
+    from ..models import Organization
+    org = db.get(Organization, 1)
+    proj["company"] = {"name": (org.name if org else "") or ""}
+    return proj
+
+
+@router.post("/projects/{project_id}/estimate/tab-export")
+def tab_export(project_id: int, body: TabExportIn, tab: str = "overview", fmt: str = "pdf",
+               user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """1.16: the download under every Estimate tab (works without saving – 'draft')."""
+    from ..estimate import tabs as T
+    p = require_project(db, user, project_id, "estimate")
+    if fmt not in ("pdf", "excel"):
+        raise HTTPException(400, "fmt must be pdf or excel")
+    if tab not in T.TAB_TITLE or tab == "part":
+        raise HTTPException(400, f"tab must be one of {', '.join(k for k in T.TAB_TITLE if k != 'part')}")
+    result, _ = run_calc(db, body.inputs, body.state)
+    extra = None
+    if tab == "compare":
+        extra = {"compare": {lv: run_calc(db, {**body.inputs, "spec_level": lv}, body.state)[0]
+                             for lv in ("basic", "standard", "premium")}}
+    secs = T.sections_for(tab, result, extra)
+    if not secs:
+        raise HTTPException(422, "Nothing to download in this tab yet – calculate first")
+    title = f"{T.TAB_TITLE[tab]} Estimate"
+    sub = " · ".join(x for x in [f"{result.get('rates_state', body.state)} rates",
+                                 f"{result.get('spec_level', '').title()} spec", body.label or "draft"] if x)
+    proj = _proj(db, p)
+    fn = T.render_excel if fmt == "excel" else T.render_pdf
+    return _file(fn(proj, title, sub, secs), fmt, T.file_stem(p.code, p.name, T.TAB_TITLE[tab], "Estimate"))
+
+
+class PartIn(BaseModel):
+    inputs: dict
+    state: str = DEFAULT_STATE
+    floor: str = "all"
+    work: str = "all"
+    label: str = ""
+
+
+@router.post("/projects/{project_id}/estimate/part")
+def part_estimate(project_id: int, body: PartIn, fmt: str = "json", user: User = Depends(get_current_user),
+                  db: Session = Depends(get_db)):
+    """1.16: Part estimate – one floor and/or one work (e.g. Ground Floor + Slab): items, materials needed,
+    labour and total. fmt=json shows it; pdf / excel downloads it. Works unsaved (draft)."""
+    from ..estimate import tabs as T
+    p = require_project(db, user, project_id, "estimate")
+    result, _ = run_calc(db, body.inputs, body.state)
+    try:
+        part = T.part_estimate(result, body.floor, body.work)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if fmt == "json":
+        return part
+    if fmt not in ("pdf", "excel"):
+        raise HTTPException(400, "fmt must be json, pdf or excel")
+    if not part["items"]:
+        raise HTTPException(422, f"No items for {part['work_label']} on {part['floor_label']}")
+    secs = T.sections_for("part", result, part)
+    title = f"Part Estimate – {part['floor_label']} – {part['work_label']}"
+    sub = " · ".join(x for x in [f"{result.get('rates_state', body.state)} rates", body.label or "draft"] if x)
+    fn = T.render_excel if fmt == "excel" else T.render_pdf
+    stem = T.file_stem(p.code, p.name, "" if body.floor == "all" else body.floor,
+                       part["file_label"], "Estimate")
+    return _file(fn(_proj(db, p), title, sub, secs), fmt, stem)

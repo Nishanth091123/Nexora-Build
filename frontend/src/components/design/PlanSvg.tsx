@@ -7,10 +7,12 @@ type DragState = {
 
 /** 2D floor plan (feet). Road at the bottom. Editable: drag rooms, drag edge handles to resize. */
 export default function PlanSvg({ plan, level, editable = false, selected, onSelect, onChange, grid = 0.5, stale = false,
-  showDims = true, className = "", vastuGrid = false, highlight }: {
+  showDims = true, className = "", vastuGrid = false, highlight, mandala, doorCode }: {
   plan: Plan; level: number; editable?: boolean; selected?: string | null; onSelect?: (id: string | null) => void;
   onChange?: (rooms: Room[], commit: boolean) => void; grid?: number; stale?: boolean; showDims?: boolean; className?: string;
   vastuGrid?: boolean; highlight?: Record<string, string>;
+  /** 1.16: 16-zone Vastu mandala – boundary rays from the building centre (from the Vastu check) */
+  mandala?: { after: string; dx: number; dy: number }[] | null; doorCode?: string | null;
 }) {
   const svgRef = useRef<SVGSVGElement>(null);
   const [drag, setDrag] = useState<DragState | null>(null);
@@ -148,7 +150,27 @@ export default function PlanSvg({ plan, level, editable = false, selected, onSel
         <text x={-M + 0.6} y={D + 0.8} fill="#334155">{`Plot ${plot.w}' × ${plot.d}'`}</text>
       </g>}
 
-      {vastuGrid && <g pointerEvents="none">
+      {mandala && mandala.length === 16 && (() => {
+        const Z16 = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+        const cx = b.x + b.w / 2, cy = b.y + b.d / 2;
+        return <g pointerEvents="none">
+          <rect x={b.x + b.w / 3} y={Y(b.y + (2 * b.d) / 3)} width={b.w / 3} height={b.d / 3} fill="#fde68a" fillOpacity="0.3" stroke="#f59e0b" strokeWidth="0.1" strokeDasharray="0.6 0.4" />
+          {mandala.map((r, i) => {
+            const nx = mandala[(i + 1) % 16];
+            const mx = (r.dx + nx.dx) / 2, my = (r.dy + nx.dy) / 2, m = Math.max(Math.abs(mx), Math.abs(my)) || 1;
+            const z = Z16[(Z16.indexOf(r.after) + 1) % 16];
+            return <g key={i}>
+              <line x1={cx} y1={Y(cy)} x2={cx + (r.dx * b.w) / 2} y2={Y(cy + (r.dy * b.d) / 2)} stroke="#f97316" strokeWidth="0.09" strokeDasharray="0.7 0.45" />
+              <text x={cx + ((mx / m) * b.w / 2) * 0.82} y={Y(cy + ((my / m) * b.d / 2) * 0.82) + fs * 0.3} fontSize={fs * 0.62} fontWeight="800" textAnchor="middle" fill="#c2410c" opacity="0.9">{z}</text>
+            </g>;
+          })}
+          {doorCode && lv.openings?.filter((o) => o.type === "main_door").slice(0, 1).map((o, i) => (
+            <text key={"dc" + i} x={b.x + (o.x1 + o.x2) / 2} y={Y(b.y + (o.y1 + o.y2) / 2) - fs * 0.5} fontSize={fs * 0.8} fontWeight="800" textAnchor="middle" fill="#1d4ed8">{doorCode}</text>
+          ))}
+        </g>;
+      })()}
+
+      {vastuGrid && !mandala && <g pointerEvents="none">
         {[1, 2].map((i) => <line key={"vx" + i} x1={b.x + (b.w * i) / 3} y1={Y(b.y)} x2={b.x + (b.w * i) / 3} y2={Y(b.y + b.d)} stroke="#f97316" strokeWidth="0.12" strokeDasharray="0.8 0.6" />)}
         {[1, 2].map((i) => <line key={"vy" + i} x1={b.x} y1={Y(b.y + (b.d * i) / 3)} x2={b.x + b.w} y2={Y(b.y + (b.d * i) / 3)} stroke="#f97316" strokeWidth="0.12" strokeDasharray="0.8 0.6" />)}
         {[0, 1, 2].flatMap((i) => [0, 1, 2].map((j) => {

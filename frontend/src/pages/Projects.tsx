@@ -90,7 +90,7 @@ export default function Projects() {
     { id: "tasks", label: t("Tasks"), icon: <ListChecks size={18} /> },
     { id: "milestones", label: t("Milestones"), icon: <Flag size={18} /> },
     { id: "approvals", label: t("Approvals"), icon: <BadgeCheck size={18} /> },
-    { id: "permit", label: "Plan Approval", icon: <ClipboardList size={18} /> },
+    ...(p?.permissions?.approval ? [{ id: "permit", label: "Plan Approval", icon: <ClipboardList size={18} /> }] : []),
     { id: "activity", label: t("Activity Logs"), icon: <Activity size={18} /> },
     { id: "settings", label: t("Settings"), icon: <SettingsIcon size={18} /> },
   ];
@@ -297,7 +297,7 @@ export default function Projects() {
       {tab === "tasks" && (p ? <Card title={t("Task Management")} icon={<ListChecks size={20} />}><TasksPanel projectId={p.id} canEdit={canWrite} team={detail?.team || []} /></Card> : <Empty text="Select a project" />)}
       {tab === "milestones" && (p ? <Card title={`${t("Milestones")} & ${t("Project Timeline (Gantt Chart)")}`} icon={<Flag size={20} />}><ScheduleEditor projectId={p.id} canEdit={canWrite} /></Card> : <Empty text="Select a project" />)}
       {tab === "approvals" && (p ? <Card title={t("Approvals")} icon={<BadgeCheck size={20} />}><ApprovalsPanel projectId={p.id} canRequest={canWrite} canDecide={user?.role === "owner"} meName={user?.full_name} team={detail?.team || []} /></Card> : <Empty text="Select a project" />)}
-      {tab === "permit" && (p ? <PermitChecklist pid={p.id} canEdit={canEdit} /> : <Empty text="Select a project" />)}
+      {tab === "permit" && (p && p.permissions?.approval ? <PermitChecklist pid={p.id} canEdit={!!p.permissions?.approval} /> : <Empty text="Select a project" />)}
       {tab === "activity" && activityCard(true)}
       {tab === "settings" && (detailsCard || <Empty text="Select a project" />)}
 

@@ -10,6 +10,7 @@ import { WALL_T, type Plan } from "../../../lib/plan";
 import { Grid, type R } from "./raster";
 import * as T from "./textures";
 import type { Look, Slot } from "./catalog";
+import { addPlants, plantsOf, PLANT_MATS, type Plants } from "./plants";
 
 export const PLINTH = 1.5, SLAB = 0.42, PARAPET = 3, HEADROOM = 8;
 const SILL: Record<string, number> = { window: 3, vent: 5.5 };
@@ -21,7 +22,7 @@ export type Style = "basic" | "modern" | "contemporary" | "traditional";
 export type LightMode = "day" | "dusk" | "night";
 export type Mode = "exterior" | "interior" | "walk" | "exploded" | "structure";
 export type Finishes = { ext: string; int: string; floor: string; door: string; frame: string; roof: string; plinth: string; style?: Style;
-  mat?: Partial<Record<Slot, string>>; rooms?: Record<string, { wall?: string; floor?: string }> };
+  mat?: Partial<Record<Slot, string>>; rooms?: Record<string, { wall?: string; floor?: string }>; plants?: Plants };
 
 export const DEFAULT_FINISH: Finishes = { ext: "#f3eadb", int: "#fbfaf7", floor: "#e7e0d3", door: "#8b5a2b", frame: "#f8fafc", roof: "#cfcac2", plinth: "#8d8d8d", style: "modern" };
 export const STYLE_FINISH: Record<Style, Partial<Finishes>> = {
@@ -645,7 +646,8 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
     const flat = (k: string, t: THREE.Texture) => texMat(k, t, { roughness: 0.95, polygonOffset: false });
     // ground layers are kept well apart in height so they never flicker
     plane(P.w + 160, P.d + 160, std("#6f8f55", { roughness: 1 }), P.w / 2, -P.d / 2, -0.15);
-    plane(P.w, P.d, style === "basic" ? std("#cbbf9f", { roughness: 1 }) : flat("grass", T.grass()), P.w / 2, -P.d / 2, -0.05);
+    const lawn = plantsOf(fin.plants).lawn.on;  // 1.16: lawn is your choice (else plain earth)
+    plane(P.w, P.d, lawn ? flat("grass", T.grass()) : std("#cbbf9f", { roughness: 1 }), P.w / 2, -P.d / 2, -0.05);
     plane(P.w + 160, 22, flat("asphalt", T.asphalt()), P.w / 2, 14, 0.0);
     for (let x = -70; x < P.w + 70; x += 12) plane(5, 0.4, std("#f1f1f1", { roughness: 0.6 }, "none"), x, 14, 0.06);  // lane marks
     plane(P.w + 160, 3, std("#b7b2a8"), P.w / 2, 1.5, 0.04);  // footpath
@@ -705,19 +707,23 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
       const yy = slats === 1 ? 0.3 + h / 2 : 0.5 + k * ((wallH - 0.6) / slats) + h / 2;
       add(new THREE.BoxGeometry(gateW, h, 0.15), gm, gx + gateW / 2, yy, 0.6, true);
     }
-    // plants: shrubs along the inside of the compound, a few trees, path lights
+    // 1.16: trees + plants – your choice (type, count, place); always clear of the house and the roof overhang
+    {
+      let hx0 = Infinity, hy0 = Infinity, hx1 = -Infinity, hy1 = -Infinity;
+      for (const lv of levels) for (const q of lv.rooms) {
+        hx0 = Math.min(hx0, bx0 + q.x); hx1 = Math.max(hx1, bx0 + q.x + q.w); hy0 = Math.min(hy0, by0 + q.y); hy1 = Math.max(hy1, by0 + q.y + q.d);
+      }
+      const mdx = md ? bx0 + (md.x1 + md.x2) / 2 : null, mdy = md ? by0 + Math.min(md.y1, md.y2) : null;
+      const blocked = (x: number, y: number, r: number) =>
+        (x > gx - r - 1 && x < gx + gateW + r + 1 && y < 6 + r) ||  // gate
+        (!!park && x > bx0 + park.x - r && x < bx0 + park.x + park.w + r && y < by0 + park.y + r) ||  // driveway
+        (mdx !== null && mdy !== null && Math.abs(x - mdx) < 2 + r && y < mdy + r);  // path to the main door
+      addPlants(root, fin.plants, { plotW: P.w, plotD: P.d, clear: clearOfHouse, blocked, house: { x0: hx0, y0: hy0, x1: hx1, y1: hy1 }, ov,
+        door: mdx !== null && mdy !== null ? { x: mdx, y: mdy } : null },
+        (k) => std(PLANT_MATS[k][0], PLANT_MATS[k][1], "none"));
+    }
     if (style !== "basic") {
-      const shrubM = std("#3f6b2c", { roughness: 1 }, "none"), shrub2 = std("#557f36", { roughness: 1 }, "none");
-      for (let x = 2; x < P.w - 1; x += 3.2) {
-        if (x > gx - 1.5 && x < gx + gateW + 1.5) continue;
-        if (md && Math.abs(x - (bx0 + (md.x1 + md.x2) / 2)) < 3) continue;
-        if (!clearOfHouse(x, 1.6, 1.3)) continue;
-        add(new THREE.SphereGeometry(1.2, 10, 8), x % 2 > 1 ? shrubM : shrub2, x, 1.0, -1.6, true).scale.set(1, 0.8, 1);
-      }
-      for (let zz = 4; zz < P.d - 2; zz += 3.5) {
-        for (const xx of [1.6, P.w - 1.6]) if (clearOfHouse(xx, zz, 1.2)) add(new THREE.SphereGeometry(1.1, 10, 8), shrubM, xx, 1.0, -zz, true).scale.set(1, 0.85, 1);
-      }
-      if (lit && md) {
+    if (lit && md) {
         const mx = bx0 + (md.x1 + md.x2) / 2;
         for (let k = 1; k * 4 < by0 + md.y1 - 2; k++) for (const sx of [-2.4, 2.4]) {
           const post = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 1.4, 8), std("#1d2024", {}, "none"));
@@ -725,15 +731,6 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
           const head = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.25, 0.35), glow); head.position.set(mx + sx, 1.45, -k * 4); root.add(head);
         }
       }
-    }
-    const trunkM = std("#5b4332", { roughness: 1 }, "none"), leafM = std("#2f6b33", { roughness: 1 }, "none"), leaf2 = std("#3f7d3a", { roughness: 1 }, "none");
-    // 1.15: trees only where they cannot touch the house (outside the compound, away from the building + overhang)
-    for (const [tx, tz, s] of [[-7, 5, 1.1], [P.w + 7, 6, 1], [-9, -P.d * 0.6, 1.25], [P.w + 8, -P.d * 0.7, 1.15], [-8, -P.d - 6, 1.0]] as [number, number, number][]) {
-      if (!clearOfHouse(tx, -tz, 5 * s)) continue;
-      add(new THREE.CylinderGeometry(0.35 * s, 0.5 * s, 7 * s, 8), trunkM, tx, 3.5 * s, tz, true);
-      add(new THREE.SphereGeometry(3.4 * s, 14, 10), leafM, tx, 8.5 * s, tz, true);
-      add(new THREE.SphereGeometry(2.6 * s, 12, 9), leaf2, tx + 1.6 * s, 9.6 * s, tz - 0.8 * s, true);
-      add(new THREE.SphereGeometry(2.3 * s, 12, 9), leaf2, tx - 1.4 * s, 10.2 * s, tz + 0.9 * s, true);
     }
   }
 }

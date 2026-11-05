@@ -1,7 +1,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import {
-  BarChart3, Calculator, CalendarClock, Check, ChevronDown, ChevronRight, ClipboardList, Download, FileImage, FileSpreadsheet, FileText, GitCompare, Hammer, HardHat, IndianRupee, Layers, LayoutDashboard, Library, Package, PenLine, Plus, Ruler, Save, Search, SlidersHorizontal, Trash2, TriangleAlert, Upload, Users,
+  BarChart3, Calculator, CalendarClock, Check, ChevronDown, ChevronRight, ClipboardList, Download, FileImage, FileSpreadsheet, FileText, GitCompare, Hammer, HardHat, IndianRupee, Layers, LayoutDashboard, Library, Package, PenLine, Plus, Puzzle, Ruler, Save, Search, SlidersHorizontal, Trash2, TriangleAlert, Upload, Users,
 } from "lucide-react";
 import Page from "../components/Page";
 import OwnerDelete from "../components/OwnerDelete";
@@ -9,6 +9,7 @@ import Plan3D from "../components/design/Plan3D";
 import BbsTab from "../components/bbs/BbsTab";
 import { FloorBoqPanel, LoanDocsPanel, PaymentSchedulePanel, QuickEstimate } from "../components/estimate/V18Panels";
 import RateLibrary, { type Rate } from "../components/RateLibrary";
+import { DOWNLOAD_TABS, fileStem, PartEstimate, TabDownload } from "../components/estimate/PartEstimate";
 import { INDIAN_STATES } from "../components/ProjectBits";
 import { Badge, Card, Empty, Field, Modal, PillTabs, SegTabs, Toggle, toast } from "../components/ui";
 import { api, ApiError, downloadFile, downloadPost, fmtDateTime, inr, lakhs, num, rupees } from "../lib/api";
@@ -379,11 +380,11 @@ export default function EstimatePage() {
     try {
       if (!saved || dirty) {  // 1.13: what is on the screen now – no need to save first
         if (!result || !inputs) return toast("Calculate the estimate first", "err");
-        await downloadPost(`/api/projects/${pid}/estimate/export?kind=${kind}`, { inputs, state }, `${currentProject?.code}_${tag}_draft.${ext}`);
+        await downloadPost(`/api/projects/${pid}/estimate/export?kind=${kind}`, { inputs, state }, `${fileStem(currentProject?.code || "", currentProject?.name || "", tag, "draft")}.${ext}`);
         return;
       }
       const path = kind === "excel" ? "excel" : kind === "pdf" ? "pdf" : `pdf?fmt=${kind}`;
-      await downloadFile(`/api/estimates/${saved.id}/${path}`, `${currentProject?.code}_${tag}_v${saved.version}.${ext}`);
+      await downloadFile(`/api/estimates/${saved.id}/${path}`, `${fileStem(currentProject?.code || "", currentProject?.name || "", tag, `v${saved.version}`)}.${ext}`);
     } catch (e: any) { toast(e.message, "err"); }
   };
   const applySchedule = async (stages: { stage: string; pct: number }[] | null) => {
@@ -442,7 +443,7 @@ export default function EstimatePage() {
     { id: "overview", label: "Overview", icon: <LayoutDashboard size={18} /> },
     { id: "floorboq", label: "Floor-wise BOQ", icon: <Layers size={18} /> }, { id: "takeoff", label: "Quantity Takeoff", icon: <Ruler size={18} /> },
     { id: "material", label: "Material Estimate", icon: <Package size={18} /> }, { id: "cost", label: "Cost Analysis", icon: <IndianRupee size={18} /> },
-    { id: "boq", label: "BOQ", icon: <ClipboardList size={18} /> }, { id: "rates", label: "Rate Library", icon: <Library size={18} /> },
+    { id: "boq", label: "BOQ", icon: <ClipboardList size={18} /> }, { id: "part", label: "Part Estimate", icon: <Puzzle size={18} /> }, ...(currentProject?.permissions?.rates ? [{ id: "rates", label: "Rate Library", icon: <Library size={18} /> }] : []),
     { id: "compare", label: "Comparisons", icon: <GitCompare size={18} /> }, { id: "reports", label: "Reports", icon: <FileText size={18} /> },
     { id: "bbs", label: "BBS (Steel)", icon: <Ruler size={18} /> },
     { id: "payment", label: "Payment Schedule", icon: <CalendarClock size={18} /> },
@@ -680,7 +681,7 @@ export default function EstimatePage() {
       {tab === "cost" && (result ? <div className="grid gap-4 xl:grid-cols-[1.4fr_1fr]"><Card title="Labour, Equipment & Extras" icon={<Users size={20} />}>{labourTable}</Card>
         <div className="space-y-4"><Card title="Cost Breakdown" icon={<IndianRupee size={20} />}><Donut data={result.breakdown} total={tt!.grand_total} /></Card><Card title="Floor-wise Summary" icon={<Layers size={20} />}>{floorTable}</Card></div></div> : noResult)}
       {tab === "boq" && (result ? <Card title="Bill of Quantities (click a row for rate analysis)" icon={<ClipboardList size={20} />}>{filters}{boqTable}</Card> : noResult)}
-      {tab === "rates" && <RateLibrary defaultState={state} />}
+      {tab === "rates" && (currentProject?.permissions?.rates ? <RateLibrary defaultState={state} canEdit /> : <Card><Empty text="Rate Library is only for the owner. Ask for 'Material Rates' permission." /></Card>)}
       {tab === "quick" && pid && <QuickEstimate pid={pid} defaults={defaults} state={state} onUseDetailed={applyQuick} />}
       {tab === "floorboq" && (result ? <FloorBoqPanel result={result} onExport={doExport} onRecalc={() => calculate()} /> : noResult)}
       {tab === "payment" && (result ? <PaymentSchedulePanel result={result} onApply={applySchedule} busy={busy} onExport={doExport} onRecalc={() => calculate()} /> : noResult)}
@@ -723,10 +724,14 @@ export default function EstimatePage() {
           </Card>
         </div>
       )}
+      {tab === "part" && pid && <PartEstimate pid={pid} code={currentProject?.code || ""} name={currentProject?.name || ""} inputs={inputs} state={state} result={result}
+        label={saved && !dirty ? `v${saved.version}` : "draft"} />}
+      {pid && result && DOWNLOAD_TABS.includes(tab) && (tab !== "compare" || cmp) && <TabDownload pid={pid} tab={tab} code={currentProject?.code || ""} name={currentProject?.name || ""}
+        inputs={inputs} state={state} label={saved && !dirty ? `v${saved.version}` : "draft"} />}
       {tab === "reports" && <div className="grid gap-4 lg:grid-cols-2">{exportsCard}{notes || <Card><Empty text="Calculate an estimate first." /></Card>}</div>}
 
       {pid && <ExcelModal open={showExcel} onClose={() => setShowExcel(false)} pid={pid} code={currentProject?.code || "Nexora"} inputs={inputs} state={state}
-        isOwner={user?.role === "owner"} onImported={fromExcel} onRatesChanged={() => api(`/api/rates?state=${encodeURIComponent(state)}`).then((d) => setRates(d.items)).catch(() => {})} />}
+        isOwner={!!currentProject?.permissions?.rates} onImported={fromExcel} onRatesChanged={() => api(`/api/rates?state=${encodeURIComponent(state)}`).then((d) => setRates(d.items)).catch(() => {})} />}
       <InputsModal open={showInputs} onClose={() => setShowInputs(false)} inputs={inputs} setInputs={(v) => { setInputs(v); }}
         state={state} setState={setState} onCalculate={() => calculate()} rates={rates} needs={needs} />
       <Modal open={!!designPick} onClose={() => setDesignPick(null)} title="Estimate from a 2D drawing (Design Studio)">

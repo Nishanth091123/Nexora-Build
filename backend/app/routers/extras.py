@@ -215,7 +215,7 @@ def permit_out(db: Session, c: PermitChecklist) -> dict:
 
 @router.get("/projects/{project_id}/permit")
 def permit_get(project_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    p = require_project(db, user, project_id, "view")
+    p = require_project(db, user, project_id, "approval")
     return permit_out(db, _permit(db, p))
 
 
@@ -232,7 +232,7 @@ class PermitIn(BaseModel):
 
 @router.put("/projects/{project_id}/permit")
 def permit_put(project_id: int, body: PermitIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    p = require_project(db, user, project_id, "edit")
+    p = require_project(db, user, project_id, "approval")
     c = _permit(db, p)
     if body.items is not None:
         clean = []
@@ -293,7 +293,7 @@ def _summary_pdf(p: Project, d: dict) -> bytes:
 
 @router.get("/projects/{project_id}/permit/pack.zip")
 def permit_pack(project_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    p = require_project(db, user, project_id, "view")
+    p = require_project(db, user, project_id, "approval")
     d = permit_out(db, _permit(db, p))
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:

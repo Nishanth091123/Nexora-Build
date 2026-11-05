@@ -14,7 +14,6 @@ import { Avatar } from "./ui";
 
 const NAV: { to: string; label: string; icon: any; end?: boolean; module?: string; ownerOnly?: boolean }[] = [
   { to: "/", label: "Home", icon: Home, end: true },
-  { to: "/clients", label: "Clients", icon: Users, ownerOnly: true },
   { to: "/design", label: "Design", icon: PenSquare, module: "design" },
   { to: "/site", label: "Site", icon: HardHat, module: "site" },
   { to: "/vastu", label: "Vastu", icon: Compass, module: "vastu" },
@@ -25,7 +24,6 @@ const NAV: { to: string; label: string; icon: any; end?: boolean; module?: strin
 
 // A different picture for each page (bottom of the sidebar).
 const SIDEBAR_IMG: [string, string][] = [
-  ["/clients", "proj_residential.jpg"],
   ["/site", "sidebar_site.jpg"], ["/vastu", "sidebar_vastu.jpg"], ["/design", "proj_villa.jpg"],
   ["/estimate", "estimate_house.jpg"], ["/projects", "proj_commercial.jpg"], ["/ai", "proj_residential.jpg"],
   ["/settings", "company_building.jpg"],

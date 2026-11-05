@@ -101,6 +101,8 @@ class ProjectAccess(Base):
     can_site: Mapped[bool] = mapped_column(Boolean, default=False)
     can_vastu: Mapped[bool] = mapped_column(Boolean, default=False)
     can_ai: Mapped[bool] = mapped_column(Boolean, default=True)
+    can_approval: Mapped[bool] = mapped_column(Boolean, default=False)  # 1.16 approval drawing + permit
+    can_rates: Mapped[bool] = mapped_column(Boolean, default=False)  # 1.16 rate library / material rates
     project_role: Mapped[str] = mapped_column(String(20), default="viewer")  # editor | viewer (label only)
     granted_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

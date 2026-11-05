@@ -17,6 +17,11 @@ class PlanError(ValueError):
     pass
 
 
+PLANT_KINDS = ("coconut", "neem", "mango", "areca", "shrubs", "potted", "lawn")
+PLANT_MAX = {"coconut": 12, "neem": 6, "mango": 6, "areca": 16, "shrubs": 40, "potted": 12}
+PLANT_PLACES = ("front", "sides", "rear", "edge")
+
+
 def clean_plan(plan: dict) -> dict:
     """Validate and normalise a plan coming from the browser. Raises PlanError with a clear message."""
     if not isinstance(plan, dict) or "levels" not in plan or "building" not in plan:
@@ -90,6 +95,21 @@ def clean_plan(plan: dict) -> dict:
                 if one:
                     rooms[rid] = one
         clean["rooms"] = rooms
+    # 1.16 trees / plants around the house: {kind: {on, count, place}} + lawn {on}
+    if isinstance(fin, dict) and isinstance(fin.get("plants"), dict):
+        plants = {}
+        for kind, v in fin["plants"].items():
+            if kind not in PLANT_KINDS or not isinstance(v, dict):
+                continue
+            one = {"on": bool(v.get("on"))}
+            if kind != "lawn":
+                try:
+                    one["count"] = max(0, min(PLANT_MAX[kind], int(v.get("count") or 0)))
+                except (TypeError, ValueError):
+                    one["count"] = 0
+                one["place"] = v.get("place") if v.get("place") in PLANT_PLACES else "edge"
+            plants[kind] = one
+        clean["plants"] = plants
     plan["finishes"] = clean
     return plan
 

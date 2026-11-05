@@ -85,10 +85,9 @@ class ProjectPatch(BaseModel):
 
 
 def _link_client(db: Session, user: User, p: Project, data: dict) -> None:
-    """Owner only: the project's client is a Client record (picked, or made from the typed name)."""
-    from .clients import _client, find_or_create_client
-    if user.role != "owner":
-        return
+    """1.16: Clients section removed. The project keeps only the typed client name (title block);
+    no Client records are created or linked any more. Old links/rows stay untouched in the database."""
+    return
     if data.get("client_id"):
         c = _client(db, data["client_id"])
         p.client_id, p.client_name = c.id, c.name

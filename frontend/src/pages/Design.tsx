@@ -63,6 +63,9 @@ export default function DesignPage() {
   const [future, setFuture] = useState<string[]>([]);
   const [stale, setStale] = useState(false);
   const [grid, setGrid] = useState(0.5);
+  // 1.16: live Vastu score + 16-zone overlay while editing (needs Vastu access)
+  const [vastuOn, setVastuOn] = useState(() => params.get("vastu") === "1");
+  const [vres, setVres] = useState<any>(null);
   const [spec, setSpec] = useState("standard");
   const [quick, setQuick] = useState<Quick | null>(null);
   const [prevTotal, setPrevTotal] = useState<number | null>(null);
@@ -288,6 +291,15 @@ export default function DesignPage() {
   const lvl = plan?.levels[level];
   const allWarnings = useMemo(() => (plan ? plan.levels.flatMap((l) => l.warnings) : []), [plan]);
 
+  const canVastu = !!currentProject?.permissions?.vastu;
+  useEffect(() => {
+    if (!vastuOn || !canVastu || !plan || !pid || tab !== "editor") return;
+    const h = setTimeout(() => {
+      api<any>(`/api/projects/${pid}/vastu/analyse`, { body: { plan } }).then((r) => setVres(r.result)).catch(() => setVres(null));
+    }, 700);
+    return () => clearTimeout(h);
+  }, [vastuOn, canVastu, plan, pid, tab]);  // eslint-disable-line react-hooks/exhaustive-deps
+
   if (!currentProject) return <Page title={t("Design Studio")} subtitle="AI floor plans, 2D editing, 3D preview and revisions"><Empty text="Create a project first (Projects page)." /></Page>;
   if (!allowed) return <Page title={t("Design Studio")} subtitle="AI floor plans, 2D editing, 3D preview and revisions"><Empty text="You don't have Design access for this project. Ask the owner." /></Page>;
 
@@ -295,7 +307,7 @@ export default function DesignPage() {
     { id: "ai" as Tab, label: "AI Floor Plan", icon: <Wand2 size={18} /> }, { id: "editor" as Tab, label: "2D Editor", icon: <PenSquare size={18} /> },
     { id: "3d" as Tab, label: "3D View", icon: <Box size={18} /> }, { id: "sheets" as Tab, label: "Drawing Sheets", icon: <FileText size={18} /> },
     { id: "structural" as Tab, label: "Structural", icon: <Layers size={18} /> },
-    { id: "approval" as Tab, label: "Approval Drawing", icon: <Stamp size={18} /> },
+    ...(currentProject?.permissions?.approval ? [{ id: "approval" as Tab, label: "Approval Drawing", icon: <Stamp size={18} /> }] : []),
     { id: "upload" as Tab, label: "Drawing Upload", icon: <Upload size={18} /> },
     { id: "rev" as Tab, label: "Revisions", icon: <Layers size={18} /> },
   ];
@@ -534,12 +546,22 @@ export default function DesignPage() {
               <label className="ml-auto flex items-center gap-2 text-xs text-slate-600">Snap
                 <select className="input w-auto py-1 text-xs" value={grid} onChange={(e) => setGrid(Number(e.target.value))}>{[0.25, 0.5, 1].map((g) => <option key={g} value={g}>{g === 0.25 ? '3"' : g === 0.5 ? '6"' : "1'"}</option>)}</select>
               </label>
+              {canVastu && <button className={vastuOn ? "btn-primary btn-sm" : "btn-outline btn-sm"} onClick={() => setVastuOn(!vastuOn)} title="Live Vastu score and 16 zones while you edit"><Compass size={14} />Vastu{vastuOn && vres ? ` ${vres.score}` : ""}</button>}
               {aiPlan && <button className="btn-ghost btn-sm" onClick={() => { if (window.confirm("Go back to the AI plan? Your edits stay in Undo.")) { setPast((p) => [...p, JSON.stringify(plan)]); setPlan(clone(aiPlan)); setStale(false); setDirty(true); runQuick(aiPlan); } }}><RotateCcw size={14} />AI plan</button>}
             </div>
             <div ref={editHost} className="aspect-[4/5] max-h-[720px] w-full rounded-lg border border-line bg-white p-1 sm:aspect-square">
-              <PlanSvg plan={plan} level={level} editable selected={selected} onSelect={setSelected} onChange={setRooms} grid={grid} stale={stale} />
+              <PlanSvg plan={plan} level={level} editable selected={selected} onSelect={setSelected} onChange={setRooms} grid={grid} stale={stale}
+                vastuGrid={vastuOn && canVastu} mandala={vastuOn && canVastu ? vres?.mandala : null} doorCode={vastuOn && canVastu ? vres?.door?.code : null} />
             </div>
             {downloadBar(editHost)}
+            {vastuOn && canVastu && vres && (
+              <div className="mt-2 flex flex-wrap items-center gap-2 rounded-lg bg-orange-50 px-3 py-2 text-xs text-orange-900">
+                <Compass size={14} /><b>Vastu {vres.score}/100</b>
+                {(vres.floors || []).map((f: any) => <span key={f.level} className="rounded bg-white px-2 py-0.5">{f.name}: <b>{f.score}</b></span>)}
+                {vres.door && <span className="rounded bg-white px-2 py-0.5">Door {vres.door.code} {vres.door.name}</span>}
+                <span className="text-orange-700">{(vres.checks || []).filter((c: any) => c.status === "not_matched" && c.level === level).slice(0, 3).map((c: any) => `${c.title}: ${c.message}`).join(" · ")}</span>
+              </div>
+            )}
             <p className="mt-2 text-xs text-slate-500">Drag a room to move it (its toilet & dress move with it); drag the blue handles to resize. Walls, doors, windows and the estimate update automatically. Ctrl+Z / Ctrl+Y, Delete key.</p>
           </Card>
           <div className="min-w-0 space-y-4">
@@ -603,8 +625,9 @@ export default function DesignPage() {
       {tab === "structural" && (!plan || !pid ? <Card><Empty text="Generate or open a plan first." /></Card> : (
         <StructuralPanel pid={pid} saved={saved} dirty={dirty} code={currentProject?.code || "Nexora"} />
       ))}
-      {tab === "approval" && (!plan || !pid ? <Card><Empty text="Generate or open a plan first." /></Card> : (
-        <ApprovalPanel pid={pid} plan={plan} saved={saved} dirty={dirty} code={currentProject?.code || "Nexora"} canEdit={!!currentProject?.permissions?.edit} />
+      {tab === "approval" && !currentProject?.permissions?.approval && <Card><Empty text="Approval Drawing is only for the owner. Ask for 'Approval' permission." /></Card>}
+      {tab === "approval" && currentProject?.permissions?.approval && (!plan || !pid ? <Card><Empty text="Generate or open a plan first." /></Card> : (
+        <ApprovalPanel pid={pid} plan={plan} saved={saved} dirty={dirty} code={currentProject?.code || "Nexora"} canEdit={!!currentProject?.permissions?.approval} />
       ))}
       {tab === "upload" && pid && (
         <DrawingImport projectId={pid} designs={designs} onSaved={async (d) => { await loadDesigns(); await openDesign(d.id); setTab("editor"); }} />

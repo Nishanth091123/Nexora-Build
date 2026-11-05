@@ -12,7 +12,9 @@ from . import config
 from .db import get_db
 from .models import AppSetting, Project, ProjectAccess, User
 
-MODULES = ("view", "edit", "design", "estimate", "site", "vastu", "ai")
+MODULES = ("view", "edit", "design", "estimate", "site", "vastu", "ai", "approval", "rates")
+# 1.16: "approval" (Approval drawing + Permit) and "rates" (Rate Library / material rates) are owner-only unless
+# the owner ticks them for a user on a project. Design/Estimate access alone never opens them.
 
 bearer = HTTPBearer(auto_error=False)
 
@@ -105,6 +107,18 @@ def require_project(db: Session, user: User, project_id: int, module: str = "vie
     if not project_permissions(db, user, project).get(module):
         raise HTTPException(403, f"You don't have '{module}' access to this project")
     return project
+
+
+def has_rates_access(db: Session, user: User) -> bool:
+    """1.16: Rate Library is global – a user needs the 'rates' tick on at least one project."""
+    if user.role == "owner":
+        return True
+    return db.query(ProjectAccess).filter_by(user_id=user.id, can_rates=True).first() is not None
+
+
+def require_rates(db: Session, user: User) -> None:
+    if not has_rates_access(db, user):
+        raise HTTPException(403, "Material Rates access is only for the owner (ask for 'Material Rates' permission)")
 
 
 def visible_project_ids(db: Session, user: User) -> Optional[list[int]]:

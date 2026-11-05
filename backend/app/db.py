@@ -118,6 +118,11 @@ ADDITIVE_MIGRATIONS: dict[str, list[str]] = {
         "ALTER TABLE permit_checklists ADD COLUMN IF NOT EXISTS site_info JSON",
         "ALTER TABLE permit_checklists ADD COLUMN IF NOT EXISTS workflow JSON",
     ],
+    # 1.16: separate Approval / Material Rates permissions (default off = owner only)
+    "0012_v116_perms": [
+        "ALTER TABLE project_access ADD COLUMN IF NOT EXISTS can_approval BOOLEAN DEFAULT FALSE",
+        "ALTER TABLE project_access ADD COLUMN IF NOT EXISTS can_rates BOOLEAN DEFAULT FALSE",
+    ],
 }
 
 

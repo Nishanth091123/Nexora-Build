@@ -14,6 +14,7 @@ import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment
 import { api, fileObjectUrl } from "../../lib/api";
 import { useAuth } from "../../lib/auth";
 import MaterialPanel from "./MaterialPanel";
+import PlantsPanel, { plantSummary } from "./PlantsPanel";
 import { BUILTIN, lookOf, procTex, type Item, type Look, type Slot } from "./house3d/catalog";
 import {
   ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Camera, ChevronsDown, ChevronsUp, Download, Film, Footprints, Images,
@@ -30,8 +31,15 @@ import * as T from "./house3d/textures";
 export type { Finishes };
 export { DEFAULT_FINISH };
 const EYE = 5.3;
+/** 1.16: picture quality is chosen ONCE by you (never lowered while you move – that was the blur on every click) */
+export type Quality = "high" | "medium" | "low";
+const QUALITY: Record<Quality, { pr: number; shadow: number; soft: boolean }> = {
+  high: { pr: 2, shadow: 2048, soft: true }, medium: { pr: 1.5, shadow: 1024, soft: false }, low: { pr: 1, shadow: 0, soft: false },
+};
+const readQuality = (): Quality => { try { const q = localStorage.getItem("nexora3dQuality"); return q === "medium" || q === "low" ? q : "high"; } catch { return "high"; } };
+const prFor = (q: Quality) => Math.min(QUALITY[q].pr, window.devicePixelRatio || 1);
 
-export const SWATCHES: Record<Exclude<keyof Finishes, "style" | "mat" | "rooms">, [string, string][]> = {
+export const SWATCHES: Record<Exclude<keyof Finishes, "style" | "mat" | "rooms" | "plants">, [string, string][]> = {
   ext: [["#efe7d8", "Cream"], ["#ffffff", "White"], ["#f5f5f3", "Off-white"], ["#d9d4cc", "Grey"], ["#f2deb0", "Sandal"], ["#e9d7b9", "Beige"], ["#cfe3f2", "Light blue"], ["#b5654a", "Brick"]],
   int: [["#fbfaf7", "Off-white"], ["#fff7e6", "Ivory"], ["#eef5ec", "Mint"], ["#f1ecf7", "Lilac"], ["#f7ecec", "Blush"]],
   floor: [["#e7e0d3", "Vitrified beige"], ["#f5f5f4", "White marble"], ["#9ca3af", "Granite grey"], ["#b08a62", "Wood"], ["#d6c7a1", "Kota stone"], ["#b5523a", "Red oxide"]],
@@ -40,7 +48,7 @@ export const SWATCHES: Record<Exclude<keyof Finishes, "style" | "mat" | "rooms">
   roof: [["#cfcac2", "Concrete"], ["#d6d2ca", "Light concrete"], ["#b9473a", "Weathering tile"], ["#e5e7eb", "White coat"]],
   plinth: [["#3b3a38", "Charcoal"], ["#8d8d8d", "Grey"], ["#6b4f3a", "Brown"], ["#7a2e1f", "Maroon"], ["#2f2f2f", "Black granite"]],
 };
-export const FIN_LABEL: Record<Exclude<keyof Finishes, "style" | "mat" | "rooms">, string> = { ext: "Exterior walls", int: "Interior walls", floor: "Flooring", door: "Doors", frame: "Window frames", roof: "Terrace", plinth: "Plinth" };
+export const FIN_LABEL: Record<Exclude<keyof Finishes, "style" | "mat" | "rooms" | "plants">, string> = { ext: "Exterior walls", int: "Interior walls", floor: "Flooring", door: "Doors", frame: "Window frames", roof: "Terrace", plinth: "Plinth" };
 const STYLES: [Style, string, string][] = [
   ["modern", "Modern", "Stone + wood cladding, black frames, deep roof overhang with lights"],
   ["contemporary", "Contemporary", "Two-tone, grey tiles, wooden fins, terrace pergola"],
@@ -74,6 +82,8 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
   const [flat, setFlat] = useState(false);
   const [structure, setStructure] = useState<any>(null);
   const [busy, setBusy] = useState(false);
+  const [quality, setQuality] = useState<Quality>(readQuality);
+  const qualityRef = useRef(quality);
   const [walkInfo, setWalkInfo] = useState<{ level: number; room: string; stair: boolean }>({ level: 0, room: "", stair: false });
   const fin: Finishes = { ...DEFAULT_FINISH, ...(finishes || {}) };
   const style: Style = (fin.style as Style) || "modern";
@@ -150,12 +160,12 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
     const el = host.current!;
     // no logarithmic depth: the model has no overlapping faces any more, and log depth made every pixel slow
     const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
-    const maxPR = Math.min(2, window.devicePixelRatio || 1);
-    renderer.setPixelRatio(maxPR);
+    const q0 = QUALITY[qualityRef.current];
+    renderer.setPixelRatio(prFor(qualityRef.current));  // fixed – never changed while moving
     renderer.setSize(el.clientWidth, el.clientHeight, false);
     Object.assign(renderer.domElement.style, { width: "100%", height: "100%", display: "block" });
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    renderer.shadowMap.enabled = q0.shadow > 0;
+    renderer.shadowMap.type = q0.soft ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
     renderer.shadowMap.autoUpdate = false;  // the house does not move: shadows are drawn once, no shimmer
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -176,8 +186,8 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
     controls.screenSpacePanning = true;
     const hemi = new THREE.HemisphereLight("#ffffff", "#8a8a7a", 0.7);
     const sun = new THREE.DirectionalLight("#fff6e5", 2.4);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(2048, 2048);
+    sun.castShadow = q0.shadow > 0;
+    sun.shadow.mapSize.set(q0.shadow || 512, q0.shadow || 512);
     sun.shadow.bias = -0.0006;
     sun.shadow.normalBias = 0.06;
     scene.add(hemi, sun, sun.target);
@@ -186,17 +196,9 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
     const c: Ctx = { renderer, scene, camera, controls, model: null, sun, hemi, raf: 0, roomLights: [] };
     ctx.current = c;
     const clock = new THREE.Clock();
-    // adaptive sharpness: if the laptop is slow, draw fewer pixels (smooth), and go back up when it is fast again
-    let frames = 0, acc = 0, pr = maxPR;
+    // 1.16: NO adaptive sharpness any more. The resolution stays full and sharp all the time (Quality decides it once).
     const loop = () => {
-      const raw = clock.getDelta();
-      const dt = Math.min(0.1, raw);
-      frames++; acc += raw;
-      if (acc > 1.0) {
-        const fps = frames / acc; frames = 0; acc = 0;
-        const want = fps < 40 ? Math.max(0.75, pr - 0.25) : fps > 57 ? Math.min(maxPR, pr + 0.25) : pr;
-        if (want !== pr) { pr = want; renderer.setPixelRatio(pr); renderer.setSize(el.clientWidth, el.clientHeight, false); }
-      }
+      const dt = Math.min(0.05, clock.getDelta());  // a slow frame (rebuild) never makes the camera jump
       if (camera.userData.walk) walkStep(dt);
       else {
         if (camera.userData.spin) {
@@ -252,6 +254,23 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
       ctx.current = null;
     };
   }, []);
+
+  // Quality changed by you → set once (pixel ratio + shadows), then it stays fixed
+  useEffect(() => {
+    qualityRef.current = quality;
+    try { localStorage.setItem("nexora3dQuality", quality); } catch { /* private window */ }
+    const c = ctx.current; if (!c) return;
+    const q = QUALITY[quality], el = host.current;
+    c.renderer.setPixelRatio(prFor(quality));
+    if (el) c.renderer.setSize(el.clientWidth, el.clientHeight, false);
+    const wasOn = c.renderer.shadowMap.enabled;
+    c.renderer.shadowMap.enabled = q.shadow > 0;
+    c.renderer.shadowMap.type = q.soft ? THREE.PCFSoftShadowMap : THREE.PCFShadowMap;
+    c.sun.castShadow = q.shadow > 0;
+    if (q.shadow) { c.sun.shadow.mapSize.set(q.shadow, q.shadow); c.sun.shadow.map?.dispose(); (c.sun.shadow as any).map = null; }
+    if (wasOn !== q.shadow > 0) c.scene.traverse((o: any) => { const ms = Array.isArray(o.material) ? o.material : o.material ? [o.material] : []; ms.forEach((m: THREE.Material) => { m.needsUpdate = true; }); });
+    c.renderer.shadowMap.needsUpdate = true;
+  }, [quality]);
 
   function disposeModel(m: THREE.Object3D | null) {
     if (!m) return;
@@ -422,7 +441,7 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
   function placeCam(dt = 0) {
     const c = ctx.current; if (!c) return;
     const w = walk.current, sm = smooth.current;
-    const k = dt ? 1 - Math.exp(-dt * 12) : 1, ka = dt ? 1 - Math.exp(-dt * 16) : 1;
+    const k = dt ? 1 - Math.exp(-dt * 22) : 1, ka = dt ? 1 - Math.exp(-dt * 26) : 1;  // 1.16: quicker glide = no smear
     sm.x += (w.x - sm.x) * k; sm.y += (w.y - sm.y) * k; sm.h += (w.h + EYE - sm.h) * k;
     let dyaw = w.yaw - sm.yaw; while (dyaw > Math.PI) dyaw -= 2 * Math.PI; while (dyaw < -Math.PI) dyaw += 2 * Math.PI;
     sm.yaw += dyaw * ka; sm.pitch += (w.pitch - sm.pitch) * ka;
@@ -581,6 +600,10 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
           <button key={m} onClick={() => setMode(m)} className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold ${mode === m ? "bg-brand-600 text-white" : "bg-brand-50 text-navy-ink"}`}><I size={15} />{l}</button>
         ))}
         <span className="flex-1" />
+        <label className="inline-flex items-center gap-1 text-xs font-semibold text-navy-ink" title="Set once for this computer. High = sharpest. Use Medium/Low only on a slow laptop.">Quality
+          <select className="rounded-lg border border-line bg-white px-2 py-1.5 text-sm" value={quality} onChange={(e) => setQuality(e.target.value as Quality)}>
+            <option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option>
+          </select></label>
         <div className="inline-flex overflow-hidden rounded-lg border border-line text-sm">
           {([["day", "Day", Sun], ["dusk", "Evening", Sunset], ["night", "Night", Moon]] as [LightMode, string, any][]).map(([k, l, I]) => (
             <button key={k} onClick={() => setLight(k)} className={`inline-flex items-center gap-1 px-2.5 py-1.5 font-semibold ${light === k ? "bg-navy-ink text-white" : "bg-white text-navy-ink"}`}><I size={14} />{l}</button>
@@ -694,7 +717,8 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
           </details>
         </div>
       </div>
-      <MaterialPanel plan={plan} picks={{ mat: fin.mat, rooms: fin.rooms }} items={items} swatch={swatch} isOwner={user?.role === "owner"}
+      <PlantsPanel plants={fin.plants} disabled={!onFinishes} onChange={(plants) => onFinishes?.({ ...fin, plants })} />
+      <MaterialPanel plan={plan} picks={{ mat: fin.mat, rooms: fin.rooms }} plantLines={plantSummary(fin.plants)} items={items} swatch={swatch} isOwner={user?.role === "owner"}
         code={`Nexora_3D_${style}`} onLibraryChanged={loadLibrary}
         onPick={(slot, ref) => { const mat = { ...(fin.mat || {}) }; if (ref) mat[slot] = ref; else delete mat[slot]; onFinishes?.({ ...fin, mat }); }}
         onRoomPick={(rid, kind, ref) => {

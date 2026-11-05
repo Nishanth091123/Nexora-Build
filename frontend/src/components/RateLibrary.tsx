@@ -27,9 +27,10 @@ function RateCell({ value, editable, onSave }: { value: number; editable: boolea
   );
 }
 
-export default function RateLibrary({ defaultState = "Tamil Nadu" }: { defaultState?: string }) {
+export default function RateLibrary({ defaultState = "Tamil Nadu", canEdit = false }: { defaultState?: string; canEdit?: boolean }) {
   const { user } = useAuth();
   const isOwner = user?.role === "owner";
+  const canChange = isOwner || canEdit; // 1.16: owner, or a user given "Material Rates" permission
   const [state, setState] = useState(defaultState);
   const [kind, setKind] = useState("material");
   const [q, setQ] = useState("");
@@ -44,7 +45,7 @@ export default function RateLibrary({ defaultState = "Tamil Nadu" }: { defaultSt
 
   const rows = useMemo(() => (data?.items || []).filter((r) => r.kind === kind &&
     (!q || `${r.name} ${r.category} ${r.note}`.toLowerCase().includes(q.toLowerCase()))), [data, kind, q]);
-  const editable = isOwner && !data?.using_fallback;
+  const editable = canChange && !data?.using_fallback;
 
   const patch = async (r: Rate, body: Record<string, any>) => {
     try {
@@ -115,7 +116,7 @@ export default function RateLibrary({ defaultState = "Tamil Nadu" }: { defaultSt
         {!rows.length && <div className="p-4"><Empty text="No rates in this list" /></div>}
       </div>
       <p className="mt-2 text-xs text-slate-500">
-        Default values are approximate Tamil Nadu averages – edit them to your local market. {isOwner ? "Click a rate to edit; it saves when you leave the box." : "Only the owner can edit rates."} Spec level changes only material quality/brand – never quantities.
+        Default values are approximate Tamil Nadu averages – edit them to your local market. {canChange ? "Click a rate to edit; it saves when you leave the box." : "Only the owner can edit rates."} Spec level changes only material quality/brand – never quantities.
       </p>
 
       <Modal open={add} onClose={() => setAdd(false)} title={`Add rate – ${state}`}>
