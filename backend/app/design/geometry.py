@@ -124,6 +124,45 @@ def shared(walls_: list[dict], rid: str, other_types: list[str], rooms_by_id: di
     return None, None
 
 
+def _on_line(o: dict, w: dict) -> bool:
+    if w["y1"] == w["y2"]:
+        return abs(o["y1"] - o["y2"]) < 1e-6 and abs(o["y1"] - w["y1"]) < 0.01
+    return abs(o["x1"] - o["x2"]) < 1e-6 and abs(o["x1"] - w["x1"]) < 0.01
+
+
+def place_free(w: dict, width: float, ops: list[dict], gap: float = 1.0) -> dict | None:
+    """1.15: like place(), but never on top of a door / window already on that wall (keeps `gap` ft between).
+    Picks the free stretch nearest the middle of the wall; None when it does not fit."""
+    horiz = w["y1"] == w["y2"]
+    a0 = min(w["x1"], w["x2"]) if horiz else min(w["y1"], w["y2"])
+    a1 = max(w["x1"], w["x2"]) if horiz else max(w["y1"], w["y2"])
+    busy = sorted(((min(o["x1"], o["x2"]) if horiz else min(o["y1"], o["y2"])) - gap,
+                   (max(o["x1"], o["x2"]) if horiz else max(o["y1"], o["y2"])) + gap) for o in ops if _on_line(o, w))
+    if not busy:
+        return place(w, width)
+    free, cur = [], a0 + 0.5
+    for b0, b1 in busy:
+        if b0 > cur:
+            free.append((cur, b0))
+        cur = max(cur, b1)
+    if a1 - 0.5 > cur:
+        free.append((cur, a1 - 0.5))
+    mid = (a0 + a1) / 2
+    best = None
+    for f0, f1 in free:
+        if f1 - f0 + 1e-6 < width:
+            continue
+        c = min(max(mid, f0 + width / 2), f1 - width / 2)  # as near the middle as the free stretch allows
+        if best is None or abs(c - mid) < abs(best - mid):
+            best = c
+    if best is None:
+        return None
+    s0 = best - width / 2
+    if horiz:
+        return {"x1": round(s0, 2), "y1": w["y1"], "x2": round(s0 + width, 2), "y2": w["y1"], "w": round(width, 2)}
+    return {"x1": w["x1"], "y1": round(s0, 2), "x2": w["x1"], "y2": round(s0 + width, 2), "w": round(width, 2)}
+
+
 def place(w: dict, width: float, prefer_end: bool = False) -> dict:
     L = seg_len(w)
     width = min(width, max(1.5, L - 1.0))
@@ -147,6 +186,13 @@ def level_openings(lv: dict, level_index: int, building_d: float) -> tuple[list[
 
     def add(rid, kind, w, h, seg):
         nonlocal n
+        if kind not in ("window", "vent"):  # 1.15: two rooms must not put a door in the same spot of one wall
+            for o in ops:
+                if o["type"] not in ("window", "vent") and _on_line(o, {"x1": seg["x1"], "y1": seg["y1"], "x2": seg["x2"], "y2": seg["y2"]}):
+                    a0, a1 = sorted((seg["x1"], seg["x2"])) if seg["y1"] == seg["y2"] else sorted((seg["y1"], seg["y2"]))
+                    b0, b1 = sorted((o["x1"], o["x2"])) if o["y1"] == o["y2"] else sorted((o["y1"], o["y2"]))
+                    if min(a1, b1) - max(a0, b0) > 0:
+                        return
         n += 1
         ops.append({"id": f"op{n}", "room": rid, "type": kind, "h": h, **seg})
 
@@ -205,17 +251,25 @@ def level_openings(lv: dict, level_index: int, building_d: float) -> tuple[list[
         # windows on the longest external wall
         if t in WIN:
             ext = [w for w in ws if w["kind"] == "ext" and rid in (w["a"], w["b"]) and seg_len(w) >= WIN[t] + 1]
-            if ext:
-                w = max(ext, key=seg_len)
-                add(rid, "vent" if t == "toilet" or t == "common_toilet" else "window", WIN[t], WIN_H.get(t, 4),
-                    place(w, WIN[t]))
+            spot = None
+            for w in sorted(ext, key=seg_len, reverse=True):  # 1.15: never on top of the main door / another opening
+                spot = place_free(w, WIN[t], ops)
+                if spot:
+                    break
+            if spot:
+                add(rid, "vent" if t == "toilet" or t == "common_toilet" else "window", WIN[t], WIN_H.get(t, 4), spot)
+            elif ext and t in HABITABLE:
+                warnings.append(f"{lv['name']}: {r['name']} – no free outside wall length for a window next to the door.")
             elif t in HABITABLE:
                 warnings.append(f"{lv['name']}: {r['name']} has no outside wall for a window – add a light well / "
                                 f"duct or rearrange.")
         if t == "common_toilet":
             ext = [w for w in ws if w["kind"] == "ext" and rid in (w["a"], w["b"]) and seg_len(w) >= 3]
-            if ext:
-                add(rid, "vent", 2, 1.5, place(max(ext, key=seg_len), 2))
+            for w in sorted(ext, key=seg_len, reverse=True):
+                spot = place_free(w, 2, ops)
+                if spot:
+                    add(rid, "vent", 2, 1.5, spot)
+                    break
     if level_index > 0 or lv.get("stilt"):
         pass  # upper floors are entered from the staircase (open)
     return ops, warnings
@@ -250,6 +304,8 @@ def add_openings(plan: dict) -> dict:
         per.append(warns + w2)
     from .sheets import apply_specs  # 1.10: door/window sizes edited in the schedule
     spec_warn = apply_specs(plan)
+    for lv in plan["levels"]:  # 1.15: bigger sizes from the schedule must not push a window into a door
+        spec_warn += separate_openings(lv)
     for i, lv in enumerate(plan["levels"]):
         lv["walls"] = walls(lv["rooms"])
         lv["summary"] = summarize_level(lv)
@@ -258,6 +314,42 @@ def add_openings(plan: dict) -> dict:
     plan["warnings"] = all_warn
     plan["summary"] = summarize_plan(plan)
     return plan
+
+
+def separate_openings(lv: dict) -> list[str]:
+    """Move a window / vent that touches a door or another window on the same wall to a free part of that wall."""
+    warns = []
+    ws = walls(lv["rooms"])
+    ops = lv.get("openings", [])
+    rank = {"main_door": 0, "door": 1, "pooja_door": 1, "toilet_door": 1, "opening": 1, "window": 2, "vent": 3}
+    for o in sorted(ops, key=lambda x: rank.get(x["type"], 2)):
+        if o["type"] not in ("window", "vent"):
+            continue
+        others = [x for x in ops if x is not o]
+        horiz = abs(o["y1"] - o["y2"]) < 1e-6
+        s0, s1 = (sorted((o["x1"], o["x2"])) if horiz else sorted((o["y1"], o["y2"])))
+        clash = False
+        for x in others:
+            if horiz != (abs(x["y1"] - x["y2"]) < 1e-6):
+                continue
+            if horiz and abs(x["y1"] - o["y1"]) > 0.01 or (not horiz and abs(x["x1"] - o["x1"]) > 0.01):
+                continue
+            t0, t1 = (sorted((x["x1"], x["x2"])) if horiz else sorted((x["y1"], x["y2"])))
+            if min(s1, t1) - max(s0, t0) > -0.75:
+                clash = True
+                break
+        if not clash:
+            continue
+        mid = (s0 + s1) / 2
+        wall = next((w for w in ws if _on_line(o, w) and
+                     (min(w["x1"], w["x2"]) if horiz else min(w["y1"], w["y2"])) - 0.01 <= mid <=
+                     (max(w["x1"], w["x2"]) if horiz else max(w["y1"], w["y2"])) + 0.01), None)
+        spot = place_free(wall, s1 - s0, others, gap=0.75) if wall else None
+        if spot:
+            o.update({k: spot[k] for k in ("x1", "y1", "x2", "y2")})
+        else:
+            warns.append(f"{lv['name']}: a {o['type']} is too close to a door – make the wall longer or the window smaller.")
+    return warns
 
 
 def summarize_level(lv: dict) -> dict:

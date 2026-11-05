@@ -3,13 +3,14 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import DrawingImport from "../components/design/DrawingImport";
 import {
   Box, Calculator, Check, Copy, Download, FileText, GitCompare, Layers, Lightbulb, MapPin, PenSquare, Plus,
-  Redo2, RotateCcw, Ruler, Save, Sparkles, Trash2, TriangleAlert, Undo2, Upload, Wand2, Eye, EyeOff, Compass,
+  Redo2, RotateCcw, Ruler, Save, Sparkles, Stamp, Trash2, TriangleAlert, Undo2, Upload, Wand2, Eye, EyeOff, Compass,
 } from "lucide-react";
 import Page from "../components/Page";
 import OwnerDelete from "../components/OwnerDelete";
 import PlanSvg from "../components/design/PlanSvg";
 import DrawingSheets from "../components/design/DrawingSheets";
 import StructuralPanel from "../components/design/StructuralPanel";
+import ApprovalPanel from "../components/design/ApprovalPanel";
 const House3D = lazy(() => import("../components/design/House3D"));  // three.js loads only on the 3D tab
 import Plan3D from "../components/design/Plan3D";
 import { Badge, Card, Empty, Field, PhaseNote, PillTabs, Toggle, toast } from "../components/ui";
@@ -19,7 +20,7 @@ import { useAuth } from "../lib/auth";
 import { useI18n } from "../lib/i18n";
 import { FACINGS, ROOM_TYPES, clone, type Plan, type Room } from "../lib/plan";
 
-type Tab = "ai" | "editor" | "3d" | "sheets" | "structural" | "upload" | "rev";
+type Tab = "ai" | "editor" | "3d" | "sheets" | "structural" | "approval" | "upload" | "rev";
 type Quick = { totals: Record<string, number>; breakdown: { group: string; amount: number; pct: number }[]; spec_level: string; rates_state: string; warnings: string[] };
 type DesignRow = { id: number; version: number; title: string; prompt: string; source: string; spec_level: string; estimate_total: number; cost_per_sqft: number; builtup_sqft: number; summary: any; created_at: string; parent_id: number | null };
 type Suggestion = { label: string; requirements: any; notes: string[] };
@@ -47,7 +48,7 @@ export default function DesignPage() {
   const pid = currentProject?.id;
   const allowed = !!currentProject?.permissions?.design;
   const [params] = useSearchParams();
-  const [tab, setTab] = useState<Tab>(() => (["ai", "editor", "3d", "sheets", "structural", "upload", "rev"].includes(params.get("tab") || "") ? params.get("tab") as Tab : "ai"));
+  const [tab, setTab] = useState<Tab>(() => (["ai", "editor", "3d", "sheets", "structural", "approval", "upload", "rev"].includes(params.get("tab") || "") ? params.get("tab") as Tab : "ai"));
   const [text, setText] = useState("");
   const [understood, setUnderstood] = useState<string[]>([]);
   const [questions, setQuestions] = useState<string[]>([]);
@@ -294,6 +295,7 @@ export default function DesignPage() {
     { id: "ai" as Tab, label: "AI Floor Plan", icon: <Wand2 size={18} /> }, { id: "editor" as Tab, label: "2D Editor", icon: <PenSquare size={18} /> },
     { id: "3d" as Tab, label: "3D View", icon: <Box size={18} /> }, { id: "sheets" as Tab, label: "Drawing Sheets", icon: <FileText size={18} /> },
     { id: "structural" as Tab, label: "Structural", icon: <Layers size={18} /> },
+    { id: "approval" as Tab, label: "Approval Drawing", icon: <Stamp size={18} /> },
     { id: "upload" as Tab, label: "Drawing Upload", icon: <Upload size={18} /> },
     { id: "rev" as Tab, label: "Revisions", icon: <Layers size={18} /> },
   ];
@@ -600,6 +602,9 @@ export default function DesignPage() {
       ))}
       {tab === "structural" && (!plan || !pid ? <Card><Empty text="Generate or open a plan first." /></Card> : (
         <StructuralPanel pid={pid} saved={saved} dirty={dirty} code={currentProject?.code || "Nexora"} />
+      ))}
+      {tab === "approval" && (!plan || !pid ? <Card><Empty text="Generate or open a plan first." /></Card> : (
+        <ApprovalPanel pid={pid} plan={plan} saved={saved} dirty={dirty} code={currentProject?.code || "Nexora"} canEdit={!!currentProject?.permissions?.edit} />
       ))}
       {tab === "upload" && pid && (
         <DrawingImport projectId={pid} designs={designs} onSaved={async (d) => { await loadDesigns(); await openDesign(d.id); setTab("editor"); }} />

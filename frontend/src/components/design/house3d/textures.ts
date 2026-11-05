@@ -136,3 +136,62 @@ export function worldUV(geo: THREE.BoxGeometry, w: number, h: number, d: number,
   }
   uv.needsUpdate = true;
 }
+
+// ---------------------------------------------------------------- 1.15 material library textures
+const tint = (hex: string, d: number) => `#${new THREE.Color(hex).offsetHSL(0, 0, d).getHexString()}`;
+
+/** square floor / wall tiles: n x n per texture, joints in a darker shade */
+export const floorTiles = (color: string, n = 2, joint = "#00000033") => make(`ft${color}${n}${joint}`, 256, (g, r) => {
+  g.fillStyle = tint(color, -0.12); g.fillRect(0, 0, 256, 256);
+  const s = 256 / n;
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    g.fillStyle = tint(color, (r() - 0.5) * 0.04); g.fillRect(x * s + 1.5, y * s + 1.5, s - 3, s - 3);
+  }
+  g.fillStyle = joint; for (let i = 0; i <= n; i++) { g.fillRect(i * s - 1, 0, 2, 256); g.fillRect(0, i * s - 1, 256, 2); }
+  speckle(g, r, 256, 6);
+});
+
+export const marble = (color = "#f2f0eb") => make("marble" + color, 512, (g, r) => {
+  g.fillStyle = color; g.fillRect(0, 0, 512, 512);
+  for (let k = 0; k < 14; k++) {  // veins
+    g.strokeStyle = `rgba(90,90,100,${0.08 + r() * 0.18})`; g.lineWidth = 0.6 + r() * 2.2;
+    g.beginPath(); let x = r() * 512, y = 0; g.moveTo(x, y);
+    while (y < 512) { x += (r() - 0.5) * 40; y += 12 + r() * 20; g.lineTo(x, y); }
+    g.stroke();
+  }
+  g.fillStyle = "rgba(0,0,0,0.25)"; g.fillRect(0, 255, 512, 2); g.fillRect(255, 0, 2, 512);  // 2 x 2 slabs
+  speckle(g, r, 512, 5);
+});
+
+export const granite = (color = "#2f2f2f") => make("granite" + color, 256, (g, r) => {
+  g.fillStyle = color; g.fillRect(0, 0, 256, 256);
+  const c = new THREE.Color(color);
+  for (let i = 0; i < 9000; i++) {
+    const v = r();
+    g.fillStyle = v > 0.92 ? "#e8e4dc" : v > 0.7 ? `#${c.clone().offsetHSL(0, 0, 0.18).getHexString()}` : `#${c.clone().offsetHSL(0, 0, -0.08).getHexString()}`;
+    g.fillRect(r() * 256, r() * 256, 1 + r() * 2, 1 + r() * 2);
+  }
+});
+
+export const brick = (color = "#a8553a") => make("brick" + color, 256, (g, r) => {
+  g.fillStyle = "#cfc6b8"; g.fillRect(0, 0, 256, 256);
+  for (let y = 0; y < 8; y++) for (let x = -1; x < 5; x++) {
+    g.fillStyle = tint(color, (r() - 0.5) * 0.12);
+    g.fillRect(x * 64 + (y % 2) * 32 + 2, y * 32 + 2, 60, 28);
+  }
+  speckle(g, r, 256, 16);
+});
+
+export const mosaic = (color = "#5b8fc9") => make("mosaic" + color, 256, (g, r) => {
+  g.fillStyle = "#e9eef2"; g.fillRect(0, 0, 256, 256);
+  for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) { g.fillStyle = tint(color, (r() - 0.5) * 0.2); g.fillRect(x * 16 + 1, y * 16 + 1, 14, 14); }
+});
+
+/** a small picture of any texture / colour for the library cards (data URL) */
+export function swatchUrl(t: THREE.Texture | null, color: string): string {
+  const c = document.createElement("canvas"); c.width = c.height = 64;
+  const g = c.getContext("2d")!;
+  if (t && (t.image as any)?.getContext) g.drawImage(t.image as HTMLCanvasElement, 0, 0, 64, 64);
+  else { g.fillStyle = color; g.fillRect(0, 0, 64, 64); }
+  return c.toDataURL();
+}

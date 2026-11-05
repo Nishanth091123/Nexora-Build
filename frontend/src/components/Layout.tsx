@@ -11,7 +11,6 @@ import { useOwnerOnly } from "../lib/ownerOnly";
 import { useAuth } from "../lib/auth";
 import { useI18n } from "../lib/i18n";
 import { Avatar } from "./ui";
-import { API_BASE } from "../lib/api";
 
 const NAV: { to: string; label: string; icon: any; end?: boolean; module?: string; ownerOnly?: boolean }[] = [
   { to: "/", label: "Home", icon: Home, end: true },
@@ -56,12 +55,7 @@ function Sidebar({ open, onClose }: { open: boolean; onClose: () => void }) {
   const loc = useLocation();
   // 1.8: modules the owner keeps for himself are not shown to other users
   const oo = useOwnerOnly();
-  // 1.13: client data is kept only on the PC – the online app has no Clients menu
-  const [clientsOn, setClientsOn] = useState(true);
-  useEffect(() => {
-    fetch(API_BASE + "/api/health", { cache: "no-store" }).then((r) => r.json()).then((h) => setClientsOn(h.clients !== "off")).catch(() => {});
-  }, []);
-  const navItems = NAV.filter((n) => (n.to !== "/clients" || clientsOn) && (oo.isOwner || (!n.ownerOnly && !oo.hidden(n.module))));
+  const navItems = NAV.filter((n) => oo.isOwner || (!n.ownerOnly && !oo.hidden(n.module)));
   const inBin = loc.pathname.startsWith("/settings") && new URLSearchParams(window.location.search).get("tab") === "bin";
   const item = (to: string, label: string, Icon: any, end?: boolean) => (
     <NavLink key={to} to={to} end={end} onClick={onClose}

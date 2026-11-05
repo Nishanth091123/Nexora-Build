@@ -108,7 +108,7 @@ def download(file_id: int, user: User = Depends(get_current_user), db: Session =
         raise HTTPException(404, "File not found")
     if f.project_id:
         require_project(db, user, f.project_id, "view")
-    elif f.category not in ("logo",) and user.role != "owner":
+    elif f.category not in ("logo", "material_lib") and user.role != "owner":
         raise HTTPException(403, "Not allowed")
     be = backend_for(f.storage_backend)
     headers = {"Content-Disposition": f"inline; filename*=UTF-8''{quote(f.original_name)}"}

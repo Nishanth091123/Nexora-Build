@@ -45,7 +45,7 @@ NO_DELETE_TABLES = ["projects", "files", "audit_logs", "backup_records", "projec
                     "material_entries", "workers", "attendance", "quality_checks", "safety_records",
                     "ai_conversations", "ai_messages", "ai_indexed_files", "ai_doc_chunks",
                     "trash_log", "invite_links", "bbs_schedules", "permit_checklists", "ai_photo_checks",
-                    "clients", "project_notes", "structural_designs"]
+                    "clients", "project_notes", "structural_designs", "library_items"]
 
 PG_PROTECTION_SQL = [
     """
@@ -111,6 +111,12 @@ ADDITIVE_MIGRATIONS: dict[str, list[str]] = {
     "0010_v191_company_name": [
         "UPDATE organization SET name = 'Praganya Construction' WHERE id = 1 AND (name IS NULL OR name = '' OR name ILIKE 'nexora%')",
         "UPDATE organization SET proprietor = 'Nishanth S' WHERE id = 1 AND (proprietor IS NULL OR proprietor = '')",
+    ],
+    # 1.14: client documents checklist (no files), approval drawing details + approval stages
+    "0011_v114_approval": [
+        "ALTER TABLE clients ADD COLUMN IF NOT EXISTS doc_checklist JSON",
+        "ALTER TABLE permit_checklists ADD COLUMN IF NOT EXISTS site_info JSON",
+        "ALTER TABLE permit_checklists ADD COLUMN IF NOT EXISTS workflow JSON",
     ],
 }
 

@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from ..audit import log_action
 from ..db import get_db
-from ..models import AuditLog, Project, ProjectAccess, StoredFile, User
+from ..models import AuditLog, Client, Project, ProjectAccess, StoredFile, User
 from ..security import (get_current_user, project_permissions, require_project,
                         visible_project_ids)
 
@@ -85,25 +85,20 @@ class ProjectPatch(BaseModel):
 
 
 def _link_client(db: Session, user: User, p: Project, data: dict) -> None:
-    """Owner only: the project's client is a client record kept on the PC (picked, or made from the typed name).
-    Online (no client records there) only the typed name is kept."""
-    from .. import local_clients as lc
-    from .clients import find_or_create_client
-    if user.role != "owner" or lc.ONLINE:
+    """Owner only: the project's client is a Client record (picked, or made from the typed name)."""
+    from .clients import _client, find_or_create_client
+    if user.role != "owner":
         return
-    with lc.session() as s:
-        if data.get("client_id"):
-            c = s.get(lc.LClient, data["client_id"])
-            if not c or c.is_hidden:
-                raise HTTPException(404, "Client not found")
-            p.client_id, p.client_name = c.id, c.name
-        elif "client_name" in data and (data.get("client_name") or "").strip():
-            cur = p.client_id and s.get(lc.LClient, p.client_id)
-            if not cur or cur.name.lower() != p.client_name.strip().lower():
-                c = find_or_create_client(db, p.client_name, user.id, p.location)
-                p.client_id = c.id if c else None
-        elif "client_name" in data:
-            p.client_id = None
+    if data.get("client_id"):
+        c = _client(db, data["client_id"])
+        p.client_id, p.client_name = c.id, c.name
+    elif "client_name" in data and (data.get("client_name") or "").strip():
+        cur = p.client_id and db.get(Client, p.client_id)
+        if not cur or cur.name.lower() != p.client_name.strip().lower():
+            c = find_or_create_client(db, p.client_name, user.id, p.location)
+            p.client_id = c.id if c else None
+    elif "client_name" in data:
+        p.client_id = None
 
 
 def validate_fields(data: dict) -> None:

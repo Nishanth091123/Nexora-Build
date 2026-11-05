@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from ..audit import log_action
 from ..backup import run_backup
 from ..db import get_db
-from ..models import (Client, ProjectNote, StructuralDesign, AIConversation, AIDocChunk, AIIndexedFile, AIMessage, AIPhotoCheck, Approval, Attendance,
+from ..models import (LibraryItem, Client, ProjectNote, StructuralDesign, AIConversation, AIDocChunk, AIIndexedFile, AIMessage, AIPhotoCheck, Approval, Attendance,
                       BbsSchedule, Design, DrawingAnalysis, Estimate, MaterialEntry, PermitChecklist, Project,
                       ProjectAccess, QualityCheck, SafetyRecord, ScheduleStage, SiteActivity, SitePhoto, SiteReport,
                       StoredFile, Task, TrashLog, User, VastuReport, Worker)
@@ -56,6 +56,7 @@ ENTITIES = {
     "client": (Client, "Client", lambda o: f"{o.code} · {o.name}"),
     "note": (ProjectNote, "Project note", lambda o: f"{o.activity} – {_d(o.note_date)}"),
     "structural": (StructuralDesign, "Structural design", lambda o: f"{o.title} (v{o.version})"),
+    "library_item": (LibraryItem, "Material library item", lambda o: f"{o.name} ({o.category})"),
 }
 
 
@@ -175,6 +176,12 @@ def _purge(db: Session, entity: str, o) -> None:
         db.query(Project).filter(Project.client_id == o.id).update({Project.client_id: None}, synchronize_session=False)
         db.flush()
         db.delete(o)
+    elif entity == "library_item":  # its photo goes too
+        f = db.get(StoredFile, o.image_file_id) if o.image_file_id else None
+        db.delete(o)
+        db.flush()
+        if f:
+            _drop_file(db, f)
     elif entity == "worker":
         db.query(Attendance).filter(Attendance.worker_id == o.id).delete(synchronize_session=False)
         db.delete(o)

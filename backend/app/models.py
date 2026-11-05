@@ -568,6 +568,8 @@ class PermitChecklist(Base):
     approval_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     approved_file_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     notes: Mapped[str] = mapped_column(Text, default="")
+    site_info: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # 1.14 approval drawing: survey no, village…
+    workflow: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)   # 1.14 approval stages with dates / ref nos
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
 
@@ -617,6 +619,7 @@ class Client(Base):
     address: Mapped[str] = mapped_column(Text, default="")
     location: Mapped[str] = mapped_column(String(160), default="")  # town (for search)
     notes: Mapped[str] = mapped_column(Text, default="")
+    doc_checklist: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)  # 1.14: documents needed / received (no files)
     is_hidden: Mapped[bool] = mapped_column(Boolean, default=False)
     created_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
@@ -645,6 +648,28 @@ class StructuralDesign(Base):
     title: Mapped[str] = mapped_column(String(200), default="")
     inputs: Mapped[dict] = mapped_column(JSON, default=dict)
     result: Mapped[dict] = mapped_column(JSON, default=dict)
+    is_hidden: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+# ---------------------------------------------------------------- 1.15 material library (owner's own items)
+class LibraryItem(Base):
+    """A colour / material the owner added himself: shade code, colour, photo of a tile / stone / wood (StoredFile)."""
+    __tablename__ = "library_items"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    category: Mapped[str] = mapped_column(String(30), index=True)  # paint | cladding | flooring | wall_tile | roof | door | frame | counter | plinth
+    name: Mapped[str] = mapped_column(String(120))
+    brand: Mapped[str] = mapped_column(String(80), default="")
+    code: Mapped[str] = mapped_column(String(60), default="")       # shade / product code
+    color: Mapped[str] = mapped_column(String(9), default="#cccccc")
+    image_file_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    tile_ft: Mapped[float] = mapped_column(Float, default=2.0)      # the photo covers this many feet
+    finish: Mapped[str] = mapped_column(String(20), default="matt")  # matt | satin | gloss
+    rate: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    unit: Mapped[str] = mapped_column(String(20), default="")
+    source_url: Mapped[str] = mapped_column(String(500), default="")
+    notes: Mapped[str] = mapped_column(Text, default="")
     is_hidden: Mapped[bool] = mapped_column(Boolean, default=False)
     created_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

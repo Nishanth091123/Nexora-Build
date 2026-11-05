@@ -11,7 +11,7 @@ from . import config
 from .alerts import start_alerts
 from .backup import start_auto_backups
 from .db import SessionLocal, init_db
-from .routers import admin, clients, structural, ai, auth, extras, invites, push, trash, design, drawing, estimate, files, pm, projects, settings, site, users, vastu
+from .routers import admin, approval, clients, materials, structural, ai, auth, extras, invites, push, trash, design, drawing, estimate, files, pm, projects, settings, site, users, vastu
 from .seed import seed
 from .storage import storage
 
@@ -28,14 +28,9 @@ async def lifespan(app: FastAPI):
         try:
             n = clients.link_existing_clients(db)
             if n:
-                log.info("Clients: %d record(s) moved to this PC / linked", n)
+                log.info("Linked %d project(s) to client records", n)
         except Exception as e:  # never stop the app for this
             log.warning("client link skipped: %s", e)
-        try:
-            from .local_clients import daily_backup
-            daily_backup()
-        except Exception as e:
-            log.warning("client backup skipped: %s", e)
     start_auto_backups()
     start_alerts()
     log.info("Ready. Storage backend: %s", storage.name)
@@ -96,7 +91,7 @@ async def db_error_handler(request: Request, exc: DBAPIError):
 
 for r in (auth.router, users.router, projects.router, files.router, settings.router, admin.router,
           estimate.router, design.router, drawing.router, vastu.router, pm.router, site.router, ai.router,
-          trash.router, invites.router, invites.notif_router, extras.router, push.router, clients.router, structural.router):
+          trash.router, invites.router, invites.notif_router, extras.router, push.router, clients.router, structural.router, approval.router, materials.router):
     app.include_router(r)
 
 
@@ -108,6 +103,4 @@ def root():
 
 @app.get("/api/health")
 def health():
-    from .local_clients import ONLINE
-    return {"status": "ok", "app": config.APP_NAME, "version": config.APP_VERSION, "storage": storage.name,
-            "clients": "off" if ONLINE else "pc"}
+    return {"status": "ok", "app": config.APP_NAME, "version": config.APP_VERSION, "storage": storage.name}

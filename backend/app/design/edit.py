@@ -76,6 +76,20 @@ def clean_plan(plan: dict) -> dict:
              and isinstance(v, str) and _re.fullmatch(r"#[0-9a-fA-F]{6}", v)} if isinstance(fin, dict) else {}
     if isinstance(fin, dict) and fin.get("style") in ("basic", "modern", "contemporary", "traditional"):
         clean["style"] = fin["style"]  # 1.13: 3D elevation style
+    # 1.15 material library picks: {slot: "b:<built-in id>" | "c:<your item id>"} and per room {"floor:room id": {wall, floor}}
+    ref = _re.compile(r"(b|c):[A-Za-z0-9_-]{1,40}")
+    slots = ("ext_wall", "cladding", "plinth", "roof", "door", "frame", "compound", "int_wall", "ceiling", "floor",
+             "wet_floor", "wet_wall", "counter")
+    if isinstance(fin, dict) and isinstance(fin.get("mat"), dict):
+        clean["mat"] = {k: v for k, v in fin["mat"].items() if k in slots and isinstance(v, str) and ref.fullmatch(v)}
+    if isinstance(fin, dict) and isinstance(fin.get("rooms"), dict):
+        rooms = {}
+        for rid, sel in list(fin["rooms"].items())[:120]:
+            if isinstance(rid, str) and _re.fullmatch(r"[0-9]{1,2}:[A-Za-z0-9_-]{1,40}", rid) and isinstance(sel, dict):
+                one = {k: v for k, v in sel.items() if k in ("wall", "floor") and isinstance(v, str) and ref.fullmatch(v)}
+                if one:
+                    rooms[rid] = one
+        clean["rooms"] = rooms
     plan["finishes"] = clean
     return plan
 

@@ -3,7 +3,7 @@
  *  (two-tone, tiles, fins, pergola), Traditional Tamil Nadu (tile roof, thinnai, pillars) and Basic.
  *  Light: Day / Evening / Night. Views: Exterior, Interior, Walkthrough (first person, walls stop you,
  *  doors open, stairs to other floors, jump to a room), Exploded, Structure.
- *  Stable view: no overlapping faces (no flicker), logarithmic depth, steady camera (resets only when the
+ *  Stable view: no overlapping faces (no flicker), steady camera (resets only when the
  *  plan's shape or the view mode changes – not when a colour is picked), shadows drawn once.
  *  Downloads: current view PNG, Front / Left / Right / Rear images, one sheet with all views, GLB, video. */
 import { useEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent } from "react";
@@ -11,7 +11,10 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
-import { api } from "../../lib/api";
+import { api, fileObjectUrl } from "../../lib/api";
+import { useAuth } from "../../lib/auth";
+import MaterialPanel from "./MaterialPanel";
+import { BUILTIN, lookOf, procTex, type Item, type Look, type Slot } from "./house3d/catalog";
 import {
   ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Camera, ChevronsDown, ChevronsUp, Download, Film, Footprints, Images,
   Layers3, LogOut, Moon, RotateCcw, Sun, Sunset,
@@ -28,7 +31,7 @@ export type { Finishes };
 export { DEFAULT_FINISH };
 const EYE = 5.3;
 
-export const SWATCHES: Record<Exclude<keyof Finishes, "style">, [string, string][]> = {
+export const SWATCHES: Record<Exclude<keyof Finishes, "style" | "mat" | "rooms">, [string, string][]> = {
   ext: [["#efe7d8", "Cream"], ["#ffffff", "White"], ["#f5f5f3", "Off-white"], ["#d9d4cc", "Grey"], ["#f2deb0", "Sandal"], ["#e9d7b9", "Beige"], ["#cfe3f2", "Light blue"], ["#b5654a", "Brick"]],
   int: [["#fbfaf7", "Off-white"], ["#fff7e6", "Ivory"], ["#eef5ec", "Mint"], ["#f1ecf7", "Lilac"], ["#f7ecec", "Blush"]],
   floor: [["#e7e0d3", "Vitrified beige"], ["#f5f5f4", "White marble"], ["#9ca3af", "Granite grey"], ["#b08a62", "Wood"], ["#d6c7a1", "Kota stone"], ["#b5523a", "Red oxide"]],
@@ -37,7 +40,7 @@ export const SWATCHES: Record<Exclude<keyof Finishes, "style">, [string, string]
   roof: [["#cfcac2", "Concrete"], ["#d6d2ca", "Light concrete"], ["#b9473a", "Weathering tile"], ["#e5e7eb", "White coat"]],
   plinth: [["#3b3a38", "Charcoal"], ["#8d8d8d", "Grey"], ["#6b4f3a", "Brown"], ["#7a2e1f", "Maroon"], ["#2f2f2f", "Black granite"]],
 };
-const FIN_LABEL: Record<Exclude<keyof Finishes, "style">, string> = { ext: "Exterior walls", int: "Interior walls", floor: "Flooring", door: "Doors", frame: "Window frames", roof: "Terrace", plinth: "Plinth" };
+export const FIN_LABEL: Record<Exclude<keyof Finishes, "style" | "mat" | "rooms">, string> = { ext: "Exterior walls", int: "Interior walls", floor: "Flooring", door: "Doors", frame: "Window frames", roof: "Terrace", plinth: "Plinth" };
 const STYLES: [Style, string, string][] = [
   ["modern", "Modern", "Stone + wood cladding, black frames, deep roof overhang with lights"],
   ["contemporary", "Contemporary", "Two-tone, grey tiles, wooden fins, terrace pergola"],
@@ -58,6 +61,7 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
   const [mode, setMode] = useState<Mode>("exterior");
   const [upTo, setUpTo] = useState(plan.levels.length);
   const [only, setOnly] = useState<number | null>(null);
+  const [inFloor, setInFloor] = useState(0);  // 1.15: Interior view shows ONE floor at a time
   const [light, setLight] = useState<LightMode>("day");
   const [furniture, setFurniture] = useState(true);
   const [surround, setSurround] = useState(true);
@@ -73,9 +77,55 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
   const [walkInfo, setWalkInfo] = useState<{ level: number; room: string; stair: boolean }>({ level: 0, room: "", stair: false });
   const fin: Finishes = { ...DEFAULT_FINISH, ...(finishes || {}) };
   const style: Style = (fin.style as Style) || "modern";
+  // 1.15 material library: your own items (with their photos) + built-ins → what each part of the house looks like
+  const user = useAuth()?.user;
+  const [custom, setCustom] = useState<Item[]>([]);
+  const photos = useRef(new Map<string, THREE.Texture>());
+  const [photoVer, setPhotoVer] = useState(0);
+  const loadLibrary = () => api<any>("/api/materials").then(async (r) => {
+    const its: Item[] = (r.items || []).map((i: any) => ({ ref: i.ref, id: i.id, cat: i.category, name: i.name, brand: i.brand, code: i.code, color: i.color,
+      tile: i.tile_ft, finish: i.finish, rate: i.rate, unit: i.unit, custom: true, image: null as string | null, _url: i.image_url }));
+    setCustom(its);
+    await Promise.all((r.items || []).map(async (i: any, k: number) => {
+      if (!i.image_url) return;
+      try {
+        const url = await fileObjectUrl(i.image_url);
+        its[k].image = url;
+        photos.current.set(i.ref, await new THREE.TextureLoader().loadAsync(url));
+      } catch { /* picture missing – the colour is used */ }
+    }));
+    setCustom([...its]); setPhotoVer((v) => v + 1);
+  }).catch(() => {});
+  useEffect(() => { loadLibrary(); }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+  const items = useMemo(() => [...BUILTIN, ...custom], [custom]);
+  const byRef = useMemo(() => new Map(items.map((i) => [i.ref, i])), [items]);
+  const swatches = useRef(new Map<string, string>());
+  const swatch = (it: Item) => {
+    if (it.image) return it.image;
+    if (!swatches.current.has(it.ref)) swatches.current.set(it.ref, T.swatchUrl(procTex(it), it.color));
+    return swatches.current.get(it.ref)!;
+  };
+  const looks = useRef(new Map<string, Look>());
+  useEffect(() => { looks.current.clear(); }, [photoVer]);
+  const lookFor = (slot: Slot, roomId?: string): Look | null => {
+    let ref: string | undefined;
+    const rp = roomId ? fin.rooms?.[roomId] : undefined;
+    if (rp) {
+      if ((slot === "floor" || slot === "wet_floor") && rp.floor) ref = rp.floor;
+      if (slot === "int_wall" && rp.wall) ref = rp.wall;
+      if (slot === "wet_wall" && rp.wall && byRef.get(rp.wall)?.cat === "wall_tile") ref = rp.wall;
+    }
+    ref = ref || fin.mat?.[slot];
+    if (!ref) return null;
+    const it = byRef.get(ref);
+    if (!it) return null;
+    if (!looks.current.has(ref)) { const l = lookOf(it, photos.current); if (l) looks.current.set(ref, l); }
+    return looks.current.get(ref) || null;
+  };
   const finKey = JSON.stringify(fin);
   const keys = useRef<Record<string, boolean>>({});
   const walk = useRef({ li: 0, x: 0, y: 0, yaw: 0, pitch: 0, h: 0, segs: new Map<number, ReturnType<typeof walkSegments>>(), label: "" });
+  const smooth = useRef({ x: 0, y: 0, h: 0, yaw: 0, pitch: 0 });
 
   // geometry key: the camera is reset only when the SHAPE of the plan changes (not on colour changes)
   const planKey = useMemo(() => JSON.stringify({ l: plan.levels.map((l) => [l.rooms, l.openings, l.walls]), b: plan.building, p: plan.plot, h: plan.floor_height_ft }), [plan]);
@@ -98,8 +148,10 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
   // ------------------------------------------------------------------ scene (once)
   useEffect(() => {
     const el = host.current!;
-    const renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true, powerPreference: "high-performance" });
-    renderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+    // no logarithmic depth: the model has no overlapping faces any more, and log depth made every pixel slow
+    const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance" });
+    const maxPR = Math.min(2, window.devicePixelRatio || 1);
+    renderer.setPixelRatio(maxPR);
     renderer.setSize(el.clientWidth, el.clientHeight, false);
     Object.assign(renderer.domElement.style, { width: "100%", height: "100%", display: "block" });
     renderer.shadowMap.enabled = true;
@@ -111,7 +163,7 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
     const scene = new THREE.Scene();
     const pmrem = new THREE.PMREMGenerator(renderer);
     scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-    const camera = new THREE.PerspectiveCamera(45, el.clientWidth / Math.max(1, el.clientHeight), 0.5, 3000);
+    const camera = new THREE.PerspectiveCamera(45, el.clientWidth / Math.max(1, el.clientHeight), 1, 2500);
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.09;
@@ -129,11 +181,22 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
     sun.shadow.bias = -0.0006;
     sun.shadow.normalBias = 0.06;
     scene.add(hemi, sun, sun.target);
+    // 1.15: no extra room lights at all – every light is computed for every pixel, so lights made the walkthrough slow.
+    // Inside, the soft sky light (hemisphere) + reflections light the rooms evenly.
     const c: Ctx = { renderer, scene, camera, controls, model: null, sun, hemi, raf: 0, roomLights: [] };
     ctx.current = c;
     const clock = new THREE.Clock();
+    // adaptive sharpness: if the laptop is slow, draw fewer pixels (smooth), and go back up when it is fast again
+    let frames = 0, acc = 0, pr = maxPR;
     const loop = () => {
-      const dt = Math.min(0.1, clock.getDelta());
+      const raw = clock.getDelta();
+      const dt = Math.min(0.1, raw);
+      frames++; acc += raw;
+      if (acc > 1.0) {
+        const fps = frames / acc; frames = 0; acc = 0;
+        const want = fps < 40 ? Math.max(0.75, pr - 0.25) : fps > 57 ? Math.min(maxPR, pr + 0.25) : pr;
+        if (want !== pr) { pr = want; renderer.setPixelRatio(pr); renderer.setSize(el.clientWidth, el.clientHeight, false); }
+      }
       if (camera.userData.walk) walkStep(dt);
       else {
         if (camera.userData.spin) {
@@ -200,21 +263,35 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
   }
 
   // ------------------------------------------------------------------ (re)build the model
+  // the walkthrough shows the same model as the default exterior view, so switching to it needs no rebuild
+  const walkingNow = mode === "walk";
+  const buildKey = JSON.stringify(walkingNow
+    ? { m: "exterior", u: plan.levels.length, o: null, f: true, r: true }
+    : mode === "interior" ? { m: mode, u: plan.levels.length, o: inFloor, f: furniture, r: false }
+    : { m: mode, u: upTo, o: only, f: furniture, r: roof });
+  function setDoors(root: THREE.Object3D, open: boolean) {
+    root.traverse((o: any) => { if (o.userData?.openAngle != null) o.rotation.y = open ? o.userData.openAngle : 0; });
+    const c = ctx.current; if (c) c.renderer.shadowMap.needsUpdate = true;
+  }
   useEffect(() => {
     const c = ctx.current; if (!c) return;
     if (c.model) { c.scene.remove(c.model); disposeModel(c.model); c.model = null; }
     if (mode === "structure" && !structure) return;
     const walking = mode === "walk";
     const { root } = build(plan, fin, {
-      upTo: walking ? plan.levels.length : upTo, only: walking ? null : only, mode, furniture: walking || furniture,
-      surround: surround && mode !== "structure", roof: walking || roof, edges, structure, style, light,
+      upTo: walking || mode === "interior" ? plan.levels.length : upTo, only: walking ? null : mode === "interior" ? inFloor : only,
+      mode: walking ? "exterior" : mode, furniture: walking || furniture,
+      surround: surround && mode !== "structure", roof: walking || (mode !== "interior" && roof), edges, structure, style, light, look: lookFor,
     });
+    setDoors(root, walking);
     if (wire) root.traverse((o: any) => { const ms = Array.isArray(o.material) ? o.material : o.material ? [o.material] : []; ms.forEach((m: any) => { m.wireframe = true; }); });
     c.scene.add(root); c.model = root;
     applyClip();
     c.renderer.shadowMap.needsUpdate = true;
     walk.current.segs.clear();
-  }, [planKey, finKey, upTo, only, mode, furniture, surround, roof, wire, edges, structure, style, light]);  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [planKey, finKey, buildKey, surround, wire, edges, structure, style, light, photoVer, custom.length]);  // eslint-disable-line react-hooks/exhaustive-deps
+  // entering / leaving the walkthrough only opens / closes the doors – no rebuild (no waiting)
+  useEffect(() => { const c = ctx.current; if (c?.model) setDoors(c.model, mode === "walk"); }, [mode]);
 
   // ------------------------------------------------------------------ sky & light
   useEffect(() => {
@@ -226,15 +303,15 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
     c.scene.fog = new THREE.Fog(fogCol, 260, 900);
     const walking = mode === "walk";
     if (light === "day") {
-      c.hemi.color.set("#ffffff"); c.hemi.groundColor.set("#8a8a7a"); c.hemi.intensity = walking ? 1.1 : 0.75;
+      c.hemi.color.set("#ffffff"); c.hemi.groundColor.set("#8a8a7a"); c.hemi.intensity = walking ? 1.35 : 0.75;
       c.sun.color.set("#fff4e0"); c.sun.intensity = 2.5; c.renderer.toneMappingExposure = 1.0; c.scene.environmentIntensity = 0.55;
       c.sun.position.set(centre.x + 70, 110, centre.z + 80);
     } else if (light === "dusk") {
-      c.hemi.color.set("#7c8fc4"); c.hemi.groundColor.set("#3b3226"); c.hemi.intensity = walking ? 0.8 : 0.35;
+      c.hemi.color.set("#7c8fc4"); c.hemi.groundColor.set("#3b3226"); c.hemi.intensity = walking ? 1.1 : 0.35;
       c.sun.color.set("#ffae6b"); c.sun.intensity = 0.9; c.renderer.toneMappingExposure = 1.15; c.scene.environmentIntensity = 0.25;
       c.sun.position.set(centre.x - 110, 32, centre.z + 50);
     } else {
-      c.hemi.color.set("#41507a"); c.hemi.groundColor.set("#14161c"); c.hemi.intensity = walking ? 0.55 : 0.16;
+      c.hemi.color.set("#41507a"); c.hemi.groundColor.set("#14161c"); c.hemi.intensity = walking ? 0.9 : 0.16;
       c.sun.color.set("#9db4ff"); c.sun.intensity = 0.3; c.renderer.toneMappingExposure = 1.05; c.scene.environmentIntensity = 0.1;
       c.sun.position.set(centre.x + 40, 120, centre.z - 60);
     }
@@ -250,8 +327,9 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
   // camera: only when the view mode or the plan's shape changes
   useEffect(() => {
     if (mode === "walk") startWalk();
-    else { const c = ctx.current; if (c) { c.camera.userData.walk = false; c.controls.enabled = true; clearRoomLights(); } view(mode === "interior" ? "top" : "iso"); }
+    else { const c = ctx.current; if (c) { c.camera.userData.walk = false; c.controls.enabled = true; clearRoomLights(); } if (mode === "interior") floorView(inFloor); else view("iso"); }
   }, [mode, planKey]);  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (mode === "interior") floorView(inFloor); }, [inFloor]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   function applyClip() {
     const c = ctx.current; if (!c || !c.model) return;
@@ -283,7 +361,22 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
     c.controls.maxPolarAngle = v === "top" ? Math.PI : Math.PI * 0.495;
     const { pos, target } = camFor(v);
     c.camera.position.copy(pos); c.controls.target.copy(target);
-    c.camera.fov = 45; c.camera.near = 0.5; c.camera.updateProjectionMatrix();
+    c.camera.fov = 45; c.camera.near = 1; c.camera.far = 2500; c.camera.updateProjectionMatrix();
+    c.controls.update();
+  }
+
+  /** Interior: look down into ONE floor (walls cut at 4.5 ft, nothing above it) */
+  function floorView(li: number) {
+    const c = ctx.current; if (!c) return;
+    const p = planRef.current;
+    const e = extent(p.levels[li].rooms);
+    const z = PLINTH + li * (p.floor_height_ft || 10);
+    const span = Math.max(e.x1 - e.x0, e.y1 - e.y0);
+    const t = new THREE.Vector3(p.building.x + (e.x0 + e.x1) / 2, z + 1.5, -(p.building.y + (e.y0 + e.y1) / 2));
+    c.camera.userData.walk = false; c.controls.enabled = true; c.controls.maxPolarAngle = Math.PI * 0.495;
+    c.camera.position.set(t.x + span * 0.35, z + span * 1.25, t.z + span * 0.85);
+    c.controls.target.copy(t);
+    c.camera.fov = 45; c.camera.near = 1; c.camera.far = 2500; c.camera.updateProjectionMatrix();
     c.controls.update();
   }
 
@@ -321,15 +414,20 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
     }
     w.h = baseHeight(0, w.x, w.y);
     c.camera.userData.walk = true; c.controls.enabled = false;
-    c.camera.fov = 72; c.camera.near = 0.1; c.camera.updateProjectionMatrix();
+    c.camera.fov = 70; c.camera.near = 0.3; c.camera.far = 900; c.camera.updateProjectionMatrix();
     placeCam();
     roomLightsFor(0);
   }
-  function placeCam() {
+  /** dt = 0 → jump straight there (start, stairs, go to room); otherwise glide smoothly (no shaking) */
+  function placeCam(dt = 0) {
     const c = ctx.current; if (!c) return;
-    const w = walk.current;
-    c.camera.position.set(w.x, w.h + EYE, -w.y);
-    const dir = new THREE.Vector3(Math.sin(w.yaw) * Math.cos(w.pitch), Math.sin(w.pitch), -Math.cos(w.yaw) * Math.cos(w.pitch));
+    const w = walk.current, sm = smooth.current;
+    const k = dt ? 1 - Math.exp(-dt * 12) : 1, ka = dt ? 1 - Math.exp(-dt * 16) : 1;
+    sm.x += (w.x - sm.x) * k; sm.y += (w.y - sm.y) * k; sm.h += (w.h + EYE - sm.h) * k;
+    let dyaw = w.yaw - sm.yaw; while (dyaw > Math.PI) dyaw -= 2 * Math.PI; while (dyaw < -Math.PI) dyaw += 2 * Math.PI;
+    sm.yaw += dyaw * ka; sm.pitch += (w.pitch - sm.pitch) * ka;
+    c.camera.position.set(sm.x, sm.h, -sm.y);
+    const dir = new THREE.Vector3(Math.sin(sm.yaw) * Math.cos(sm.pitch), Math.sin(sm.pitch), -Math.cos(sm.yaw) * Math.cos(sm.pitch));
     c.camera.lookAt(c.camera.position.clone().add(dir));
   }
   function walkStep(dt: number) {
@@ -343,9 +441,8 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
       const dx = (f * Math.sin(w.yaw) + st * Math.cos(w.yaw)) * sp, dy = (f * Math.cos(w.yaw) - st * Math.sin(w.yaw)) * sp;
       [w.x, w.y] = collide(segsFor(w.li), w.x, w.y, dx, dy, 0.85);
     }
-    const target = baseHeight(w.li, w.x, w.y);
-    w.h += (target - w.h) * Math.min(1, dt * 7);
-    placeCam();
+    w.h = baseHeight(w.li, w.x, w.y);  // the camera glides to it (placeCam smoothing)
+    placeCam(dt);
     // where am I?
     const p = planRef.current;
     const r = roomAt(p.levels[w.li].rooms, w.x - p.building.x, w.y - p.building.y);
@@ -363,6 +460,7 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
     w.x = p.building.x + st.x + st.w / 2; w.y = p.building.y + st.y + Math.min(st.d - 1.5, 2.5);
     w.h = floorZ(to); w.label = "";
     faceCentre(to);
+    placeCam();
     roomLightsFor(to);
   }
   function goRoom(v: string) {
@@ -371,6 +469,7 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
     const w = walk.current;
     w.li = Number(li); w.x = p.building.x + r.x + r.w / 2; w.y = p.building.y + r.y + r.d / 2; w.h = floorZ(w.li); w.label = "";
     faceCentre(w.li);
+    placeCam();
     roomLightsFor(w.li);
   }
   function faceCentre(li: number) {  // look towards the middle of the floor (you see the door, not a blank wall)
@@ -380,21 +479,8 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
     if (Math.hypot(cx - w.x, cy - w.y) > 1.5) w.yaw = Math.atan2(cx - w.x, cy - w.y);
     w.pitch = -0.05;
   }
-  function clearRoomLights() {
-    const c = ctx.current; if (!c) return;
-    c.roomLights.forEach((l) => c.scene.remove(l)); c.roomLights = [];
-  }
-  function roomLightsFor(li: number) {  // soft ceiling light in each room of the floor you are on
-    const c = ctx.current; if (!c) return;
-    clearRoomLights();
-    const p = planRef.current;
-    const z = floorZ(li) + (p.floor_height_ft || 10) - 1.4;
-    p.levels[li].rooms.filter((r) => !["terrace", "balcony", "sitout", "parking"].includes(r.type)).slice(0, 12).forEach((r) => {
-      const l = new THREE.PointLight("#fff1dc", lightRef.current === "day" ? 14 : 22, Math.max(r.w, r.d) * 1.6, 1.6);
-      l.position.set(p.building.x + r.x + r.w / 2, z, -(p.building.y + r.y + r.d / 2));
-      c.scene.add(l); c.roomLights.push(l);
-    });
-  }
+  function clearRoomLights() { /* 1.15: no room lights (kept as a no-op) */ }
+  function roomLightsFor(_li: number) { /* 1.15: rooms are lit by the soft sky light */ }
   const hold = (k: string) => ({
     onPointerDown: (e: RPointerEvent) => { e.preventDefault(); keys.current[k] = true; },
     onPointerUp: () => { keys.current[k] = false; }, onPointerLeave: () => { keys.current[k] = false; }, onPointerCancel: () => { keys.current[k] = false; },
@@ -501,6 +587,15 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
           ))}
         </div>
       </div>
+      {mode === "interior" && (
+        <div className="flex flex-wrap items-center gap-1.5 rounded-lg bg-brand-50 p-2 text-sm">
+          <span className="mr-1 text-xs font-semibold text-navy-ink">Interior – floor:</span>
+          {plan.levels.map((l, i) => (
+            <button key={i} onClick={() => setInFloor(i)} className={`rounded-md px-3 py-1 text-xs font-semibold ${inFloor === i ? "bg-brand-600 text-white" : "bg-white text-navy-ink"}`}>{l.name}</button>
+          ))}
+          <span className="text-[11px] text-slate-500">Only this floor is shown, walls cut at 4½ ft so you can see the rooms and furniture.</span>
+        </div>
+      )}
       <div className="relative overflow-hidden rounded-lg border border-line bg-slate-900">
         <div ref={host} className="h-[560px] w-full touch-none select-none" />
         {mode === "walk" ? (
@@ -574,9 +669,9 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
           </div>
         </div>
         <div className="rounded-lg border border-line p-3 text-sm">
-          <div className="mb-2 text-xs font-semibold text-navy-ink">Material &amp; colour options</div>
+          <div className="mb-2 text-xs font-semibold text-navy-ink">Quick colours (the library below gives every option)</div>
           <div className="space-y-1.5">
-            {(Object.keys(SWATCHES) as Exclude<keyof Finishes, "style">[]).map((k) => (
+            {(["ext", "int"] as const).map((k) => (
               <div key={k} className="flex flex-wrap items-center gap-1.5">
                 <span className="w-28 shrink-0 text-xs text-slate-500">{FIN_LABEL[k]}</span>
                 {SWATCHES[k].map(([col, name]) => (
@@ -599,6 +694,16 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
           </details>
         </div>
       </div>
+      <MaterialPanel plan={plan} picks={{ mat: fin.mat, rooms: fin.rooms }} items={items} swatch={swatch} isOwner={user?.role === "owner"}
+        code={`Nexora_3D_${style}`} onLibraryChanged={loadLibrary}
+        onPick={(slot, ref) => { const mat = { ...(fin.mat || {}) }; if (ref) mat[slot] = ref; else delete mat[slot]; onFinishes?.({ ...fin, mat }); }}
+        onRoomPick={(rid, kind, ref) => {
+          const rooms = { ...(fin.rooms || {}) }; const one = { ...(rooms[rid] || {}) };
+          if (ref) one[kind] = ref; else delete one[kind];
+          if (Object.keys(one).length) rooms[rid] = one; else delete rooms[rid];
+          onFinishes?.({ ...fin, rooms });
+        }}
+        shot={() => { const c = ctx.current; if (!c || mode === "walk") return null; c.renderer.render(c.scene, c.camera); return c.renderer.domElement.toDataURL("image/png"); }} />
     </div>
   );
 }
