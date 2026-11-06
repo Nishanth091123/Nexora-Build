@@ -97,7 +97,7 @@ except httpx.ConnectError:
         sys.exit("[ERROR] Backend did not start in 2 minutes.")
 check("health", r.status_code == 200 and r.json().get("status") == "ok", r.text)
 _v = tuple(int(x) for x in (r.json().get("version", "0.0").split("-")[0].split(".") + ["0", "0"])[:3] if x.isdigit())
-check("backend is the 1.16.1 version (not an old one still running)", _v >= (1, 16, 1), r.text)
+check("backend is the 1.17 version (not an old one still running)", _v >= (1, 17, 0), r.text)
 
 login = input("Owner username [nishanth_s]: ").strip() or "nishanth_s"
 pw = getpass.getpass("Owner password (hidden): ")
@@ -292,6 +292,47 @@ check("plan generated", bool(plan) and plan["summary"]["bedrooms"] == 2, r.text[
 if plan:
     check("TN setbacks applied (front 3 m for 30 ft road)", plan["setbacks"]["m"]["front"] == 3.0, str(plan["setbacks"]["m"]))
     check("walls, doors, windows derived", all(l["walls"] and l["openings"] for l in plan["levels"]))
+    # ---------------- 1.17: every room can be entered; never through another bedroom ----------------
+    acc = [w for w in plan.get("warnings", []) if "cannot be reached" in w or "no access" in w]
+    check("1.17 every room has a door / opening from a common area", not acc, "; ".join(acc)[:300])
+    # ---------------- 1.17: roofing sheets ----------------
+    top = plan["levels"][-1]
+    st_ = next((q for q in top["rooms"] if q["type"] == "stair"), None)
+    rp = json.loads(json.dumps(plan))
+    rp["roof_sheets"] = [{"place": "on_terrace", "level": len(rp["levels"]) - 1, "x": 1, "y": 8, "w": 15, "d": 12, "sheet": "galvalume",
+                          "thk_mm": 0.47, "shape": "gable", "ridge": "x", "slope_deg": 15, "height_ft": 9, "bogus": 1},
+                         {"place": "nowhere", "sheet": "gi"}]
+    if st_:
+        rp["roof_sheets"].append({"place": "headroom", "level": len(rp["levels"]) - 1, "x": st_["x"], "y": st_["y"], "w": st_["w"], "d": st_["d"],
+                                  "sheet": "acc", "shape": "mono", "high": "back", "slope_deg": 12})
+    r = c.post(f"/api/projects/{pid}/design/recompute", json={"plan": rp})
+    rp2 = r.json() if r.status_code == 200 else {}
+    rs_ = rp2.get("roof_sheets") or []
+    check("1.17 roof sheets saved with the design (and cleaned)", len(rs_) == (2 if st_ else 1) and "bogus" not in rs_[0]
+          and rs_[0]["truss"]["purlin_ft"] == 4.0, str(rs_)[:300])
+    if rs_:
+        for q, magic in (("kind=sheets_pdf&page=roof", b"%PDF"), ("kind=sheets_pdf&page=truss", b"%PDF"), ("kind=sheets_dxf", b"SECTION")):
+            r = c.post(f"/api/projects/{pid}/design/export?{q}", json={"plan": rp2}, timeout=180)
+            check(f"1.17 roof sheet drawing ({q})", r.status_code == 200 and magic in r.content[:200], r.text[:200] if r.status_code != 200 else "")
+        r = c.post(f"/api/projects/{pid}/design/quick-estimate", json={"plan": rp2})
+        qi = r.json().get("inputs", {}) if r.status_code == 200 else {}
+        check("1.17 estimate inputs carry the sheet roofs", len(qi.get("roof_sheets") or []) == len(rs_)
+              and any(b_["group"] == "Roofing" for b_ in r.json().get("breakdown", [])), r.text[:200])
+        r = c.post(f"/api/projects/{pid}/estimate/part", json={"inputs": qi, "state": "Tamil Nadu", "floor": "all", "work": "roofing"})
+        its = r.json().get("items", []) if r.status_code == 200 else []
+        check("1.17 part estimate: roofing sheet (sheet + steel)", any(i["unit"] == "kg" for i in its) and any(i["unit"] == "m²" for i in its), r.text[:200])
+        r = c.post(f"/api/projects/{pid}/vastu/analyse", json={"plan": rp2})
+        check("1.17 vastu checks the sheet roof slope", r.status_code == 200 and any(ch["rule"] == "roof_slope" for ch in r.json()["result"]["checks"]), r.text[:200])
+        full = json.loads(json.dumps(plan))
+        full["roof_sheets"] = [{"place": "full_roof", "level": len(full["levels"]) - 1, "x": 0, "y": 0, "w": full["building"]["w"], "d": full["building"]["d"],
+                                "sheet": "galvalume", "shape": "gable", "ridge": "y", "slope_deg": 18}]
+        r = c.post(f"/api/projects/{pid}/design/recompute", json={"plan": full})
+        r = c.post(f"/api/projects/{pid}/design/quick-estimate", json={"plan": r.json() if r.status_code == 200 else full})
+        qi = r.json().get("inputs", {}) if r.status_code == 200 else {}
+        top_name = full["levels"][-1]["name"]
+        r = c.post(f"/api/projects/{pid}/estimate/part", json={"inputs": qi, "state": "Tamil Nadu", "floor": top_name, "work": "slab"})
+        its = r.json().get("items", []) if r.status_code == 200 else None
+        check("1.17 full sheet roof: no RCC roof slab on the top floor", its is not None and not any("Roof slab" in i["description"] for i in its), r.text[:200])
     r = c.post(f"/api/projects/{pid}/design/quick-estimate", json={"plan": plan})
     check("quick estimate from drawing", r.status_code == 200 and r.json()["totals"]["grand_total"] > 0, r.text[:200])
     edited = json.loads(json.dumps(plan))
@@ -737,4 +778,4 @@ if fail:
     print("Failed:", ", ".join(fail), "\nSend this output to Claude.")
     sys.exit(1)
 else:
-    print("NEXORA 1.16 API: ALL GOOD")
+    print("NEXORA 1.17 API: ALL GOOD")

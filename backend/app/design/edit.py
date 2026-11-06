@@ -111,6 +111,10 @@ def clean_plan(plan: dict) -> dict:
             plants[kind] = one
         clean["plants"] = plants
     plan["finishes"] = clean
+    # 1.17 roofing sheets (full roof / on terrace / head room / part of a floor)
+    from .roof import clean as clean_roof
+    if "roof_sheets" in plan:
+        plan["roof_sheets"] = clean_roof(plan.get("roof_sheets"), plan)
     return plan
 
 

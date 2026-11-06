@@ -123,17 +123,31 @@ def area_details(plan: dict) -> dict:
         "coverage_pct": round(100 * ground / plot_sqft, 1) if plot_sqft else 0,
         "open_space_sqft": round(plot_sqft - ground, 1), "open_space_pct": round(100 * (plot_sqft - ground) / plot_sqft, 1) if plot_sqft else 0,
         "height_ft": round(building_height(plan), 1), "height_m": round(building_height(plan) * FT_M, 2),
+        "roof_sheets": _sheet_rows(plan),
         "setbacks_m": sb.get("m", {}), "setbacks_ft": sb.get("ft", {}),
         "note": "FSI = total built-up / plot area; coverage = ground floor built-up / plot area. "
                 "Check the permitted values for the local body (DTCP / CMDA / Corporation / Panchayat).",
     }
 
 
+def _sheet_rows(plan: dict) -> list[dict]:
+    from .roof import PLACES, describe, geom
+    out = []
+    for s in plan.get("roof_sheets") or []:
+        g = geom(plan, s)
+        out.append({"place": PLACES[s["place"]], "level": plan["levels"][s["level"]]["name"], "type": describe(s),
+                    "covered_sqft": round(s["w"] * s["d"], 1), "roof_sqft": round(g["slope_area"], 1),
+                    "ridge_ft": round(g["ridge_z"], 1)})
+    return out
+
+
 def building_height(plan: dict) -> float:
     H = float(plan.get("floor_height_ft") or 10)
     n = len(plan["levels"])
     stair = any(r["type"] == "stair" for lv in plan["levels"] for r in lv["rooms"]) and n > 1
-    return PLINTH + n * H + PARAPET + (HEADROOM - PARAPET if stair else 0)
+    from .roof import full_roof, top_height
+    base = PLINTH + n * H + (0 if full_roof(plan) else PARAPET + (HEADROOM - PARAPET if stair else 0))
+    return max(base, top_height(plan))  # 1.17: a sheet roof ridge can be the highest point
 
 
 # ---------------------------------------------------------------- primitive drawings
@@ -144,7 +158,8 @@ WEIGHT = {"WALL": 0.5, "OUTLINE": 0.35, "SLAB": 0.35, "GROUND": 0.7, "WINDOW": 0
           "FURNITURE": 0.13, "STAIR": 0.18, "HATCH": 0.09, "WALLHATCH": 0.09, "DIM": 0.18, "TEXT": 0.25, "ROOMTEXT": 0.25,
           "MARK": 0.18, "CENTRE": 0.13, "PLOT": 0.5, "SETBACK": 0.18, "BUILDING": 0.35, "ROAD": 0.25, "COLUMN": 0.35,
           "FOOTING": 0.35, "PCC": 0.25, "PARAPET": 0.35, "SUNSHADE": 0.25, "SHADOW": 0.0, "MASK": 0.0,
-          "BEAM": 0.35, "REBAR": 0.35, "STIRRUP": 0.18, "GRID": 0.13, "SLABEDGE": 0.25}
+          "BEAM": 0.35, "REBAR": 0.35, "STIRRUP": 0.18, "GRID": 0.13, "SLABEDGE": 0.25,
+          "SHEET": 0.35, "TRUSS": 0.25}
 DASH = {"SWING": (1.2, 0.8), "CENTRE": (6, 1.5, 1, 1.5), "PLOT": (6, 2), "SETBACK": (3, 1.5), "GRID": (6, 1.5, 1, 1.5),
         "BEAM": None}
 # colour per layer – "paper" = coloured lines on white (PDF / print); "cad" = AutoCAD screen (black background)
@@ -155,19 +170,20 @@ PALETTE = {
               "CENTRE": "#dc2626", "PLOT": "#111827", "SETBACK": "#ea580c", "BUILDING": "#c2410c", "ROAD": "#475569",
               "COLUMN": "#b91c1c", "FOOTING": "#92400e", "PCC": "#6b7280", "PARAPET": "#c2410c", "SUNSHADE": "#4b5563",
               "SHADOW": "#d4d4d8", "BEAM": "#2563eb", "REBAR": "#dc2626", "STIRRUP": "#16a34a", "GRID": "#dc2626",
-              "SLABEDGE": "#2563eb", "MASK": "#ffffff", "BG": "#ffffff"},
+              "SLABEDGE": "#2563eb", "MASK": "#ffffff", "BG": "#ffffff", "SHEET": "#0369a1", "TRUSS": "#9a3412"},
     "cad": {"WALL": "#ffff00", "WALLHATCH": "#6b6b00", "OUTLINE": "#ffff00", "SLAB": "#c0c0c0", "GROUND": "#00ff00",
             "WINDOW": "#00ffff", "DOOR": "#ff66ff", "SWING": "#ff66ff", "FURNITURE": "#9a9a9a", "STAIR": "#66ffcc",
             "HATCH": "#7a7a7a", "DIM": "#00ff00", "TEXT": "#ffffff", "ROOMTEXT": "#7fbfff", "MARK": "#ff5050",
             "CENTRE": "#ff5050", "PLOT": "#ffffff", "SETBACK": "#ffa040", "BUILDING": "#ffff00", "ROAD": "#a0a0a0",
             "COLUMN": "#ff5050", "FOOTING": "#ffa040", "PCC": "#a0a0a0", "PARAPET": "#ffff00", "SUNSHADE": "#c0c0c0",
             "SHADOW": "#000000", "BEAM": "#4da6ff", "REBAR": "#ff5050", "STIRRUP": "#00ff00", "GRID": "#ff5050",
-            "SLABEDGE": "#4da6ff", "MASK": "#000000", "BG": "#000000"},
+            "SLABEDGE": "#4da6ff", "MASK": "#000000", "BG": "#000000", "SHEET": "#00bfff", "TRUSS": "#ff8000"},
 }
 DXF_COLOR = {"WALL": 2, "WALLHATCH": 8, "OUTLINE": 2, "SLAB": 9, "GROUND": 3, "WINDOW": 4, "DOOR": 6, "SWING": 6,
              "FURNITURE": 8, "STAIR": 4, "HATCH": 9, "DIM": 3, "TEXT": 7, "ROOMTEXT": 5, "MARK": 1, "CENTRE": 1,
              "PLOT": 7, "SETBACK": 30, "BUILDING": 2, "ROAD": 8, "COLUMN": 1, "FOOTING": 30, "PCC": 8, "PARAPET": 2,
-             "SUNSHADE": 9, "SHADOW": 9, "TITLE": 7, "BEAM": 5, "REBAR": 1, "STIRRUP": 3, "GRID": 1, "SLABEDGE": 5}
+             "SUNSHADE": 9, "SHADOW": 9, "TITLE": 7, "BEAM": 5, "REBAR": 1, "STIRRUP": 3, "GRID": 1, "SLABEDGE": 5,
+             "SHEET": 140, "TRUSS": 30}
 
 
 def pen(layer: str, style: str = "paper"):
@@ -615,9 +631,11 @@ def front_openings(lv: dict) -> list[dict]:
 
 
 def front_elevation(plan: dict) -> Dwg:
+    from .roof import draw_side, full_roof, headroom_sheet
     d = Dwg("Front Elevation")
     zs = _levels_z(plan)
     n = len(plan["levels"])
+    no_top_slab, sheet_mumty = full_roof(plan), headroom_sheet(plan)
     gx0 = min(_extent(lv)[0] for lv in plan["levels"])
     gx1 = max(_extent(lv)[1] for lv in plan["levels"])
     _ground(d, gx0 - 5, gx1 + 5)
@@ -638,7 +656,8 @@ def front_elevation(plan: dict) -> Dwg:
                     d.rect(r["x"], z0, r["w"], z1 - z0 - SLAB, "OUTLINE", "#fafaf9")
         else:
             d.rect(x0, z0, x1 - x0, z1 - z0 - SLAB, "OUTLINE", "#fafaf9")
-        d.rect(x0 - 0.5, z1 - SLAB, x1 - x0 + 1.0, SLAB, "SLAB", "#a1a1aa")
+        if not (no_top_slab and i == n - 1):  # 1.17: a full sheet roof has no RCC slab on the top floor
+            d.rect(x0 - 0.5, z1 - SLAB, x1 - x0 + 1.0, SLAB, "SLAB", "#a1a1aa")
         d.line(x0, z0 + 7.5, x1, z0 + 7.5, "HATCH")  # lintel band line
         for o in front_openings(lv):
             ox0, ox1 = min(o["x1"], o["x2"]), max(o["x1"], o["x2"])
@@ -667,15 +686,18 @@ def front_elevation(plan: dict) -> Dwg:
         d.level(x1 + 1.5, z0, f"+{z0 * FT_M:.2f} m  {lv['name'].upper()}")
     tx0, tx1, _, _ = _extent(plan["levels"][-1])
     roof = zs[-1]
-    d.rect(tx0, roof, tx1 - tx0, PARAPET, "PARAPET", "#fafaf9")
-    d.rect(tx0 - 0.25, roof + PARAPET, tx1 - tx0 + 0.5, 0.3, "PARAPET", "#a1a1aa")  # coping
     stair = next((r for r in plan["levels"][-1]["rooms"] if r["type"] == "stair"), None)
-    if stair and n > 1:
-        d.rect(stair["x"], roof, stair["w"], HEADROOM, "OUTLINE", "#fafaf9")
-        d.rect(stair["x"] - 0.6, roof + HEADROOM, stair["w"] + 1.2, SLAB + 0.15, "SLAB", "#a1a1aa")
-        d.text(stair["x"] + stair["w"] / 2, roof + HEADROOM / 2, "HEAD ROOM", 0.55, layer="DIM")
-    top = roof + (HEADROOM + SLAB if stair and n > 1 else PARAPET + 0.3)
-    d.level(tx1 + 1.5, roof, f"+{roof * FT_M:.2f} m  TERRACE")
+    if not no_top_slab:
+        d.rect(tx0, roof, tx1 - tx0, PARAPET, "PARAPET", "#fafaf9")
+        d.rect(tx0 - 0.25, roof + PARAPET, tx1 - tx0 + 0.5, 0.3, "PARAPET", "#a1a1aa")  # coping
+        if stair and n > 1:
+            d.rect(stair["x"], roof, stair["w"], HEADROOM, "OUTLINE", "#fafaf9")
+            if not sheet_mumty:
+                d.rect(stair["x"] - 0.6, roof + HEADROOM, stair["w"] + 1.2, SLAB + 0.15, "SLAB", "#a1a1aa")
+            d.text(stair["x"] + stair["w"] / 2, roof + HEADROOM / 2, "HEAD ROOM", 0.55, layer="DIM")
+    top = roof + (0.3 if no_top_slab else HEADROOM + SLAB if stair and n > 1 else PARAPET + 0.3)
+    top = max(top, draw_side(d, plan, "front"))  # 1.17 sheet roofs
+    d.level(tx1 + 1.5, roof, f"+{roof * FT_M:.2f} m  {'EAVE (SHEET ROOF)' if no_top_slab else 'TERRACE'}")
     d.level(gx1 + 1.5, 0, "±0.00 m  G.L.")
     d.dim_v(gx0 - 3.0, 0, top, f"{top * FT_M:.2f} m", ext_from=gx0 - 0.5)
     for i in range(n):
@@ -688,9 +710,11 @@ def front_elevation(plan: dict) -> Dwg:
 
 def section(plan: dict) -> Dwg:
     """Section A-A along the depth, cut through the staircase (or the middle of the building)."""
+    from .roof import draw_side, full_roof, headroom_sheet
     d = Dwg("Section A-A")
     zs = _levels_z(plan)
     n = len(plan["levels"])
+    no_top_slab, sheet_mumty = full_roof(plan), headroom_sheet(plan)
     lv0 = plan["levels"][0]
     stair = next((r for r in lv0["rooms"] if r["type"] == "stair"), None)
     x0, x1, _, _ = _extent(lv0)
@@ -717,7 +741,8 @@ def section(plan: dict) -> Dwg:
             continue
         ly0 = min(r["y"] for r in cut)
         ly1 = max(r["y"] + r["d"] for r in cut)
-        d.rect(ly0 - 0.5, z1 - SLAB, ly1 - ly0 + 1.0, SLAB, "SLAB", "#52525b")  # cut slab (dark)
+        if not (no_top_slab and i == n - 1):
+            d.rect(ly0 - 0.5, z1 - SLAB, ly1 - ly0 + 1.0, SLAB, "SLAB", "#52525b")  # cut slab (dark)
         hw = [w for w in lv.get("walls", []) if w["y1"] == w["y2"] and min(w["x1"], w["x2"]) - 0.01 <= xc <= max(w["x1"], w["x2"]) + 0.01]
         for w in hw:
             t = THK.get(w["kind"], 0.5)
@@ -755,15 +780,18 @@ def section(plan: dict) -> Dwg:
     lvt = plan["levels"][-1]
     ty0, ty1 = _extent(lvt)[2], _extent(lvt)[3]
     roof = zs[-1]
-    for yy in (ty0 - 0.25, ty1 - 0.25):
-        d.rect(yy, roof, 0.5, PARAPET, "PARAPET", "#3f3f46", 0)
     st = next((r for r in lvt["rooms"] if r["type"] == "stair" and r["x"] - 0.01 <= xc <= r["x"] + r["w"] + 0.01), None)
-    if st and n > 1:
-        d.rect(st["y"], roof, 0.5, HEADROOM, "WALL", "#3f3f46", 0)
-        d.rect(st["y"] + st["d"] - 0.5, roof, 0.5, HEADROOM, "WALL", "#3f3f46", 0)
-        d.rect(st["y"] - 0.5, roof + HEADROOM, st["d"] + 1.0, SLAB, "SLAB", "#52525b")
-        d.text(st["y"] + st["d"] / 2, roof + HEADROOM / 2, "HEAD ROOM", 0.55, layer="DIM")
-    d.level(gy1 + 1.5, roof, f"+{roof * FT_M:.2f} m  TERRACE")
+    if not no_top_slab:
+        for yy in (ty0 - 0.25, ty1 - 0.25):
+            d.rect(yy, roof, 0.5, PARAPET, "PARAPET", "#3f3f46", 0)
+        if st and n > 1:
+            d.rect(st["y"], roof, 0.5, HEADROOM, "WALL", "#3f3f46", 0)
+            d.rect(st["y"] + st["d"] - 0.5, roof, 0.5, HEADROOM, "WALL", "#3f3f46", 0)
+            if not sheet_mumty:
+                d.rect(st["y"] - 0.5, roof + HEADROOM, st["d"] + 1.0, SLAB, "SLAB", "#52525b")
+            d.text(st["y"] + st["d"] / 2, roof + HEADROOM / 2, "HEAD ROOM", 0.55, layer="DIM")
+    draw_side(d, plan, "section")  # 1.17 sheet roofs (truss shown where the section cuts it)
+    d.level(gy1 + 1.5, roof, f"+{roof * FT_M:.2f} m  {'EAVE (SHEET ROOF)' if no_top_slab else 'TERRACE'}")
     d.level(gy1 + 1.5, 0, "±0.00 m  G.L.")
     d.text((gy0 + gy1) / 2, -7.0, "SECTION A-A", 0.9, bold=True)
     d.line((gy0 + gy1) / 2 - 3.5, -7.3, (gy0 + gy1) / 2 + 3.5, -7.3, "TEXT")
@@ -915,6 +943,10 @@ def sheet_set_pdf(plan: dict, project: dict, meta: dict, style: str = "paper") -
     drawings += [(f"A-{3 + i:02d}", f"{lv['name']} Plan", floor_plan(plan, i)) for i, lv in enumerate(plan["levels"])]
     n0 = 3 + len(plan["levels"])
     drawings += [(f"A-{n0:02d}", "Front Elevation", front_elevation(plan)), (f"A-{n0 + 1:02d}", "Section A-A", section(plan))]
+    if plan.get("roof_sheets"):  # 1.17
+        from .roof import roof_plan, truss_detail
+        drawings += [(f"A-{n0 + 2:02d}", "Roof Plan (Sheet Roof)", roof_plan(plan)), (f"A-{n0 + 3:02d}", "Truss & Purlin Detail", truss_detail(plan))]
+        n0 += 2
     sheet_list = [("A-01", "Title Sheet & Area Statement")] + [(no, t) for no, t, _ in drawings] + \
                  [(f"A-{n0 + 2:02d}", "Door & Window Schedule")]
     navy = colors.HexColor("#0F2350")
@@ -1031,6 +1063,8 @@ def sheet_set_pdf(plan: dict, project: dict, meta: dict, style: str = "paper") -
              ["FSI (achieved)", f"{area['fsi']}"], ["Ground coverage", f"{area['coverage_pct']}%"],
              ["Open space", f"{area['open_space_sqft']:,.0f} sq ft ({area['open_space_pct']}%)"],
              ["Building height", f"{area['height_m']} m (incl. parapet / head room)"]]
+    for rs in area.get("roof_sheets") or []:
+        facts.append([f"Sheet roof ({rs['level']})", f"{rs['type']} · {rs['covered_sqft']:,.0f} sq ft covered"])
     if sbm:
         facts.append(["Setbacks (m)", " · ".join(f"{k[0].upper()} {sbm[k]:g}" for k in ("front", "rear", "left", "right") if k in sbm)])
     table(M + 140 * mm, y2 - 8 * mm, ["Particular", "Value"], facts, [40 * mm, 94 * mm])
@@ -1072,6 +1106,9 @@ def sheets_dxf(plan: dict, project: dict, meta: dict) -> bytes:
     """All drawings (site plan, floor plans, elevation, section) side by side in one DXF (feet)."""
     schedule(plan)
     dwgs = [site_plan(plan)] + [floor_plan(plan, i) for i in range(len(plan["levels"]))] + [front_elevation(plan), section(plan)]
+    if plan.get("roof_sheets"):
+        from .roof import roof_plan, truss_detail
+        dwgs += [roof_plan(plan), truss_detail(plan)]
     co = project.get("company") or {}
     return dwgs_dxf(dwgs, f"{co.get('name', '')} - {project.get('name', '')} - design v{meta.get('version', '')}")
 
@@ -1112,8 +1149,12 @@ def dwgs_dxf(dwgs: list, footer: str) -> bytes:
 def sheet_pages(plan: dict) -> dict:
     """1.13: preview key -> page number (1-based) in sheet_set_pdf, so each sheet can be downloaded alone."""
     n = len(plan["levels"])
-    return {"title": 1, "site": 2, **{f"plan_{i}": 3 + i for i in range(n)}, "elevation": 3 + n, "section": 4 + n,
-            "schedule": 5 + n}
+    k = 2 if plan.get("roof_sheets") else 0
+    out = {"title": 1, "site": 2, **{f"plan_{i}": 3 + i for i in range(n)}, "elevation": 3 + n, "section": 4 + n,
+           "schedule": 5 + n + k}
+    if k:
+        out.update({"roof": 5 + n, "truss": 6 + n})
+    return out
 
 
 def pdf_pages(data: bytes, pages: list[int]) -> bytes:
@@ -1136,6 +1177,9 @@ def sheet_previews(plan: dict) -> dict:
     sched = schedule(plan)
     dw = {"site": site_plan(plan), "elevation": front_elevation(plan), "section": section(plan),
           **{f"plan_{i}": floor_plan(plan, i) for i in range(len(plan["levels"]))}}
+    if plan.get("roof_sheets"):
+        from .roof import roof_plan, truss_detail
+        dw.update({"roof": roof_plan(plan), "truss": truss_detail(plan)})
     return {
         "schedule": sched, "area": area_details(plan),
         "svgs": {k: to_svg(v) for k, v in dw.items()},

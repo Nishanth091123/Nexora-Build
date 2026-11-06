@@ -63,7 +63,7 @@ def compliance(plan: dict, info: dict) -> dict:
         rows.append({"item": f"Setback – {k}", "required": f"{need:g} m" if need is not None else "-",
                      "provided": f"{have:.2f} m ({ft_in(prov[k])})", "status": st})
     hmax = sb.get("max_height_m")
-    rows.append({"item": "Building height (incl. parapet / head room)", "required": f"max {hmax:g} m" if hmax else "-",
+    rows.append({"item": "Building height (incl. parapet / head room / sheet roof ridge)", "required": f"max {hmax:g} m" if hmax else "-",
                  "provided": f"{area['height_m']} m", "status": "check" if not hmax else ("ok" if area["height_m"] <= hmax + 0.005 else "fail")})
     fsi_allowed = _num(info.get("allowed_fsi"))
     rows.append({"item": "FSI (floor space index)", "required": f"max {fsi_allowed:g}" if fsi_allowed else "enter permitted FSI",
@@ -302,6 +302,8 @@ def approval_pdf(plan: dict, project: dict, info: dict, meta: dict, style: str =
     rows += [[f"{r['floor']} (built-up)", f"{r['builtup_sqft']:,.0f}", f"{r['builtup_sqft'] * FT_M ** 2:,.2f}"] for r in area["rows"]]
     rows += [["Total built-up", f"{area['total_builtup_sqft']:,.0f}", f"{area['total_builtup_m2']:,.2f}"],
              ["FSI / coverage", f"{area['fsi']}", f"{area['coverage_pct']}%"]]
+    rows += [[f"Sheet roof – {rs['level']}", f"{rs['covered_sqft']:,.0f}", f"{rs['covered_sqft'] * FT_M ** 2:,.2f}"]
+             for rs in area.get("roof_sheets") or []]  # 1.17
     y = table(tx + 3 * mm, y - 6 * mm, ["Particular", "sq ft", "sq m"], rows, [84 * mm, 38 * mm, 42 * mm])
     y -= 3 * mm
     # compliance

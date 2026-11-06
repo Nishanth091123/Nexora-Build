@@ -15,6 +15,7 @@ import { api, fileObjectUrl } from "../../lib/api";
 import { useAuth } from "../../lib/auth";
 import MaterialPanel from "./MaterialPanel";
 import PlantsPanel, { plantSummary } from "./PlantsPanel";
+import { sheetLines } from "./RoofSheetsPanel";
 import { BUILTIN, lookOf, procTex, type Item, type Look, type Slot } from "./house3d/catalog";
 import {
   ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Camera, ChevronsDown, ChevronsUp, Download, Film, Footprints, Images,
@@ -101,7 +102,9 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
       try {
         const url = await fileObjectUrl(i.image_url);
         its[k].image = url;
-        photos.current.set(i.ref, await new THREE.TextureLoader().loadAsync(url));
+        const tx = await new THREE.TextureLoader().loadAsync(url);
+        tx.colorSpace = THREE.SRGBColorSpace; tx.anisotropy = 16;  // 1.17 sharp photos at grazing angles (floors)
+        photos.current.set(i.ref, tx);
       } catch { /* picture missing – the colour is used */ }
     }));
     setCustom([...its]); setPhotoVer((v) => v + 1);
@@ -138,7 +141,7 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
   const smooth = useRef({ x: 0, y: 0, h: 0, yaw: 0, pitch: 0 });
 
   // geometry key: the camera is reset only when the SHAPE of the plan changes (not on colour changes)
-  const planKey = useMemo(() => JSON.stringify({ l: plan.levels.map((l) => [l.rooms, l.openings, l.walls]), b: plan.building, p: plan.plot, h: plan.floor_height_ft }), [plan]);
+  const planKey = useMemo(() => JSON.stringify({ l: plan.levels.map((l) => [l.rooms, l.openings, l.walls]), b: plan.building, p: plan.plot, h: plan.floor_height_ft, rs: (plan as any).roof_sheets }), [plan]);
   const planRef = useRef(plan); planRef.current = plan;
   const lightRef = useRef(light); lightRef.current = light;
   const centre = useMemo(() => {
@@ -300,7 +303,7 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
     const { root } = build(plan, fin, {
       upTo: walking || mode === "interior" ? plan.levels.length : upTo, only: walking ? null : mode === "interior" ? inFloor : only,
       mode: walking ? "exterior" : mode, furniture: walking || furniture,
-      surround: surround && mode !== "structure", roof: walking || (mode !== "interior" && roof), edges, structure, style, light, look: lookFor,
+      surround: surround && mode !== "structure", roof: walking || (mode !== "interior" && roof), edges, structure, style, light, look: lookFor, shine: quality === "high",
     });
     setDoors(root, walking);
     if (wire) root.traverse((o: any) => { const ms = Array.isArray(o.material) ? o.material : o.material ? [o.material] : []; ms.forEach((m: any) => { m.wireframe = true; }); });
@@ -308,7 +311,7 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
     applyClip();
     c.renderer.shadowMap.needsUpdate = true;
     walk.current.segs.clear();
-  }, [planKey, finKey, buildKey, surround, wire, edges, structure, style, light, photoVer, custom.length]);  // eslint-disable-line react-hooks/exhaustive-deps
+  }, [planKey, finKey, buildKey, surround, wire, edges, structure, style, light, photoVer, custom.length, quality === "high"]);  // eslint-disable-line react-hooks/exhaustive-deps
   // entering / leaving the walkthrough only opens / closes the doors – no rebuild (no waiting)
   useEffect(() => { const c = ctx.current; if (c?.model) setDoors(c.model, mode === "walk"); }, [mode]);
 
@@ -513,6 +516,27 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
     c.renderer.render(c.scene, c.camera);
     save(c.renderer.domElement.toDataURL("image/png"), `${fileBase()}_view.png`);
   };
+  /** 1.17 Photo mode: the CURRENT view (walkthrough too) rendered once at high resolution with fine shadows. */
+  const photo = () => {
+    const c = ctx.current, el = host.current; if (!c || !el) return;
+    const r = c.renderer, size = r.getSize(new THREE.Vector2()), pr = r.getPixelRatio();
+    const W = 3200, Hh = Math.round(W * (el.clientHeight / Math.max(1, el.clientWidth)));
+    const cam = c.camera as THREE.PerspectiveCamera;
+    const aspect = cam.aspect, wasShadow = r.shadowMap.enabled, ms = c.sun.shadow.mapSize.x;
+    try {
+      r.shadowMap.enabled = true; r.shadowMap.type = THREE.PCFSoftShadowMap; c.sun.castShadow = true;
+      c.sun.shadow.mapSize.set(4096, 4096); c.sun.shadow.map?.dispose(); (c.sun.shadow as any).map = null; r.shadowMap.needsUpdate = true;
+      r.setPixelRatio(1); r.setSize(W, Hh, false); cam.aspect = W / Hh; cam.updateProjectionMatrix();
+      r.render(c.scene, cam);
+      save(r.domElement.toDataURL("image/png"), `${fileBase()}_${mode === "walk" ? "Walkthrough" : "View"}_Photo.png`);
+      toast("HD photo saved");
+    } finally {
+      cam.aspect = aspect; cam.updateProjectionMatrix();
+      c.sun.shadow.mapSize.set(ms, ms); c.sun.shadow.map?.dispose(); (c.sun.shadow as any).map = null;
+      r.shadowMap.enabled = wasShadow; c.sun.castShadow = wasShadow; r.shadowMap.needsUpdate = true;
+      r.setPixelRatio(pr); r.setSize(size.x, size.y, false);
+    }
+  };
   /** render one preset view at a fixed size; returns a PNG data URL */
   function shot(v: View, W = 1800, Hh = 1100): string {
     const c = ctx.current!;
@@ -664,6 +688,7 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
       <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-line bg-slate-50 p-2 text-sm">
         <span className="mr-1 text-xs font-semibold text-slate-500"><Download size={13} className="mr-1 inline" />Download</span>
         <button className="btn-outline btn-sm" onClick={png}><Download size={14} />This view (PNG)</button>
+        <button className="btn-primary btn-sm" onClick={photo} title="High-resolution photo of exactly what you see – also inside the walkthrough"><Camera size={14} />Photo mode (HD)</button>
         <button className="btn-outline btn-sm" disabled={busy} onClick={() => views(false)}><Images size={14} />Front · Sides · Rear · 3D (5 PNG)</button>
         <button className="btn-outline btn-sm" disabled={busy} onClick={() => views(true)}><Images size={14} />All views on one sheet</button>
         <label className="ml-1 flex items-center gap-1.5 text-xs"><input type="checkbox" className="h-4 w-4 accent-brand-600" checked={flat} onChange={(e) => setFlat(e.target.checked)} />Flat elevations (no perspective)</label>
@@ -718,7 +743,7 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
         </div>
       </div>
       <PlantsPanel plants={fin.plants} disabled={!onFinishes} onChange={(plants) => onFinishes?.({ ...fin, plants })} />
-      <MaterialPanel plan={plan} picks={{ mat: fin.mat, rooms: fin.rooms }} plantLines={plantSummary(fin.plants)} items={items} swatch={swatch} isOwner={user?.role === "owner"}
+      <MaterialPanel plan={plan} picks={{ mat: fin.mat, rooms: fin.rooms }} plantLines={[...plantSummary(fin.plants), ...sheetLines(plan)]} items={items} swatch={swatch} isOwner={user?.role === "owner"}
         code={`Nexora_3D_${style}`} onLibraryChanged={loadLibrary}
         onPick={(slot, ref) => { const mat = { ...(fin.mat || {}) }; if (ref) mat[slot] = ref; else delete mat[slot]; onFinishes?.({ ...fin, mat }); }}
         onRoomPick={(rid, kind, ref) => {

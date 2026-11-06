@@ -20,13 +20,14 @@ WORKS: dict[str, str] = {
     "columns": "Columns", "beams": "Beams, lintels & bands", "slab": "Roof slab & sunshades",
     "staircase": "Staircase", "brickwork": "Brickwork / blockwork", "plastering": "Plastering",
     "flooring": "Flooring, tiling & waterproofing", "painting": "Painting", "doors_windows": "Doors & Windows",
-    "plumbing": "Plumbing & Sanitary", "electrical": "Electrical", "external": "External works",
+    "plumbing": "Plumbing & Sanitary", "electrical": "Electrical", "roofing": "Roofing sheet (sheet + truss)",
+    "external": "External works",
     "other": "Other / additional items",
 }
 WORK_SHORT = {"all": "", "excavation": "Excavation", "foundation": "Foundation", "columns": "Columns",
               "beams": "Beams", "slab": "Slab", "staircase": "Staircase", "brickwork": "Brickwork",
               "plastering": "Plastering", "flooring": "Flooring", "painting": "Painting",
-              "doors_windows": "Doors_Windows", "plumbing": "Plumbing", "electrical": "Electrical",
+              "doors_windows": "Doors_Windows", "plumbing": "Plumbing", "electrical": "Electrical", "roofing": "Roofing_Sheet",
               "external": "External_Works", "other": "Other_Items"}
 STRUCT = ("RCC", "Steel", "Formwork")
 
@@ -37,6 +38,8 @@ def _d(i: dict) -> str:
 
 def work_of(i: dict) -> str:
     cat, d = i["category"], _d(i)
+    if cat == "Roofing Sheet" or "roof steel" in d:  # 1.17
+        return "roofing"
     if cat == "Earthwork":
         return "excavation"
     if cat == "Concrete (PCC)" or (i["floor"] in ("Foundation", "Plinth") and cat in STRUCT + ("Masonry",)):
@@ -134,6 +137,8 @@ def part_estimate(result: dict, floor: str = "all", work: str = "all") -> dict:
         {"name": "Aggregate 40 mm", "qty": round(mq("agg40"), 2), "unit": "m³"},
         {"name": "Bricks", "qty": math.ceil(mq("brick")), "unit": "nos"},
         {"name": "Mixing water (approx. w/c 0.5, curing extra)", "qty": round(cement * 25), "unit": "litres"},
+        {"name": "Roofing sheet (incl. laps)", "qty": round(sum(x["qty"] for x in mats if x["code"].startswith("sheet_") and x["code"] != "sheet_ridge"), 2), "unit": "m²"},
+        {"name": "MS truss / purlin steel", "qty": round(mq("ms_struct")), "unit": "kg"},
     ]
     key = [k for k in key if k["qty"]]
     return {"floor": floor, "work": work, "floor_label": "All floors" if floor == "all" else floor,

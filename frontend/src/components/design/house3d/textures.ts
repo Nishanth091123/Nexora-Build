@@ -15,7 +15,7 @@ function make(key: string, size: number, draw: (g: CanvasRenderingContext2D, r: 
   draw(g, rng(key.split("").reduce((a, ch) => a * 31 + ch.charCodeAt(0), 7)));
   const t = new THREE.CanvasTexture(c);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.anisotropy = 8;
+  t.anisotropy = 16;  // 1.17: sharp at grazing angles (three.js uses the most the graphics card allows)
   if (srgb) t.colorSpace = THREE.SRGBColorSpace;
   cache.set(key, t);
   return t;
@@ -31,7 +31,17 @@ function speckle(g: CanvasRenderingContext2D, r: () => number, size: number, amo
 }
 
 /** white plaster (tinted by the material colour) – 1 texture = 4 ft */
-export const plaster = () => make("plaster", 128, (g, r) => { g.fillStyle = "#ffffff"; g.fillRect(0, 0, 128, 128); speckle(g, r, 128, 16); });
+export const plaster = () => make("plaster2", 512, (g, r) => {  // 1.17: 512 px – stays sharp when you walk close to a wall
+  g.fillStyle = "#ffffff"; g.fillRect(0, 0, 512, 512); speckle(g, r, 512, 10);
+  for (let i = 0; i < 900; i++) { g.fillStyle = `rgba(0,0,0,${0.015 + r() * 0.025})`; g.fillRect(r() * 512, r() * 512, 1 + r() * 2, 1 + r() * 2); }
+});
+
+/** 1.17 – soft contact shadow (ambient occlusion) strip: dark at the wall, fading out (used on floors / ceilings) */
+export const aoStrip = () => make("aoStrip", 64, (g) => {
+  const grd = g.createLinearGradient(0, 0, 0, 64);
+  grd.addColorStop(0, "rgba(0,0,0,0.55)"); grd.addColorStop(0.35, "rgba(0,0,0,0.18)"); grd.addColorStop(1, "rgba(0,0,0,0)");
+  g.clearRect(0, 0, 64, 64); g.fillStyle = grd; g.fillRect(0, 0, 64, 64);
+}, false);
 
 /** stacked natural stone cladding – 1 texture = 4 ft */
 export const stone = () => make("stone", 512, (g, r) => {
@@ -83,6 +93,14 @@ export const tiles = () => make("tiles", 256, (g, r) => {
 });
 
 /** terracotta roof tiles (traditional) – 1 texture = 4 ft */
+/** 1.17 – roofing sheet ribs (corrugation shading, tinted by the sheet colour) – repeats every 0.6 ft */
+export const sheetRibs = () => make("sheetRibs", 128, (g) => {
+  const grd = g.createLinearGradient(0, 0, 128, 0);
+  grd.addColorStop(0, "#b8b8b8"); grd.addColorStop(0.2, "#ffffff"); grd.addColorStop(0.45, "#e6e6e6");
+  grd.addColorStop(0.6, "#9a9a9a"); grd.addColorStop(0.8, "#d8d8d8"); grd.addColorStop(1, "#b8b8b8");
+  g.fillStyle = grd; g.fillRect(0, 0, 128, 128);
+});
+
 export const roofTiles = () => make("roofTiles", 256, (g) => {
   for (let y = 0; y < 8; y++) {
     for (let x = 0; x < 8; x++) {

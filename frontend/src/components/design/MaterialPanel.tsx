@@ -183,7 +183,7 @@ function Showcase({ open, onClose, plan, picks, byRef, swatch, code, shot, plant
       y += rowH;
     }
     if (plantLines.length) {  // 1.16 trees & plants
-      g.fillStyle = "#0f2350"; g.font = "bold 26px Arial"; g.fillText("Trees & plants", 40, y + 36); y += 56;
+      g.fillStyle = "#0f2350"; g.font = "bold 26px Arial"; g.fillText("Trees, plants & roof sheets", 40, y + 36); y += 56;
       g.font = "22px Arial"; g.fillStyle = "#14532d";
       for (const l of plantLines) { g.fillText(`• ${l}`, 60, y + 20); y += 34; }
     }
@@ -205,7 +205,7 @@ function Showcase({ open, onClose, plan, picks, byRef, swatch, code, shot, plant
                 <div className="truncate text-xs text-slate-600">{it.name}{it.brand ? ` · ${it.brand}` : ""}{it.code ? ` · code ${it.code}` : ""}{it.rate ? ` · ₹${it.rate}${it.unit ? `/${it.unit}` : ""}` : ""}</div></div>
             </li>
           ))}
-          {plantLines.map((l) => <li key={l} className="px-3 py-2 text-sm text-emerald-800">🌴 {l}</li>)}
+          {plantLines.map((l) => <li key={l} className="px-3 py-2 text-sm text-emerald-800">{l.includes(" sheet") || l.includes("Polycarbonate") || l.includes("ACC") ? "🏠" : "🌴"} {l}</li>)}
         </ul>
       )}
       <div className="mt-4 flex flex-wrap justify-end gap-2">

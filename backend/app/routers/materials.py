@@ -117,7 +117,7 @@ def image_from_url(iid: int, body: UrlIn, owner: User = Depends(require_owner), 
     if u.scheme not in ("http", "https") or not u.netloc or u.hostname in ("localhost", "127.0.0.1") or (u.hostname or "").startswith(("10.", "192.168.", "169.254.")):
         raise HTTPException(400, "Give a normal https:// link to a picture")
     try:
-        with httpx.Client(timeout=20, follow_redirects=True, headers={"User-Agent": "NexoraBuild/1.16 (material library)"}) as c:
+        with httpx.Client(timeout=20, follow_redirects=True, headers={"User-Agent": "NexoraBuild/1.17 (material library)"}) as c:
             r = c.get(body.url.strip())
     except Exception as e:
         raise HTTPException(400, f"Could not open the link ({type(e).__name__}). Save the picture and upload it instead.")

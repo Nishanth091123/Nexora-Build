@@ -349,6 +349,11 @@ def structural_pdf(res: dict, plan: dict, project: dict, meta: dict, style: str 
     table(M + 8 * mm, yy - 6 * mm, ["Member", "Concrete (m3)", "Steel (kg, approx.)"],
           [[q["member"], q["concrete_m3"], q["steel_kg"]] for q in res["quantities"]] +
           [["Total", res["summary"]["concrete_m3"], res["summary"]["steel_kg"]]], [40 * mm, 34 * mm, 40 * mm])
+    if res.get("roof_sheets"):  # 1.17 sheet roofs – loads and MS steel (sizes as entered)
+        rows = [[r["label"][:40], f"{r['dead_kn_m2']} + {r['live_kn_m2']}", r["total_kn"], r["span_m"], r["trusses"] or "-",
+                 r["reaction_kn"], r["steel_kg"]] for r in res["roof_sheets"]]
+        table(M + 125 * mm, yy - 6 * mm, ["Sheet roof", "DL+LL kN/m2", "Total kN", "Span m", "Trusses", "React. kN", "MS kg"], rows,
+              [50 * mm, 20 * mm, 15 * mm, 13 * mm, 13 * mm, 15 * mm, 13 * mm], fs=7)
     c.showPage()
     c.save()
     return buf.getvalue()

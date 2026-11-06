@@ -199,10 +199,27 @@ def design(plan: dict, raw: dict) -> dict:
         raise NeedInfo(["Too few walls to place columns – open a complete design (walls on every floor)."])
     beams = beam_spans(plan, cols)
 
+    # 1.17 sheet roofs: no RCC roof slab under a full sheet roof; light roof load instead
+    from ..design.roof import SHEETS, describe, full_roof, geom
+    sheet_top = full_roof(plan)
+    sheet_rows = []
+    for rs in plan.get("roof_sheets") or []:
+        g = geom(plan, rs)
+        dead = SHEETS[rs["sheet"]]["kgm2"] * 9.81 / 1000 + (g["steel_kg"] / max(g["plan_area"] * FT * FT, 0.1)) * 9.81 / 1000
+        live = max(0.4, 0.75 - 0.02 * max(0.0, rs["slope_deg"] - 10))  # IS 875-2 sloping roof, no access
+        area_m2 = g["plan_area"] * FT * FT
+        sheet_rows.append({"label": describe(rs), "place": rs["place"], "dead_kn_m2": round(dead, 2), "live_kn_m2": round(live, 2),
+                           "total_kn": round((dead + live) * area_m2, 1), "span_m": round(g["span"] * FT, 2),
+                           "trusses": g["n_truss"], "reaction_kn": round((dead + live) * area_m2 / max(1, 2 * max(g["n_truss"], 1)), 1),
+                           "steel_kg": round(g["steel_kg"]), "members": rs["truss"]})
+    sheet_q = (sum(r["dead_kn_m2"] + r["live_kn_m2"] for r in sheet_rows if r["place"] == "full_roof")
+               / max(1, sum(1 for r in sheet_rows if r["place"] == "full_roof"))) if sheet_top else 0.0
     # ---- slabs (each room = one panel, per level)
     slabs = []
     for li, lv in enumerate(plan["levels"]):
         roof_above = True
+        if sheet_top and li == n - 1:
+            continue  # the top floor is covered by the sheet roof
         for r in lv["rooms"]:
             if r["type"] in ("terrace", "stair", "parking") and r["type"] != "parking":
                 continue
@@ -313,6 +330,8 @@ def design(plan: dict, raw: dict) -> dict:
             ll = inp["roof_live_load"] if roof else inp["live_load"]
             D = next((s["D_mm"] for s in slab_by_level.get(lv["name"], []) if s["room"] == r["name"]), 125)
             q = 25 * D / 1000 + inp["floor_finish"] + ll + (1.0 if roof else 0)
+            if roof and sheet_top:
+                q = sheet_q  # sheet + truss + roof live load
             nx, ny = max(1, int(r["w"])), max(1, int(r["d"]))
             a = (r["w"] * FT / nx) * (r["d"] * FT / ny)
             for i in range(nx):
@@ -446,7 +465,11 @@ def design(plan: dict, raw: dict) -> dict:
         "Gravity loads only (IS 456). Wind / earthquake (IS 875-3 / IS 1893) are not included in this design.",
         "Lap length 50 d (tension), development length 47 d (Fe500, M20). Hooks 135° for ties and stirrups.",
     ]
+    if sheet_rows:
+        notes.append("Sheet roof loads: sheet + steel dead load, roof live load 0.75 kN/m² less 0.02 per degree above 10° "
+                     "(IS 875-2). Truss member sizes are as entered – check them with a steel design.")
     return {
+        "roof_sheets": sheet_rows,
         "inputs": inp, "floor_height_m": round(H, 2), "levels": [lv["name"] for lv in plan["levels"]],
         "columns": col_out, "beams": beam_out, "slabs": slabs, "footings": foot_out,
         "column_schedule": schedule(col_out, ["b_mm", "D_mm", "bars", "ties", "Pu_kn"]),

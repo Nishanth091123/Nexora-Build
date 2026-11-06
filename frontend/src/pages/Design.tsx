@@ -3,11 +3,12 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import DrawingImport from "../components/design/DrawingImport";
 import {
   Box, Calculator, Check, Copy, Download, FileText, GitCompare, Layers, Lightbulb, MapPin, PenSquare, Plus,
-  Redo2, RotateCcw, Ruler, Save, Sparkles, Stamp, Trash2, TriangleAlert, Undo2, Upload, Wand2, Eye, EyeOff, Compass,
+  Redo2, RotateCcw, Ruler, Save, Sparkles, Stamp, Trash2, TriangleAlert, Undo2, Upload, Wand2, Eye, EyeOff, Compass, Warehouse,
 } from "lucide-react";
 import Page from "../components/Page";
 import OwnerDelete from "../components/OwnerDelete";
 import PlanSvg from "../components/design/PlanSvg";
+import RoofSheetsPanel, { type RoofSheet } from "../components/design/RoofSheetsPanel";
 import DrawingSheets from "../components/design/DrawingSheets";
 import StructuralPanel from "../components/design/StructuralPanel";
 import ApprovalPanel from "../components/design/ApprovalPanel";
@@ -193,6 +194,16 @@ export default function DesignPage() {
       setPast((p) => [...p.slice(-40), JSON.stringify(plan)]); setFuture([]); setDirty(true);
       recompute(next);
     }
+  };
+  const setRoofSheets = (list: RoofSheet[]) => {  // 1.17
+    if (!plan) return;
+    const next = clone(plan) as any;
+    next.roof_sheets = list;
+    setPast((p) => [...p.slice(-40), JSON.stringify(plan)]); setFuture([]); setDirty(true); setPlan(next);
+    (async () => {
+      try { showPlan(await api<Plan>(`/api/projects/${pid}/design/recompute`, { body: { plan: next } }), "edit"); }
+      catch (e: any) { toast(e.message, "err"); }
+    })();
   };
   const setSpecs = (specs: Record<string, { w_ft?: number; h_ft?: number; material?: string }>) => {
     if (!plan) return;
@@ -586,6 +597,9 @@ export default function DesignPage() {
                 <div className="flex flex-wrap gap-2">{plan.levels.map((l, i) => i !== level && <button key={i} className="btn-outline btn-sm" onClick={() => copyLevelFrom(i)}>{l.name}</button>)}</div>
               </Card>
             )}
+            <Card title="Roof & sheets" icon={<Warehouse size={20} />}>
+              <RoofSheetsPanel plan={plan} onChange={setRoofSheets} />
+            </Card>
             {quickCard}
             {lvl && lvl.warnings.length > 0 && (
               <Card title="Checks" icon={<TriangleAlert size={20} />}>

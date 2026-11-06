@@ -10,7 +10,8 @@ FT_M = 0.3048
 
 OPEN_PAIRS = {frozenset(p) for p in [("hall", "dining"), ("dining", "passage"), ("lounge", "passage"),
                                       ("passage", "stair"), ("parking", "parking"), ("hall", "passage"),
-                                      ("lounge", "stair"), ("parking", "stair")]}
+                                      ("lounge", "stair"), ("parking", "stair"),
+                                      ("passage", "passage")]}
 OPEN_OUTSIDE = {"parking"}  # no external wall on open parking sides
 OPEN_TYPES = {"terrace", "balcony", "sitout"}  # open to sky / partly open – parapet instead of wall
 HABITABLE = {"bedroom", "hall", "lounge", "kitchen", "dining"}
@@ -130,7 +131,7 @@ def _on_line(o: dict, w: dict) -> bool:
     return abs(o["x1"] - o["x2"]) < 1e-6 and abs(o["x1"] - w["x1"]) < 0.01
 
 
-def place_free(w: dict, width: float, ops: list[dict], gap: float = 1.0) -> dict | None:
+def place_free(w: dict, width: float, ops: list[dict], gap: float = 1.0, prefer_end: bool = False) -> dict | None:
     """1.15: like place(), but never on top of a door / window already on that wall (keeps `gap` ft between).
     Picks the free stretch nearest the middle of the wall; None when it does not fit."""
     horiz = w["y1"] == w["y2"]
@@ -139,7 +140,9 @@ def place_free(w: dict, width: float, ops: list[dict], gap: float = 1.0) -> dict
     busy = sorted(((min(o["x1"], o["x2"]) if horiz else min(o["y1"], o["y2"])) - gap,
                    (max(o["x1"], o["x2"]) if horiz else max(o["y1"], o["y2"])) + gap) for o in ops if _on_line(o, w))
     if not busy:
-        return place(w, width)
+        if seg_len(w) + 1e-6 < width + 1.0:
+            return None
+        return place(w, width, prefer_end)
     free, cur = [], a0 + 0.5
     for b0, b1 in busy:
         if b0 > cur:
@@ -147,7 +150,7 @@ def place_free(w: dict, width: float, ops: list[dict], gap: float = 1.0) -> dict
         cur = max(cur, b1)
     if a1 - 0.5 > cur:
         free.append((cur, a1 - 0.5))
-    mid = (a0 + a1) / 2
+    mid = (a1 - 0.75 - width / 2) if prefer_end else (a0 + a1) / 2
     best = None
     for f0, f1 in free:
         if f1 - f0 + 1e-6 < width:
@@ -177,6 +180,88 @@ def place(w: dict, width: float, prefer_end: bool = False) -> dict:
     return {"x1": w["x1"], "y1": round(y, 2), "x2": w["x1"], "y2": round(y + width, 2), "w": round(width, 2)}
 
 
+# 1.17: who may open into whom (priority order). A bedroom NEVER opens into another bedroom.
+COMMON = ["passage", "lounge", "hall", "dining", "stair"]
+ACCESS = {
+    "bedroom": COMMON + ["kitchen"],
+    "toilet": COMMON,  # attached toilets first try their own bedroom / dress (below)
+    "common_toilet": ["passage", "dining", "hall", "lounge", "stair", "utility", "kitchen"],
+    "kitchen": ["dining", "hall", "lounge", "passage", "stair", "utility"],
+    "dining": ["hall", "lounge", "passage", "kitchen", "stair"],
+    "hall": ["dining", "lounge", "passage", "stair"],
+    "lounge": ["passage", "stair", "hall", "dining"],
+    "passage": ["stair", "hall", "lounge", "dining", "kitchen", "utility"],  # wash area behind the kitchen is normal
+    "stair": ["passage", "hall", "lounge", "dining", "parking", "sitout"],
+    "utility": ["kitchen", "dining", "passage", "hall", "lounge", "stair"],
+    "store": ["kitchen", "dining", "passage", "hall", "lounge", "stair", "utility"],
+    "pooja": ["hall", "dining", "lounge", "passage", "stair", "kitchen"],
+    "terrace": ["stair", "lounge", "passage", "hall", "dining", "bedroom"],
+    "balcony": ["bedroom", "lounge", "hall", "dining", "passage"],
+    "sitout": ["hall", "lounge", "dining", "bedroom", "passage"],
+    "study": COMMON, "office": COMMON, "guest": COMMON,
+}
+KIND = {"bedroom": ("door", 3.0), "toilet": ("toilet_door", 2.5), "common_toilet": ("toilet_door", 2.5),
+        "kitchen": ("opening", 3.0), "dining": ("opening", 3.0), "hall": ("opening", 3.0), "lounge": ("opening", 3.0),
+        "passage": ("opening", 3.0), "stair": ("opening", 3.0), "utility": ("door", 2.5), "store": ("door", 2.5),
+        "pooja": ("pooja_door", 2.5), "terrace": ("door", 3.0), "balcony": ("door", 3.0), "sitout": ("door", 3.0)}
+NO_ACCESS_NEEDED = {"dress", "parking"}
+# rooms are opened up in this order: circulation first, then bedrooms, … attached toilets last
+ORDER = {"hall": 0, "lounge": 0, "dining": 0, "passage": 0, "stair": 0, "kitchen": 1, "bedroom": 2, "utility": 3,
+         "store": 3, "pooja": 3, "common_toilet": 4, "terrace": 4, "balcony": 4, "sitout": 4, "toilet": 5}
+
+
+def _wall_between(ws: list[dict], a: str, b: str) -> list[dict]:
+    return [w for w in ws if {w["a"], w["b"]} == {a, b}]
+
+
+def _shared_open(a: dict, b: dict) -> float:
+    """Length of the boundary between two rooms (used when there is no wall between them)."""
+    if abs(a["x"] + a["w"] - b["x"]) < 0.02 or abs(b["x"] + b["w"] - a["x"]) < 0.02:
+        return min(a["y"] + a["d"], b["y"] + b["d"]) - max(a["y"], b["y"])
+    if abs(a["y"] + a["d"] - b["y"]) < 0.02 or abs(b["y"] + b["d"] - a["y"]) < 0.02:
+        return min(a["x"] + a["w"], b["x"] + b["w"]) - max(a["x"], b["x"])
+    return 0.0
+
+
+def _door_on(o: dict, w: dict) -> bool:
+    if not _on_line(o, w):
+        return False
+    if w["y1"] == w["y2"]:
+        return min(max(o["x1"], o["x2"]), max(w["x1"], w["x2"])) - max(min(o["x1"], o["x2"]), min(w["x1"], w["x2"])) > 0.5
+    return min(max(o["y1"], o["y2"]), max(w["y1"], w["y2"])) - max(min(o["y1"], o["y2"]), min(w["y1"], w["y2"])) > 0.5
+
+
+def reachable(lv: dict, ops: list[dict], ws: list[dict] | None = None, level_index: int = 0) -> tuple[set, set]:
+    """1.17: rooms you can walk into (from the main door on the ground floor, from the staircase above).
+    Returns (reached ids, ids that need access but cannot be reached)."""
+    rooms = lv["rooms"]
+    ws = ws if ws is not None else walls(rooms)
+    by = {r["id"]: r for r in rooms}
+    doors = [o for o in ops if o["type"] not in ("window", "vent")]
+    adj: dict[str, set] = {r["id"]: set() for r in rooms}
+    for i, a in enumerate(rooms):
+        for b in rooms[i + 1:]:
+            if wall_kind(a, b) is None and _shared_open(a, b) >= 2.5:
+                adj[a["id"]].add(b["id"]); adj[b["id"]].add(a["id"])
+    for w in ws:
+        if w["a"] and w["b"] and any(_door_on(o, w) for o in doors):
+            adj[w["a"]].add(w["b"]); adj[w["b"]].add(w["a"])
+    roots = {o["room"] for o in doors if o["type"] == "main_door"}
+    roots |= {r["id"] for r in rooms if r["type"] == "parking"}
+    if level_index > 0 or lv.get("stilt") or not roots:
+        roots |= {r["id"] for r in rooms if r["type"] == "stair"}
+    if level_index == 0 and not lv.get("stilt"):
+        roots |= {r["id"] for r in rooms if r["type"] == "sitout"}  # ground sit-out is outside
+    seen, todo = set(roots), list(roots)
+    while todo:
+        x = todo.pop()
+        for y in adj.get(x, ()):
+            if y not in seen:
+                seen.add(y); todo.append(y)
+    need = {r["id"] for r in rooms if r["type"] not in NO_ACCESS_NEEDED}
+    return seen, need - seen
+
+
 def level_openings(lv: dict, level_index: int, building_d: float) -> tuple[list[dict], list[str]]:
     rooms = lv["rooms"]
     by_id = {r["id"]: r for r in rooms}
@@ -184,70 +269,76 @@ def level_openings(lv: dict, level_index: int, building_d: float) -> tuple[list[
     ops, warnings = [], []
     n = 0
 
-    def add(rid, kind, w, h, seg):
+    def add(rid, kind, h, seg):
         nonlocal n
-        if kind not in ("window", "vent"):  # 1.15: two rooms must not put a door in the same spot of one wall
-            for o in ops:
-                if o["type"] not in ("window", "vent") and _on_line(o, {"x1": seg["x1"], "y1": seg["y1"], "x2": seg["x2"], "y2": seg["y2"]}):
-                    a0, a1 = sorted((seg["x1"], seg["x2"])) if seg["y1"] == seg["y2"] else sorted((seg["y1"], seg["y2"]))
-                    b0, b1 = sorted((o["x1"], o["x2"])) if o["y1"] == o["y2"] else sorted((o["y1"], o["y2"]))
-                    if min(a1, b1) - max(a0, b0) > 0:
-                        return
         n += 1
         ops.append({"id": f"op{n}", "room": rid, "type": kind, "h": h, **seg})
 
-    circulation = ["hall", "lounge", "dining", "passage", "stair", "kitchen"]
-    main_done = False
+    def door_on_wall(rid, kind, width, h, cands, prefer_end=False) -> bool:
+        """1.17: put the door on a FREE part of one of these walls (longest first) – never dropped silently."""
+        for w in sorted(cands, key=seg_len, reverse=True):
+            for wd in (width, 2.5 if width > 2.5 else width):
+                spot = place_free(w, wd, ops, gap=0.5, prefer_end=prefer_end)
+                if spot:
+                    add(rid, kind, h, spot)
+                    return True
+        return False
+
+    # main door on the front (road side) wall
+    if level_index == 0 and not lv.get("stilt"):
+        for r in rooms:
+            if r["type"] not in ("hall", "lounge"):
+                continue
+            rid = r["id"]
+            front = [w for w in ws if w["kind"] == "ext" and rid in (w["a"], w["b"]) and w["y1"] == w["y2"]
+                     and abs(w["y1"] - min(rr["y"] for rr in rooms)) < 0.01]
+            if not front:  # hall behind parking / sit-out: main door between them and the hall
+                front = [w for w in ws if rid in (w["a"], w["b"]) and w["y1"] == w["y2"] and
+                         ({by_id.get(w["a"], {}).get("type"), by_id.get(w["b"], {}).get("type")} & {"parking", "sitout"})]
+            if front and door_on_wall(rid, "main_door", 3.5, 7, [max(front, key=seg_len)]):
+                break
+    # attached toilets → their own bedroom (or its dress area)
+    for r in rooms:
+        if r["type"] == "toilet" and r.get("parent"):
+            target = r["parent"]
+            mine = {target} | {x["id"] for x in rooms if x.get("parent") == target and x["type"] == "dress"}
+            cand = [w for w in ws if r["id"] in (w["a"], w["b"]) and seg_len(w) >= 3.0 and
+                    ((w["b"] if w["a"] == r["id"] else w["a"]) in mine)]
+            dress = [w for w in cand if by_id.get(w["b"] if w["a"] == r["id"] else w["a"], {}).get("type") == "dress"]
+            door_on_wall(r["id"], "toilet_door", 2.5, 7, dress or cand)
+    # every other room: open it into the best room you can already reach (repeat until nothing changes)
+    for _ in range(len(rooms) + 2):
+        seen, missing = reachable(lv, ops, ws, level_index)
+        if not missing:
+            break
+        progress = False
+        for r in sorted((by_id[i] for i in missing), key=lambda q: (ORDER.get(q["type"], 3), q["id"])):
+            allowed = ACCESS.get(r["type"], COMMON)
+            for t in allowed:
+                cands = [w for x in rooms if x["id"] in seen and x["type"] == t for w in _wall_between(ws, r["id"], x["id"])
+                         if w["kind"] and w["kind"] != "parapet" and seg_len(w) >= 3.0]
+                kind, width = KIND.get(r["type"], ("door", 3.0))
+                if r["type"] in ("terrace", "balcony", "sitout") and t in ("bedroom", "lounge", "hall", "dining", "passage", "stair"):
+                    kind = "door"
+                if cands and door_on_wall(r["id"], kind, width, 6 if kind == "pooja_door" else 7, cands, prefer_end=r["type"] == "bedroom"):
+                    progress = True
+                    break
+            if progress:
+                break  # re-check what is reachable now
+        if not progress:
+            break
+    seen, missing = reachable(lv, ops, ws, level_index)
+    for rid in sorted(missing):
+        r = by_id[rid]
+        if r["type"] == "bedroom":
+            warnings.append(f"{lv['name']}: {r['name']} has no access from the hall / passage – a bedroom never opens "
+                            f"into another bedroom; move it next to the hall, dining or passage.")
+        else:
+            warnings.append(f"{lv['name']}: {r['name']} cannot be reached – move it next to a common area.")
+
     for r in rooms:
         t = r["type"]
         rid = r["id"]
-        if t in ("dress", "parking", "passage") or t in OPEN_TYPES:
-            continue
-        # main door on the front (road side) wall
-        if not main_done and level_index == 0 and not lv.get("stilt") and t in ("hall", "lounge"):
-            front = [w for w in ws if w["kind"] == "ext" and rid in (w["a"], w["b"]) and w["y1"] == w["y2"]
-                     and abs(w["y1"] - min(rr["y"] for rr in rooms)) < 0.01]
-            if not front:  # hall behind parking: main door between parking and hall
-                front = [w for w in ws if rid in (w["a"], w["b"]) and w["y1"] == w["y2"] and
-                         {by_id.get(w["a"], {}).get("type"), by_id.get(w["b"], {}).get("type")} >= {"parking"}]
-            if front:
-                add(rid, "main_door", 3.5, 7, place(max(front, key=seg_len), 3.5))
-                main_done = True
-        if t == "bedroom":
-            w, _ = shared(ws, rid, circulation + ["bedroom"], by_id)
-            if w:
-                add(rid, "door", 3.0, 7, place(w, 3.0, prefer_end=True))
-            else:
-                warnings.append(f"{lv['name']}: {r['name']} has no access – move it next to the hall/dining.")
-        elif t == "toilet":
-            target = r.get("parent")
-            cand = [w for w in ws if rid in (w["a"], w["b"]) and seg_len(w) >= 2.5 and
-                    ((w["b"] if w["a"] == rid else w["a"]) in [target] + [x["id"] for x in rooms if x.get("parent") == target and x["type"] == "dress"])]
-            if cand:
-                dress = [w for w in cand if by_id.get(w["b"] if w["a"] == rid else w["a"], {}).get("type") == "dress"]
-                add(rid, "toilet_door", 2.5, 7, place(max(dress or cand, key=seg_len), 2.5))
-            else:
-                w, _ = shared(ws, rid, circulation + ["bedroom"], by_id)
-                if w:
-                    add(rid, "toilet_door", 2.5, 7, place(w, 2.5))
-        elif t == "common_toilet":
-            w, _ = shared(ws, rid, ["dining", "hall", "lounge", "passage", "kitchen", "stair"], by_id)
-            if w:
-                add(rid, "toilet_door", 2.5, 7, place(w, 2.5))
-            else:
-                warnings.append(f"{lv['name']}: Common toilet has no access from a common area.")
-        elif t == "kitchen":
-            w, _ = shared(ws, rid, ["dining", "hall", "lounge", "passage"], by_id)
-            if w:
-                add(rid, "opening", 3.0, 7, place(w, 3.0))
-        elif t in ("utility", "store"):
-            w, _ = shared(ws, rid, ["kitchen", "dining", "hall", "lounge", "passage"], by_id)
-            if w:
-                add(rid, "door", 2.5, 7, place(w, 2.5))
-        elif t == "pooja":
-            w, _ = shared(ws, rid, ["hall", "dining", "lounge", "passage"], by_id)
-            if w:
-                add(rid, "pooja_door", 2.5, 6, place(w, 2.5))
         # windows on the longest external wall
         if t in WIN:
             ext = [w for w in ws if w["kind"] == "ext" and rid in (w["a"], w["b"]) and seg_len(w) >= WIN[t] + 1]
@@ -257,7 +348,7 @@ def level_openings(lv: dict, level_index: int, building_d: float) -> tuple[list[
                 if spot:
                     break
             if spot:
-                add(rid, "vent" if t == "toilet" or t == "common_toilet" else "window", WIN[t], WIN_H.get(t, 4), spot)
+                add(rid, "vent" if t == "toilet" or t == "common_toilet" else "window", WIN_H.get(t, 4), spot)
             elif ext and t in HABITABLE:
                 warnings.append(f"{lv['name']}: {r['name']} – no free outside wall length for a window next to the door.")
             elif t in HABITABLE:
@@ -268,7 +359,7 @@ def level_openings(lv: dict, level_index: int, building_d: float) -> tuple[list[
             for w in sorted(ext, key=seg_len, reverse=True):
                 spot = place_free(w, 2, ops)
                 if spot:
-                    add(rid, "vent", 2, 1.5, spot)
+                    add(rid, "vent", 1.5, spot)
                     break
     if level_index > 0 or lv.get("stilt"):
         pass  # upper floors are entered from the staircase (open)
@@ -429,4 +520,7 @@ def estimate_inputs(plan: dict, base: dict | None = None) -> dict:
         "staircase": any(l["summary"]["stair"] for l in lv) or len(lv) > 1,
         "geometry": estimate_geometry(plan),
     })
+    if plan.get("roof_sheets"):  # 1.17
+        from .roof import estimate_rows
+        inp["roof_sheets"] = estimate_rows(plan)
     return inp

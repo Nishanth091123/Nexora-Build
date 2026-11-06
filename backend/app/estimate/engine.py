@@ -78,6 +78,8 @@ LAB = {
     "oh_tank": {"plumber": 1.0, "helper_m": 1.0},
     "compound_wall": {"mason": 0.35, "helper_m": 0.35, "helper_f": 0.30},
     "parking": {"mason": 0.08, "helper_m": 0.10},
+    "sheet_fix": {"welder": 0.03, "helper_m": 0.05},   # 1.17 per m² of sheet
+    "ms_struct": {"welder": 0.008, "helper_m": 0.008},  # per kg erected
 }
 
 CATEGORY_GROUP = {  # BOQ category -> cost breakdown group (donut)
@@ -85,7 +87,7 @@ CATEGORY_GROUP = {  # BOQ category -> cost breakdown group (donut)
     "Formwork": "Civil Works", "Masonry": "Civil Works", "Plastering": "Civil Works",
     "Flooring & Tiling": "Finishes", "Painting": "Finishes", "Waterproofing": "Finishes",
     "Doors & Windows": "Doors & Windows", "Plumbing & Sanitary": "Plumbing", "Electrical": "Electrical",
-    "External Works": "External Works", "Additional Items": "Additional Items",
+    "External Works": "External Works", "Additional Items": "Additional Items", "Roofing Sheet": "Roofing",
 }
 
 FLOOR_NAMES = ["Ground Floor", "First Floor", "Second Floor", "Third Floor", "Fourth Floor", "Fifth Floor"]
@@ -131,6 +133,7 @@ class Inputs:
     extra_notes: list[str] = field(default_factory=list)
     geometry: list[dict] | None = None        # per-level measured geometry from a design (Phase 3)
     payment_schedule: list[dict] | None = None  # 1.8: [{"stage": "...", "pct": 10}] – default made from floors
+    roof_sheets: list[dict] | None = None     # 1.17: sheet roofs from the design (metric numbers, see design/roof.py)
 
     @staticmethod
     def from_dict(d: dict) -> "Inputs":
@@ -156,6 +159,8 @@ class Inputs:
                     v = [float(x or 0) for x in v]
                 elif k == "geometry":
                     v = [dict(x) for x in v] if isinstance(v, list) and v else None
+                elif k == "roof_sheets":
+                    v = [dict(x) for x in v if isinstance(x, dict)] if isinstance(v, list) else None
             except (TypeError, ValueError):
                 raise MissingInfo([f"'{k}' must be a number"])
             out[k] = v
@@ -488,6 +493,11 @@ def calculate(inputs: dict, rates: dict[str, dict]) -> dict:
         c.add("Earthwork", "Disposal of surplus earth", F, surplus, "m³", None, None,
               {"tractor": math.ceil(surplus / 3)})
 
+    sheets = inp.roof_sheets or []
+    sheet_top = any(r.get("place") == "full_roof" for r in sheets)  # 1.17: no RCC roof slab on the top floor
+    sheet_mumty = [r for r in sheets if r.get("place") == "headroom"]
+    if sheet_top:
+        c.assumptions.append("Top floor roof is a sheet roof – no RCC roof slab, terrace waterproofing or parapet there.")
     # ------------- superstructure per level -------------
     for i, g in enumerate(geo):
         fl = names[i]
@@ -500,18 +510,22 @@ def calculate(inputs: dict, rates: dict[str, dict]) -> dict:
             band_len = g["ext"] + g["int230"]
             c.rcc("Lintel band 230×150", fl, band_len * 0.23 * 0.15, "band", band_len * (0.23 + 0.30))
         slab_area = a * 1.05
-        c.rcc(f"Roof slab {int(slab_t*1000)} mm (incl. sunshade/projection 5%)", fl, slab_area * slab_t,
-              "slab", slab_area)
+        if not (sheet_top and i == levels - 1):
+            c.rcc(f"Roof slab {int(slab_t*1000)} mm (incl. sunshade/projection 5%)", fl, slab_area * slab_t,
+                  "slab", slab_area)
         if rcc_frame:
             lin_len = g["n_win"] * 1.6 + (g["main_doors"] + g["int_doors"] + g["toilet_doors"]) * 1.2
             c.rcc("Lintels 230×150", fl, lin_len * 0.23 * 0.15, "lintel", lin_len * 0.53)
         if g["n_win"]:
             ss_len = g["n_win"] * 1.6
             c.rcc("Sunshades 600 mm", fl, ss_len * 0.6 * 0.075, "sunshade", ss_len * 0.66)
-        if inp.staircase:
+        if inp.staircase and not (sheet_top and i == levels - 1):
             stair_vol = 2.0 if i < levels - 1 else 1.2   # flight to next floor / to terrace + headroom
-            c.rcc("Staircase" + (" to terrace + headroom" if i == levels - 1 else ""), fl, stair_vol, "stair",
-                  8 if i < levels - 1 else 6)
+            label = " to terrace + headroom" if i == levels - 1 else ""
+            if i == levels - 1 and sheet_mumty:  # 1.17: head room covered with a sheet – its roof slab is not cast
+                stair_vol = max(0.6, stair_vol - min(0.6, float(sheet_mumty[0].get("stair_m2") or 0) * slab_t))
+                label = " to terrace (head room: sheet roof)"
+            c.rcc("Staircase" + label, fl, stair_vol, "stair", 8 if i < levels - 1 else 6)
 
         # masonry (deduct openings)
         win_ded = g["win_area"] * 0.23
@@ -526,7 +540,7 @@ def calculate(inputs: dict, rates: dict[str, dict]) -> dict:
         ext_area = g["ext"] * (g["h"] + beam_d) - g["win_area"]
         if i == 0:
             ext_area += P0 * 0.45  # plinth face
-        ceil_area = a * 0.92
+        ceil_area = 0.0 if (sheet_top and i == levels - 1) else a * 0.92  # under a sheet roof: no RCC ceiling
         c.plaster("int", "walls", fl, max(0, int_area))
         c.plaster("ext", "outer walls", fl, max(0, ext_area))
         c.plaster("ceil", "ceiling", fl, ceil_area)
@@ -550,7 +564,7 @@ def calculate(inputs: dict, rates: dict[str, dict]) -> dict:
 
         # waterproofing
         wp = r["toi"] * 4.8 + g.get("terrace", 0)
-        if i == levels - 1:
+        if i == levels - 1 and not sheet_top:
             wp += a + g["P"] * 0.3
         c.add("Waterproofing", "Waterproofing – toilets" + (" & terrace" if i == levels - 1 else ""), fl, wp, "m²",
               {"waterproof": wp}, "waterproof")
@@ -594,9 +608,37 @@ def calculate(inputs: dict, rates: dict[str, dict]) -> dict:
         c.add("Electrical", "Distribution board with MCBs", fl, 1, "nos", {"elec_db": 1},
               None, None, {"electrician": 1})
 
+    # 1.17 roofing sheets
+    for k, rs in enumerate(sheets):
+        fl = rs.get("floor") or "Terrace"
+        tag = {"full_roof": "roof", "on_terrace": "terrace shed", "headroom": "staircase head room", "area": "shed"}.get(rs.get("place"), "shed")
+        code = f"sheet_{rs.get('sheet', 'galvalume')}"
+        area = float(rs.get("slope_m2") or 0) * 1.08  # laps & cutting
+        c.add("Roofing Sheet", f"{rs.get('label', 'Roofing sheet')} – {tag} (supply & fix)", fl, area, "m²",
+              {code: area}, "sheet_fix")
+        if rs.get("ridge_m"):
+            c.add("Roofing Sheet", f"Ridge / hip cap – {tag}", fl, float(rs["ridge_m"]), "rmt", {"sheet_ridge": float(rs["ridge_m"])})
+        if rs.get("place") in ("on_terrace", "headroom", "area"):  # flashing where the sheet meets a wall
+            fm = max(1.0, float(rs.get("eave_m") or 0) / 2)
+            c.add("Roofing Sheet", f"Flashing at wall – {tag}", fl, fm, "rmt", {"sheet_ridge": fm})
+        kg = float(rs.get("steel_kg") or 0)
+        sup = "MS truss + purlins" if rs.get("support") == "truss" else "MS purlins"
+        c.add("Roofing Sheet", f"{sup}{' + posts' if rs.get('posts') else ''} – {tag} (fabricated, erected)", fl, kg, "kg",
+              {"ms_struct": kg}, "ms_struct")
+        paint = kg / 25.0  # ≈ 25 kg of light sections per m² of painted surface
+        c.add("Painting", f"Enamel paint on roof steel – {tag}", fl, paint, "m²", {"enamel": paint}, "enamel")
+        if rs.get("eave_m"):
+            c.add("Roofing Sheet", f"Gutter with down pipes – {tag}", fl, float(rs["eave_m"]), "rmt", {"gutter": float(rs["eave_m"])},
+                  None, None, {"plumber": 0.5, "helper_m": 0.5})
+        bolts = int(rs.get("posts") or 0) + 2 * int(rs.get("n_truss") or 0)
+        if bolts:
+            c.add("Roofing Sheet", f"Anchor bolts with base plates – {tag}", fl, bolts, "nos", {"anchor_bolt": bolts})
+    if sheets:
+        c.assumptions.append("Sheet roof steel from typical light-roof weights (truss + purlins by span); confirm the member sizes.")
+
     # parapet at terrace
     top = geo[-1]
-    par = top["P"] * 0.9 + sum(g.get("parapet", 0) for g in geo) * 0.9
+    par = (0 if sheet_top else top["P"] * 0.9) + sum(g.get("parapet", 0) for g in geo) * 0.9
     c.masonry_wall("terrace parapet 0.9 m", "Terrace", 0, par if inp.masonry == "brick" else par)
     c.plaster("int", "parapet inner face", "Terrace", par)
     c.plaster("ext", "parapet outer face", "Terrace", par)

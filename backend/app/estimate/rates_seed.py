@@ -63,6 +63,18 @@ RATES: list[tuple] = [
     ("rwh", "material", "External Works", "Rain water harvesting pit (complete)", "nos", 15000, 20000, 30000, "Mandatory in Tamil Nadu"),
     ("parking_floor", "material", "External Works", "Parking / sit-out paver or tiles", "m2", 450, 650, 1100, ""),
 
+    # ---------------- 1.17 roofing sheets (supply incl. screws / washers / laps) ----------------
+    ("sheet_gi", "material", "Roofing Sheet", "GI roofing sheet (incl. screws, laps)", "m2", 430, 520, 620, ""),
+    ("sheet_galvalume", "material", "Roofing Sheet", "Galvalume colour-coated sheet (incl. screws, laps)", "m2", 520, 620, 760, ""),
+    ("sheet_puff", "material", "Roofing Sheet", "PUF insulated sandwich panel (incl. fixing)", "m2", 1500, 1800, 2200, ""),
+    ("sheet_acc", "material", "Roofing Sheet", "Fibre-cement (ACC) sheet (incl. J-bolts)", "m2", 280, 330, 400, ""),
+    ("sheet_polycarbonate", "material", "Roofing Sheet", "Polycarbonate sheet (incl. fixing)", "m2", 700, 950, 1300, ""),
+    ("sheet_ridge", "material", "Roofing Sheet", "Ridge cap / hip cap / flashing", "rmt", 250, 320, 420, ""),
+    ("ms_struct", "material", "Roofing Sheet", "MS truss / purlins / posts (fabricated, primed)", "kg", 95, 110, 130,
+     "Steel sections + fabrication + red-oxide primer"),
+    ("gutter", "material", "Roofing Sheet", "Gutter with down pipe", "rmt", 300, 420, 600, ""),
+    ("anchor_bolt", "material", "Roofing Sheet", "Anchor bolts with base plate (set)", "nos", 350, 450, 600, ""),
+
     # ---------------- labour (day wages, TN) ----------------
     ("mason", "labour", "Labour", "Mason (Kothanaar)", "day", 1100, 1100, 1100, ""),
     ("helper_m", "labour", "Labour", "Helper – male (Chithal)", "day", 800, 800, 800, ""),

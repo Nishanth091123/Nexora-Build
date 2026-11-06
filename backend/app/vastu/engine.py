@@ -218,6 +218,21 @@ def analyse(plan: dict, site: dict | None = None, rules: dict | None = None, lan
     # site / fixtures (asked when not known – never guessed)
     sc, questions = M.site_checks(plan, site or {}, lang)
     checks += sc
+    try:  # 1.17 sheet roof slope (traditional: lower towards North / East)
+        from ..design.roof import vastu_check
+        vc = vastu_check(plan)
+    except Exception:
+        vc = None
+    if vc:
+        ok = vc["status"] == "matched"
+        checks.append({"rule": "roof_slope", "title": tr("Sheet roof slope", "கூரை சரிவு (ஷீட்)"), "room": "—", "room_id": None,
+                       "level": -1, "level_name": tr("Site", "மனை"), "zone": "", "status": vc["status"],
+                       "message": tr(vc["message"], "ஷீட் கூரை வடக்கு / கிழக்கு நோக்கி சரிகிறது – நல்லது" if ok else
+                                     "ஷீட் கூரை தெற்கு / மேற்கு நோக்கி சரிகிறது – வடக்கு / கிழக்கு சிறந்தது"),
+                       "why": tr("Rain water traditionally flows towards North / East.", "மழைநீர் வடக்கு / கிழக்கு நோக்கி ஓடுவது பாரம்பரியம்."),
+                       "current": "", "better": "" if ok else tr("Slope down to North / East", "வடக்கு / கிழக்கு நோக்கி சரிவு"),
+                       "remedy": "" if ok else tr("Turn the mono-pitch so the low side is North or East.",
+                                                  "தாழ்வான பக்கம் வடக்கு அல்லது கிழக்கு வரும்படி திருப்பவும்."), "suggest_zones": []})
     if not any(c["rule"] == "plot_shape" for c in checks):
         checks.append({"rule": "shape", "title": tr("Building shape", "கட்டட வடிவம்"), "room": "—", "room_id": None, "level": 0,
                        "level_name": "", "zone": "", "status": "matched",

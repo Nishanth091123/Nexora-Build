@@ -35,6 +35,8 @@ export const STYLE_FINISH: Record<Style, Partial<Finishes>> = {
 export type BuildOpts = {
   upTo: number; only: number | null; mode: Mode; furniture: boolean; surround: boolean; roof: boolean; edges: boolean;
   structure?: any; style: Style; light: LightMode;
+  /** 1.17: Quality = High → polished floors / counters reflect the room (a little) */
+  shine?: boolean;
   /** 1.15 material library: what you picked for a part of the house (and per room); null = style default */
   look?: (slot: Slot, roomId?: string) => Look | null;
 };
@@ -88,6 +90,11 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
   };
   /** picked material for a slot, else the given default */
   const pick = (slot: Slot, dflt: () => THREE.Material, roomId?: string) => { const l = lk(slot, roomId); return l ? LM(l) : dflt(); };
+  /** 1.17 High quality: polished floor – same look, lower roughness so the room reflects a little */
+  const shiny = (m: THREE.Material) => {
+    if (!o.shine || !(m instanceof THREE.MeshStandardMaterial) || m.roughness <= 0.3) return m;
+    return M(`shiny${m.uuid}`, () => { const c = m.clone(); c.roughness = Math.max(0.12, m.roughness * 0.35); c.envMapIntensity = 1.3; return c; });
+  };
   const glass = M("glass", () => new THREE.MeshPhysicalMaterial({
     color: lit ? "#ffd9a6" : "#9cc4dc", transparent: true, opacity: lit ? 0.85 : 0.42, roughness: 0.04, metalness: 0.15,
     emissive: lit ? new THREE.Color("#ffbf73") : new THREE.Color("#000000"), emissiveIntensity: o.light === "night" ? 1.1 : 0.75,
@@ -117,6 +124,9 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
 
   const levels = plan.levels;
   const nShow = Math.min(levels.length, o.upTo);
+  const sheets: any[] = ((plan as any).roof_sheets || []) as any[];
+  const sheetTop = sheets.some((s) => s.place === "full_roof" && s.level === levels.length - 1);
+  const sheetMumty = sheets.some((s) => s.place === "headroom");
   const gap = o.mode === "exploded" ? 6 : 0;
   const zOf = (li: number) => PLINTH + li * H + li * gap;
   const ov = style === "modern" ? 2.25 : style === "contemporary" ? 1.4 : style === "traditional" ? 0.6 : 0.4;
@@ -144,7 +154,7 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
       const wet = r.type === "toilet" || r.type === "common_toilet";
       const m = r.type === "parking" ? (style === "basic" ? std("#bdbdbd") : texMat("pav", T.pavers()))
         : r.type === "terrace" ? pick("roof", () => std(fin.roof))
-        : pick(wet ? "wet_floor" : "floor", () => (wet ? std("#dbe7ef", { roughness: 0.4 }) : std(fin.floor, { roughness: 0.45 })), `${li}:${r.id}`);
+        : shiny(pick(wet ? "wet_floor" : "floor", () => (wet ? std("#dbe7ef", { roughness: 0.4 }) : std(fin.floor, { roughness: 0.45 })), `${li}:${r.id}`));
       box(r.x, r.y, z, r.x + r.w, r.y + r.d, z + 0.04, m, g, `floor ${r.name}`, false);
     }
 
@@ -217,14 +227,17 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
 
     // ---------- stairs
     for (const r of lv.rooms.filter((q) => q.type === "stair" && q.d >= 7 && q.w >= 3)) stairs(r, z, g);
-    if (o.furniture) furnish(lv.rooms, z, g);
+    if (o.furniture) { furnish(lv.rooms, z, g); details(lv, z, g, cutInterior); }
 
     // ---------- slab + overhang over this floor
     const slabOn = !cutInterior && (li < nShow - 1 || o.roof);
     const isRoof = li === levels.length - 1 || li === nShow - 1;
-    if (slabOn && !(isRoof && style === "traditional" && li === levels.length - 1)) slabOver(lv, li, z + H, isRoof && li === levels.length - 1, li < levels.length - 1 && li < nShow - 1, g);
-    if (slabOn && isRoof && li === levels.length - 1 && style === "traditional") { slabOver(lv, li, z + H, false, false, g); hipRoof(lv, z + H, g); }
-    if (li === levels.length - 1 && topShown && o.roof && o.mode !== "interior" && style !== "traditional") terrace(lv, z + H, g);
+    const sheetHere = sheetTop && li === levels.length - 1;  // 1.17: full sheet roof – no RCC slab / terrace on top
+    if (!sheetHere) {
+      if (slabOn && !(isRoof && style === "traditional" && li === levels.length - 1)) slabOver(lv, li, z + H, isRoof && li === levels.length - 1, li < levels.length - 1 && li < nShow - 1, g);
+      if (slabOn && isRoof && li === levels.length - 1 && style === "traditional") { slabOver(lv, li, z + H, false, false, g); hipRoof(lv, z + H, g); }
+      if (li === levels.length - 1 && topShown && o.roof && o.mode !== "interior" && style !== "traditional") terrace(lv, z + H, g);
+    }
     if (lit) {  // warm light inside each floor (night / dusk)
       const e = extent(lv.rooms);
       const l = new THREE.PointLight("#ffd9a0", o.light === "night" ? 70 : 45, 45, 1.6);
@@ -232,6 +245,7 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
     }
   }
 
+  if (o.mode !== "interior" || o.only == null) sheetRoofs();
   if (mainDoor && o.mode !== "interior") entrance(mainDoor.op, mainDoor.out);
   if (o.surround) surroundings();
   if (!o.edges) optimize(root);
@@ -239,6 +253,120 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
   return { root, lights };
 
   // =================================================================== parts
+  /** 1.17 sheet roofs: corrugated / trapezoidal sheets, MS trusses, purlins, posts, ridge cap and gutter. */
+  function sheetRoofs() {
+    if (!sheets.length || !o.roof) return;
+    const g = new THREE.Group(); g.name = "sheet roofs"; root.add(g);
+    const top = levels.length - 1;
+    const steel = std("#5b5f66", { roughness: 0.55, metalness: 0.6 }, "none");
+    const ridgeM = std("#3f4247", { roughness: 0.5, metalness: 0.5 }, "none");
+    const P = (x: number, y: number, h: number) => new THREE.Vector3(b.x + x, h, -(b.y + y));
+    const member = (a: THREE.Vector3, c: THREE.Vector3, t: number, m: THREE.Material) => {
+      const len = a.distanceTo(c);
+      if (len < 0.05) return;
+      const geo = new THREE.BoxGeometry(t, len, t);
+      const mesh = new THREE.Mesh(geo, m);
+      mesh.position.copy(a).add(c).multiplyScalar(0.5);
+      mesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), c.clone().sub(a).normalize());
+      mesh.castShadow = true; mesh.receiveShadow = true; g.add(mesh);
+    };
+    for (const s of sheets) {
+      if (s.level >= nShow && s.place === "area") continue;
+      if ((s.place === "full_roof" || s.place === "on_terrace" || s.place === "headroom") && nShow < levels.length) continue;
+      const ov = s.overhang_ft ?? 1.5;
+      const x0 = s.x - ov, x1 = s.x + s.w + ov, y0 = s.y - ov, y1 = s.y + s.d + ov;
+      const eave = s.place === "full_roof" ? zOf(top) + H : s.place === "headroom" ? zOf(top) + H + HEADROOM
+        : s.place === "on_terrace" ? zOf(top) + H + s.height_ft : zOf(s.level) + s.height_ft;
+      const t = Math.tan((s.slope_deg * Math.PI) / 180);
+      const mono = s.shape === "mono";
+      const alongX = mono ? (s.high === "front" || s.high === "back") : s.ridge === "x";  // purlins / ridge run along x
+      const span = alongX ? y1 - y0 : x1 - x0;
+      const rise = mono ? span * t : (span / 2) * t;
+      // height of the sheet at plan point (x, y)
+      const hAt = (x: number, y: number) => {
+        const u = alongX ? (y - y0) / (y1 - y0) : (x - x0) / (x1 - x0);  // 0..1 across the span
+        if (mono) {
+          const hiAtEnd = s.high === "back" || s.high === "right";
+          return eave + rise * (hiAtEnd ? u : 1 - u);
+        }
+        if (s.shape === "hip") {
+          const dEnd = alongX ? Math.min(x - x0, x1 - x) : Math.min(y - y0, y1 - y);
+          return eave + Math.min(rise * (1 - Math.abs(u - 0.5) * 2), dEnd * t);
+        }
+        return eave + rise * (1 - Math.abs(u - 0.5) * 2);
+      };
+      // sheet surface: a grid of quads following hAt (handles gable, mono and hip), with a corrugated texture
+      const nu = 24, nv = 24, pos: number[] = [], uv: number[] = [], idx: number[] = [];
+      for (let i = 0; i <= nu; i++) for (let j = 0; j <= nv; j++) {
+        const x = x0 + (i / nu) * (x1 - x0), y = y0 + (j / nv) * (y1 - y0), h = hAt(x, y) + 0.12;
+        const p = P(x, y, h); pos.push(p.x, p.y, p.z);
+        uv.push(alongX ? x / 0.6 : y / 0.6, alongX ? y : x);  // ribs run down the slope
+      }
+      for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) {
+        const a = i * (nv + 1) + j, c = a + nv + 1;
+        idx.push(a, c, a + 1, a + 1, c, c + 1);
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+      geo.setAttribute("uv", new THREE.Float32BufferAttribute(uv, 2));
+      geo.setIndex(idx); geo.computeVertexNormals();
+      const poly = s.sheet === "polycarbonate";
+      const sheetM = new THREE.MeshStandardMaterial({
+        color: s.colour || "#b91c1c", map: T.sheetRibs(), roughness: poly ? 0.2 : s.sheet === "acc" ? 0.95 : 0.45,
+        metalness: s.sheet === "acc" || poly || s.sheet === "puff" ? 0 : 0.35, side: THREE.DoubleSide,
+        transparent: poly, opacity: poly ? 0.55 : 1, polygonOffset: true, polygonOffsetFactor: -1,
+      });
+      const sm = new THREE.Mesh(geo, sheetM); sm.castShadow = !poly; sm.receiveShadow = true; sm.name = "roof sheet"; sm.userData.keep = poly; g.add(sm);
+      // ridge cap + gutter(s)
+      if (!mono) {
+        if (alongX) member(P(x0 + (s.shape === "hip" ? span / 2 : 0), (y0 + y1) / 2, eave + rise + 0.2), P(x1 - (s.shape === "hip" ? span / 2 : 0), (y0 + y1) / 2, eave + rise + 0.2), 0.35, ridgeM);
+        else member(P((x0 + x1) / 2, y0 + (s.shape === "hip" ? span / 2 : 0), eave + rise + 0.2), P((x0 + x1) / 2, y1 - (s.shape === "hip" ? span / 2 : 0), eave + rise + 0.2), 0.35, ridgeM);
+      }
+      const gut = std("#9aa0a6", { roughness: 0.5, metalness: 0.4 }, "none");
+      const lowEdges: [number, number, number, number][] = mono
+        ? [s.high === "back" ? [x0, y0, x1, y0] : s.high === "front" ? [x0, y1, x1, y1] : s.high === "right" ? [x0, y0, x0, y1] : [x1, y0, x1, y1]]
+        : alongX ? [[x0, y0, x1, y0], [x0, y1, x1, y1]] : [[x0, y0, x0, y1], [x1, y0, x1, y1]];
+      for (const [ax, ay, cx, cy] of lowEdges) member(P(ax, ay, hAt(ax, ay) - 0.05), P(cx, cy, hAt(cx, cy) - 0.05), 0.45, gut);
+      // trusses (across the span) every ~10 ft along the ridge, with purlins on top
+      const inner0 = alongX ? s.x : s.y, inner1 = alongX ? s.x + s.w : s.y + s.d;
+      const nT = Math.max(2, Math.ceil((inner1 - inner0) / 10) + 1);
+      const sA = alongX ? s.y : s.x, sB = alongX ? s.y + s.d : s.x + s.w;  // supported span (walls / posts)
+      const at = (k: number, v: number, h: number) => (alongX ? P(k, v, h) : P(v, k, h));
+      const hk = (k: number, v: number) => (alongX ? hAt(k, v) : hAt(v, k));
+      for (let i = 0; i < nT; i++) {
+        const k = inner0 + (i / (nT - 1)) * (inner1 - inner0);
+        if (s.support === "truss") {
+          member(at(k, sA, eave), at(k, sB, eave), 0.3, steel);  // bottom chord
+          const n = Math.max(4, Math.round((sB - sA) / 3 / 2) * 2);
+          for (let j = 0; j < n; j++) {
+            const va = sA + (j / n) * (sB - sA), vb = sA + ((j + 1) / n) * (sB - sA);
+            member(at(k, va, hk(k, va)), at(k, vb, hk(k, vb)), 0.3, steel);  // top chord
+            if (j > 0) member(at(k, va, eave), at(k, va, hk(k, va)), 0.18, steel);  // verticals
+            if (j > 0 && j < n - 1) member(at(k, va, eave), at(k, j < n / 2 ? vb : sA + ((j - 1) / n) * (sB - sA), hk(k, j < n / 2 ? vb : sA + ((j - 1) / n) * (sB - sA))), 0.15, steel);
+          }
+        } else {
+          member(at(k, sA, hk(k, sA) - 0.2), at(k, sB, hk(k, sB) - 0.2), 0.3, steel);  // rafter
+        }
+      }
+      const pf = s.truss?.purlin_ft || 4;
+      for (let v = sA; v <= sB + 0.01; v += pf) {  // purlins along the ridge direction
+        member(at(inner0 - ov, v, hk(inner0, v) - 0.05), at(inner1 + ov, v, hk(inner1, v) - 0.05), 0.2, steel);
+      }
+      // posts where the sheet does not sit on walls
+      if (s.place === "on_terrace" || s.place === "area") {
+        const base = eave - s.height_ft;
+        const nP = Math.max(2, Math.ceil((inner1 - inner0) / 10) + 1);
+        for (let i = 0; i < nP; i++) {
+          const k = inner0 + (i / (nP - 1)) * (inner1 - inner0);
+          for (const v of [sA, sB]) {
+            const post = new THREE.Mesh(new THREE.CylinderGeometry(0.15, 0.15, hk(k, v) - base, 10), steel);
+            const c = at(k, v, (base + hk(k, v)) / 2); post.position.copy(c); post.castShadow = true; g.add(post);
+          }
+        }
+      }
+    }
+  }
+
   function skinFor(li: number, front: boolean, lv: Lv, w: Lv["walls"][number]) {
     const room = lv.rooms.find((r) => r.id === (w.a || w.b));
     const extP = lk("ext_wall"), cladP = lk("cladding");
@@ -434,7 +562,7 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
     if (st && levels.length > 1) {  // head room
       const hm = style === "modern" ? stoneM() : style === "contemporary" ? tileM() : std(fin.ext);
       box(st.x, st.y, zt, st.x + st.w, st.y + st.d, zt + HEADROOM, hm, g, "head room");
-      box(st.x - 0.9, st.y - 0.9, zt + HEADROOM, st.x + st.w + 0.9, st.y + st.d + 0.9, zt + HEADROOM + 0.6, [fascOf(), fascOf(), std(fin.roof), style === "modern" ? woodM("#a06b3e") : std("#f4f2ee"), fascOf(), fascOf()], g);
+      if (!sheetMumty) box(st.x - 0.9, st.y - 0.9, zt + HEADROOM, st.x + st.w + 0.9, st.y + st.d + 0.9, zt + HEADROOM + 0.6, [fascOf(), fascOf(), std(fin.roof), style === "modern" ? woodM("#a06b3e") : std("#f4f2ee"), fascOf(), fascOf()], g);
       // door to the terrace
       const dw = Math.min(3, st.w - 1);
       box(st.x + (st.w - dw) / 2, st.y + st.d, zt, st.x + (st.w + dw) / 2, st.y + st.d + 0.05, zt + 7, woodM(fin.door), g, "door");
@@ -587,36 +715,190 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
   }
 
   function furnish(rooms: Room[], z: number, g: THREE.Object3D) {
+    // 1.17: more real furniture – bed with legs, pillows and side tables, sofa with cushions, dining chairs, kitchen
+    // with upper cabinets, hob and sink, toilet with cistern, mirror and shower
     const fab = (c: string) => std(c, { roughness: 0.95 });
+    const white = std("#f8fafc", { roughness: 0.25 }, "none");
+    const metal = std("#9ca3af", { roughness: 0.3, metalness: 0.7 }, "none");
     for (const r of rooms) {
       const { x, y, w, d, type } = r;
       if (type === "bedroom" && w >= 8 && d >= 8) {
         const bw = Math.min(5, w - 3), bl = Math.min(6.5, d - 2.5), bx = x + (w - bw) / 2, by = y + d - bl - 0.6;
-        box(bx, by, z, bx + bw, by + bl, z + 1.0, woodM("#6b4a2e"), g, "bed");
-        box(bx + 0.1, by + 0.1, z + 1.0, bx + bw - 0.1, by + bl - 0.1, z + 1.7, fab("#f1ece2"), g, "mattress");
-        box(bx, by + bl - 0.4, z, bx + bw, by + bl, z + 3.4, woodM("#5a3a20"), g, "headboard");
-        box(bx + 0.3, by + bl - 1.6, z + 1.7, bx + bw - 0.3, by + bl - 0.6, z + 2.1, fab("#ffffff"), g, "pillow");
-        box(bx + 0.1, by + 0.1, z + 1.7, bx + bw - 0.1, by + bl * 0.45, z + 1.78, fab("#7b8fae"), g, "blanket");
-        if (w >= 10) box(x + 0.4, y + 0.6, z, x + 2.3, y + 4.6, z + 7, woodM("#8c6a4a"), g, "wardrobe");
+        const frame = woodM("#6b4a2e");
+        for (const [lx, ly] of [[0, 0], [bw - 0.25, 0], [0, bl - 0.25], [bw - 0.25, bl - 0.25]]) box(bx + lx, by + ly, z, bx + lx + 0.25, by + ly + 0.25, z + 0.6, frame, g);
+        box(bx, by, z + 0.6, bx + bw, by + bl, z + 1.15, frame, g, "bed");
+        box(bx + 0.08, by + 0.08, z + 1.15, bx + bw - 0.08, by + bl - 0.08, z + 1.85, fab("#f4efe6"), g, "mattress");
+        box(bx - 0.05, by + bl - 0.35, z, bx + bw + 0.05, by + bl, z + 3.6, woodM("#5a3a20"), g, "headboard");
+        box(bx + 0.25, by + bl - 1.55, z + 1.85, bx + bw / 2 - 0.12, by + bl - 0.55, z + 2.25, fab("#ffffff"), g, "pillow");
+        box(bx + bw / 2 + 0.12, by + bl - 1.55, z + 1.85, bx + bw - 0.25, by + bl - 0.55, z + 2.25, fab("#ffffff"), g, "pillow");
+        box(bx + 0.05, by + 0.05, z + 1.85, bx + bw - 0.05, by + bl * 0.55, z + 1.95, fab("#6d7fa3"), g, "blanket");
+        box(bx + 0.05, by + 0.05, z + 1.2, bx + 0.12, by + bl * 0.55, z + 1.95, fab("#6d7fa3"), g);  // blanket hanging over the sides
+        box(bx + bw - 0.12, by + 0.05, z + 1.2, bx + bw - 0.05, by + bl * 0.55, z + 1.95, fab("#6d7fa3"), g);
+        for (const sx of [bx - 1.7, bx + bw + 0.2]) {  // side tables with lamps
+          if (sx < x + 0.4 || sx + 1.5 > x + w - 0.4) continue;
+          box(sx, by + bl - 1.5, z, sx + 1.5, by + bl - 0.1, z + 1.8, woodM("#7a5536"), g, "side table");
+          box(sx + 0.55, by + bl - 0.95, z + 1.8, sx + 0.95, by + bl - 0.55, z + 2.5, std("#d6c7a8", { roughness: 0.6 }, "none"), g, "lamp");
+        }
+        if (w >= 10) {
+          box(x + 0.45, y + 0.6, z, x + 2.4, y + 5.0, z + 7, woodM("#8c6a4a"), g, "wardrobe");
+          box(x + 2.4, y + 2.78, z + 0.3, x + 2.42, y + 2.82, z + 6.7, woodM("#4a3220"), g);  // shutter line
+          for (const hy of [2.55, 3.05]) box(x + 2.4, y + hy, z + 3.4, x + 2.48, y + hy + 0.05, z + 4.2, metal, g);  // handles
+        }
       } else if ((type === "hall" || type === "lounge") && w >= 8 && d >= 8) {
-        box(x + 0.6, y + 1, z, x + 3.1, y + Math.min(8, d - 1.5), z + 1.4, fab("#5d6b85"), g, "sofa");
-        box(x + 0.6, y + 1, z + 1.4, x + 1.2, y + Math.min(8, d - 1.5), z + 2.8, fab("#5d6b85"), g, "sofa back");
-        box(x + 4, y + d / 2 - 1, z, x + 6.5, y + d / 2 + 1, z + 1.4, woodM("#5a3a20"), g, "table");
-        box(x + w - 1.4, y + d / 2 - 2.5, z, x + w - 0.6, y + d / 2 + 2.5, z + 2.0, std("#2f2f33", {}, "none"), g, "tv unit");
-        box(x + w - 1.0, y + d / 2 - 2.0, z + 3.2, x + w - 0.9, y + d / 2 + 2.0, z + 5.6, std("#0b0b0d", { roughness: 0.2 }, "none"), g, "tv");
-        box(x + 3.6, y + d / 2 - 2.5, z, x + 7.2, y + d / 2 + 2.5, z + 0.03, fab("#b9a27f"), g, "rug");
+        const sofaM = fab("#5d6b85"), cush = fab("#6f7e9b"), sl = Math.min(7.5, d - 2.5);
+        box(x + 0.6, y + 1, z, x + 3.2, y + 1 + sl, z + 1.2, sofaM, g, "sofa");
+        box(x + 0.6, y + 1, z + 1.2, x + 1.2, y + 1 + sl, z + 2.9, sofaM, g, "sofa back");
+        box(x + 0.6, y + 0.6, z, x + 3.2, y + 1, z + 2.0, sofaM, g, "arm"); box(x + 0.6, y + 1 + sl, z, x + 3.2, y + 1.4 + sl, z + 2.0, sofaM, g, "arm");
+        const nC = Math.max(2, Math.round(sl / 2.4));
+        for (let i = 0; i < nC; i++) {
+          const c0 = y + 1.05 + (i * sl) / nC, c1 = y + 1 + ((i + 1) * sl) / nC - 0.05;
+          box(x + 1.25, c0, z + 1.2, x + 3.15, c1, z + 1.55, cush, g, "seat cushion");
+          box(x + 1.2, c0 + 0.1, z + 1.55, x + 1.55, c1 - 0.1, z + 2.7, cush, g, "back cushion");
+        }
+        box(x + 4.0, y + d / 2 - 1.1, z + 1.15, x + 6.6, y + d / 2 + 1.1, z + 1.3, woodM("#5a3a20"), g, "table");
+        for (const [px, py] of [[4.1, -1.0], [6.35, -1.0], [4.1, 0.85], [6.35, 0.85]] as [number, number][]) box(x + px, y + d / 2 + py, z, x + px + 0.15, y + d / 2 + py + 0.15, z + 1.15, woodM("#4a3220"), g);
+        box(x + w - 1.45, y + d / 2 - 2.6, z, x + w - 0.55, y + d / 2 + 2.6, z + 1.9, woodM("#3b2a1c"), g, "tv unit");
+        box(x + w - 1.0, y + d / 2 - 2.0, z + 3.1, x + w - 0.9, y + d / 2 + 2.0, z + 5.5, std("#0b0b0d", { roughness: 0.15 }, "none"), g, "tv");
+        box(x + 3.6, y + d / 2 - 2.6, z + 0.04, x + 7.2, y + d / 2 + 2.6, z + 0.07, fab("#b9a27f"), g, "rug");
+        if (w >= 10) {  // indoor plant in the corner (terracotta pot + leafy top)
+          const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.32, 1.1, 14), std("#b5623a", { roughness: 0.9 }, "none"));
+          pot.position.set(b.x + x + w - 1.2, z + 0.55, -(b.y + y + 1.0)); pot.castShadow = true; g.add(pot);
+          for (let k = 0; k < 4; k++) {
+            const leaf = new THREE.Mesh(new THREE.IcosahedronGeometry(0.42 + (k % 2) * 0.12, 1), std(k % 2 ? "#3f6e2f" : "#4e8a3a", { roughness: 0.9, flatShading: true }, "none"));
+            leaf.position.set(b.x + x + w - 1.2 + Math.cos(k * 1.6) * 0.25, z + 1.5 + k * 0.35, -(b.y + y + 1.0) + Math.sin(k * 1.6) * 0.25);
+            leaf.castShadow = true; g.add(leaf);
+          }
+        }
       } else if (type === "dining" && w >= 7 && d >= 7) {
-        box(x + w / 2 - 2, y + d / 2 - 1.25, z + 2.35, x + w / 2 + 2, y + d / 2 + 1.25, z + 2.5, woodM("#6b4a2e"), g, "dining");
-        for (const [px, py] of [[-1.8, -1.05], [1.6, -1.05], [-1.8, 0.85], [1.6, 0.85]] as [number, number][]) box(x + w / 2 + px, y + d / 2 + py, z, x + w / 2 + px + 0.2, y + d / 2 + py + 0.2, z + 2.35, woodM("#5a3a20"), g);
+        const tw = Math.min(5, w - 3), td = 2.8, tx = x + w / 2 - tw / 2, ty = y + d / 2 - td / 2;
+        box(tx, ty, z + 2.35, tx + tw, ty + td, z + 2.5, woodM("#6b4a2e"), g, "dining");
+        for (const [px, py] of [[0.1, 0.1], [tw - 0.3, 0.1], [0.1, td - 0.3], [tw - 0.3, td - 0.3]] as [number, number][]) box(tx + px, ty + py, z, tx + px + 0.2, ty + py + 0.2, z + 2.35, woodM("#5a3a20"), g);
+        const nCh = tw >= 4.5 ? 3 : 2;
+        for (let i = 0; i < nCh; i++) for (const side of [-1, 1]) {  // chairs: seat + back + legs
+          const cx = tx + ((i + 0.5) * tw) / nCh, cy = side < 0 ? ty - 0.9 : ty + td + 0.9;
+          box(cx - 0.65, cy - 0.65, z + 1.45, cx + 0.65, cy + 0.65, z + 1.6, woodM("#7a5536"), g, "chair");
+          const by2 = side < 0 ? cy - 0.65 : cy + 0.5;
+          box(cx - 0.65, by2, z + 1.6, cx + 0.65, by2 + 0.15, z + 3.2, woodM("#7a5536"), g, "chair back");
+          for (const [lx, ly] of [[-0.6, -0.6], [0.48, -0.6], [-0.6, 0.48], [0.48, 0.48]] as [number, number][]) box(cx + lx, cy + ly, z, cx + lx + 0.12, cy + ly + 0.12, z + 1.45, woodM("#5a3a20"), g);
+        }
       } else if (type === "kitchen") {
         const km = std("#3f4652", { roughness: 0.5 }, "none"), top = pick("counter", () => std("#1f2328", { roughness: 0.25 }, "none"));
+        const upper = std("#e7e2d8", { roughness: 0.5 }, "none");
         box(x + 0.3, y + 0.3, z, x + 2.3, y + d - 0.3, z + 2.7, km, g, "counter");
         box(x + 0.3, y + 0.3, z + 2.7, x + 2.3, y + d - 0.3, z + 2.85, top, g);
         box(x + 0.3, y + d - 2.3, z, x + Math.max(2.4, w - 0.3), y + d - 0.3, z + 2.7, km, g, "counter");
         box(x + 0.3, y + d - 2.3, z + 2.7, x + Math.max(2.4, w - 0.3), y + d - 0.3, z + 2.85, top, g);
+        box(x + 0.3, y + 0.3, z + 5.0, x + 1.3, y + d - 0.3, z + 7.0, upper, g, "upper cabinet");  // loft cabinets
+        box(x + 0.6, y + d * 0.35, z + 2.85, x + 1.9, y + d * 0.35 + 2.0, z + 2.95, std("#111111", { roughness: 0.2 }, "none"), g, "hob");
+        box(x + 0.7, y + d * 0.35 + 0.2, z + 2.95, x + 1.1, y + d * 0.35 + 0.6, z + 3.0, metal, g); box(x + 0.7, y + d * 0.35 + 1.3, z + 2.95, x + 1.1, y + d * 0.35 + 1.7, z + 3.0, metal, g);
+        if (w >= 6) box(x + w * 0.55, y + d - 1.9, z + 2.7, x + w * 0.55 + 2, y + d - 0.6, z + 2.86, metal, g, "sink");
       } else if ((type === "toilet" || type === "common_toilet") && w >= 3.5 && d >= 4) {
-        box(x + w - 2, y + d - 2.6, z, x + w - 0.6, y + d - 0.6, z + 1.4, std("#ffffff", { roughness: 0.2 }, "none"), g, "wc");
-        box(x + 0.4, y + d - 1.6, z + 2.4, x + 2, y + d - 0.4, z + 2.9, std("#ffffff", { roughness: 0.2 }, "none"), g, "basin");
+        box(x + w - 2, y + d - 2.6, z, x + w - 0.6, y + d - 0.9, z + 1.35, white, g, "wc");
+        box(x + w - 2, y + d - 0.9, z, x + w - 0.6, y + d - 0.4, z + 2.6, white, g, "cistern");
+        box(x + 0.4, y + d - 1.6, z + 2.4, x + 2, y + d - 0.4, z + 2.9, white, g, "basin");
+        box(x + 0.5, y + d - 0.42, z + 3.6, x + 1.9, y + d - 0.38, z + 5.6, std("#dbeafe", { roughness: 0.05, metalness: 0.9 }, "none"), g, "mirror");
+        box(x + 0.6, y + 0.5, z + 6.2, x + 1.2, y + 1.1, z + 6.3, metal, g, "shower");
+      }
+    }
+  }
+
+  /** 1.17: room details – skirting, cornice, soft corner shadows, ceiling fan, tube light, switch boards, curtains */
+  function details(lv: Lv, z: number, g: THREE.Object3D, cut: boolean) {
+    const ceil = z + H - SLAB;
+    const aoM = M("aoStrip", () => new THREE.MeshBasicMaterial({ map: T.aoStrip(), transparent: true, depthWrite: false, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -2 }));
+    const skirtM = std("#d9d3c7", { roughness: 0.5 }, "none");
+    const corniceM = std("#fbfaf7", { roughness: 0.8 }, "none");
+    const fanM = std("#f4f4f2", { roughness: 0.4 }, "none");
+    const tubeM = std("#ffffff", { emissive: new THREE.Color("#fffbe8"), emissiveIntensity: lit ? 1.2 : 0.25 }, "none");
+    const switchM = std("#fafafa", { roughness: 0.3 }, "none");
+    const strip = (x0: number, y0: number, x1: number, y1: number, h: number, inward: [number, number], wdt: number, down: boolean) => {
+      // quad from the wall edge (v=0) inward (v=1) at height h
+      const ix = inward[0] * wdt, iy = inward[1] * wdt;
+      const pts = [[x0, y0], [x1, y1], [x1 + ix, y1 + iy], [x0 + ix, y0 + iy]].map(([px, py]) => new THREE.Vector3(b.x + px, h, -(b.y + py)));
+      const geo = new THREE.BufferGeometry().setFromPoints(down ? [pts[0], pts[2], pts[1], pts[0], pts[3], pts[2]] : [pts[0], pts[1], pts[2], pts[0], pts[2], pts[3]]);
+      const v = down ? [0, 1, 0, 0, 1, 1] : [0, 0, 1, 0, 1, 1];
+      geo.setAttribute("uv", new THREE.Float32BufferAttribute(v.flatMap((vv, i) => [i % 2 ? 1 : 0, vv]), 2));
+      const m = new THREE.Mesh(geo, aoM); m.renderOrder = 2; g.add(m);
+    };
+    const doorsOf = lv.openings.filter((q) => !["window", "vent"].includes(q.type));
+    for (const r of lv.rooms) {
+      if (["terrace", "parking", "balcony", "sitout", "passage", "stair", "dress"].includes(r.type) && r.type !== "passage") continue;
+      const edges: [number, number, number, number, [number, number], boolean][] = [
+        [r.x, r.y, r.x + r.w, r.y, [0, 1], true], [r.x, r.y + r.d, r.x + r.w, r.y + r.d, [0, -1], true],
+        [r.x, r.y, r.x, r.y + r.d, [1, 0], false], [r.x + r.w, r.y, r.x + r.w, r.y + r.d, [-1, 0], false]];
+      for (const [x0, y0, x1, y1, inw, horiz] of edges) {
+        const wall = lv.walls.find((w) => (horiz ? Math.abs(w.y1 - w.y2) < 1e-6 && Math.abs(w.y1 - y0) < 0.02 && Math.min(w.x1, w.x2) < x1 - 0.1 && Math.max(w.x1, w.x2) > x0 + 0.1
+          : Math.abs(w.x1 - w.x2) < 1e-6 && Math.abs(w.x1 - x0) < 0.02 && Math.min(w.y1, w.y2) < y1 - 0.1 && Math.max(w.y1, w.y2) > y0 + 0.1));
+        if (!wall || wall.kind === "parapet") continue;
+        const t = (wall.kind === "int115" ? 0.19 : 0.38) + 0.01;
+        const fx0 = x0 + inw[0] * t, fy0 = y0 + inw[1] * t, fx1 = x1 + inw[0] * t, fy1 = y1 + inw[1] * t;
+        strip(fx0, fy0, fx1, fy1, z + 0.055, inw, 1.1, false);  // contact shadow on the floor
+        if (!cut) strip(fx0, fy0, fx1, fy1, ceil - 0.02, inw, 0.9, true);  // and under the ceiling
+        // skirting (4") – broken at doors
+        const a0 = horiz ? Math.min(x0, x1) : Math.min(y0, y1), a1 = horiz ? Math.max(x0, x1) : Math.max(y0, y1);
+        const gaps = doorsOf.filter((o2) => horiz ? Math.abs(o2.y1 - o2.y2) < 1e-6 && Math.abs(o2.y1 - y0) < 0.02 : Math.abs(o2.x1 - o2.x2) < 1e-6 && Math.abs(o2.x1 - x0) < 0.02)
+          .map((o2) => horiz ? [Math.min(o2.x1, o2.x2), Math.max(o2.x1, o2.x2)] : [Math.min(o2.y1, o2.y2), Math.max(o2.y1, o2.y2)]).sort((p, q) => p[0] - q[0]);
+        let s0 = a0 + t;
+        for (const [g0, g1] of [...gaps, [a1 - t, a1 - t]]) {
+          const e0 = Math.min(g0, a1 - t);
+          if (e0 - s0 > 0.3) {
+            if (horiz) box(s0, fy0 + Math.min(0, inw[1] * 0.05), z + 0.04, e0, fy0 + Math.max(0, inw[1] * 0.05), z + 0.37, skirtM, g);
+            else box(fx0 + Math.min(0, inw[0] * 0.05), s0, z + 0.04, fx0 + Math.max(0, inw[0] * 0.05), e0, z + 0.37, skirtM, g);
+            if (!cut && ["bedroom", "hall", "lounge", "dining"].includes(r.type)) {  // cornice
+              if (horiz) box(s0, fy0 + Math.min(0, inw[1] * 0.25), ceil - 0.25, e0, fy0 + Math.max(0, inw[1] * 0.25), ceil, corniceM, g);
+              else box(fx0 + Math.min(0, inw[0] * 0.25), s0, ceil - 0.25, fx0 + Math.max(0, inw[0] * 0.25), e0, ceil, corniceM, g);
+            }
+          }
+          s0 = Math.max(s0, g1);
+        }
+      }
+      const habitable = ["bedroom", "hall", "lounge", "dining"].includes(r.type);
+      if (habitable && !cut && r.w >= 7 && r.d >= 7) {  // ceiling fan
+        const cx = r.x + r.w / 2, cy = r.y + r.d / 2;
+        box(cx - 0.05, cy - 0.05, ceil - 1.4, cx + 0.05, cy + 0.05, ceil, fanM, g, "fan rod");
+        const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.3, 0.35, 16), fanM);
+        hub.position.set(b.x + cx, ceil - 1.55, -(b.y + cy)); g.add(hub);
+        for (let k = 0; k < 3; k++) {
+          const blade = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.03, 0.38), fanM);
+          const a = (k * Math.PI * 2) / 3 + 0.3;
+          blade.position.set(b.x + cx + Math.cos(a) * 1.25, ceil - 1.55, -(b.y + cy) + Math.sin(a) * 1.25);
+          blade.rotation.y = -a; g.add(blade);
+        }
+      }
+      if ((habitable || r.type === "kitchen") && !cut) {  // tube light on the longest wall, above the window head
+        const along = r.w >= r.d;
+        const L = Math.min(4, (along ? r.w : r.d) - 1);
+        if (along) box(r.x + r.w / 2 - L / 2, r.y + r.d - 0.55, z + 7.6, r.x + r.w / 2 + L / 2, r.y + r.d - 0.4, z + 7.75, tubeM, g, "tube light");
+        else box(r.x + r.w - 0.55, r.y + r.d / 2 - L / 2, z + 7.6, r.x + r.w - 0.4, r.y + r.d / 2 + L / 2, z + 7.75, tubeM, g, "tube light");
+      }
+      for (const dr of doorsOf.filter((q) => q.room === r.id || lv.rooms.some((rr) => rr.id === q.room && rr.id !== r.id && false))) {  // switch board beside its door
+        const horiz = Math.abs(dr.y1 - dr.y2) < 1e-6;
+        const into = horiz ? (r.y + r.d / 2 > dr.y1 ? 1 : -1) : (r.x + r.w / 2 > dr.x1 ? 1 : -1);
+        const t = 0.4;
+        if (horiz) { const sx = Math.max(dr.x1, dr.x2) + 0.6; box(sx, dr.y1 + into * t, z + 4, sx + 0.55, dr.y1 + into * (t + 0.05), z + 4.4, switchM, g, "switch"); }
+        else { const sy = Math.max(dr.y1, dr.y2) + 0.6; box(dr.x1 + into * t, sy, z + 4, dr.x1 + into * (t + 0.05), sy + 0.55, z + 4.4, switchM, g, "switch"); }
+      }
+    }
+    // curtains at the windows of living rooms and bedrooms (inside face)
+    const curtainM = std(lit ? "#b88a5a" : "#c9a27a", { roughness: 1 }, "none");
+    const rodM = std("#6b6b6b", { roughness: 0.4, metalness: 0.6 }, "none");
+    for (const op of lv.openings.filter((q) => q.type === "window")) {
+      const r = lv.rooms.find((q) => q.id === op.room);
+      if (!r || !["bedroom", "hall", "lounge", "dining"].includes(r.type)) continue;
+      const horiz = Math.abs(op.y1 - op.y2) < 1e-6;
+      const into = horiz ? (r.y + r.d / 2 > op.y1 ? 1 : -1) : (r.x + r.w / 2 > op.x1 ? 1 : -1);
+      const a0 = horiz ? Math.min(op.x1, op.x2) : Math.min(op.y1, op.y2), a1 = horiz ? Math.max(op.x1, op.x2) : Math.max(op.y1, op.y2);
+      const c = (horiz ? op.y1 : op.x1) + into * 0.75;
+      const zt = Math.min(ceil - 0.3, z + 3 + (op.h || 4) + 0.8), zb = z + 0.5;
+      const rod = (s: number, e: number) => horiz ? box(s, c - 0.03, zt, e, c + 0.03, zt + 0.06, rodM, g) : box(c - 0.03, s, zt, c + 0.03, e, zt + 0.06, rodM, g);
+      rod(a0 - 1.0, a1 + 1.0);
+      for (const [s, e] of [[a0 - 1.0, a0 + 0.2], [a1 - 0.2, a1 + 1.0]]) {  // two gathered panels with folds
+        const n = 5;
+        for (let k = 0; k < n; k++) {
+          const ps = s + ((e - s) * k) / n, pe = s + ((e - s) * (k + 1)) / n, off = (k % 2 ? 0.12 : 0) * into;
+          if (horiz) box(ps, c + off - 0.04, zb, pe, c + off + 0.04, zt, curtainM, g, "curtain");
+          else box(c + off - 0.04, ps, zb, c + off + 0.04, pe, zt, curtainM, g, "curtain");
+        }
       }
     }
   }

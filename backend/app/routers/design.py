@@ -324,7 +324,7 @@ def export_current(project_id: int, body: ExportIn, kind: str = "sheets_pdf", st
                 raise HTTPException(400, f"page must be one of {', '.join(pages)}")
             data = sheets.pdf_pages(data, [pages[page]])
             label = {"title": "Title_Sheet", "site": "Site_Plan", "elevation": "Front_Elevation", "section": "Section",
-                     "schedule": "Door_Window_Schedule"}.get(page) or \
+                     "schedule": "Door_Window_Schedule", "roof": "Roof_Plan", "truss": "Truss_Detail"}.get(page) or \
                 (plan["levels"][int(page.split("_")[1])]["name"].replace(" ", "_") + "_Plan")
         mt, ext = "application/pdf", "pdf"
         name = f"{p.code}_{label}_{tag}{'_CAD' if st == 'cad' else ''}.{ext}"

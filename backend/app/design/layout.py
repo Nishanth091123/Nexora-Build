@@ -105,7 +105,7 @@ def level_items(lv: dict, multi: bool) -> tuple[list[Cell], list[Cell], Cell | N
 
 
 def pack_rows(front: list[Cell], rest: list[Cell], stair: Cell | None, bw: float, tol: float = 1.08,
-              stilt: bool = False, relax: bool = False, upper: bool = False) -> list[list[Cell]]:
+              stilt: bool = False, relax: bool = False, upper: bool = False, spine_w: float = 0.0) -> list[list[Cell]]:
     """Greedy row packing from the road side.
 
     Multi-floor plans keep the staircase in the FRONT row at an edge, so it stacks on every floor and
@@ -117,9 +117,10 @@ def pack_rows(front: list[Cell], rest: list[Cell], stair: Cell | None, bw: float
     rows: list[list[Cell]] = [[stair] if stair else []]
 
     def fits(row, c):
+        cap = bw if row is rows[0] else bw - spine_w  # 1.17: back rows leave room for the access passage
         dw = sum(x.fixed_w or x.dw for x in row) + (c.fixed_w or c.dw)
         mw = sum(x.fixed_w or x.mw for x in row) + (c.fixed_w or c.mw)
-        return mw <= bw and dw <= bw * tol
+        return mw <= cap and dw <= cap * tol
 
     ptr = 0
     for c in front:
@@ -166,7 +167,14 @@ def _orderings(rest: list[Cell]) -> list[list[Cell]]:
 
 def order_row(row: list[Cell], y0: float, d: float, bw: float, bd: float, comp: dict, pinned_stair: str | None):
     """Try permutations; keep the one with the best direction score. Returns ordered list."""
-    best, best_s = row, -1e9
+    c = order_candidates(row, y0, d, bw, bd, comp, pinned_stair, 1)
+    return c[0] if c else row
+
+
+def order_candidates(row: list[Cell], y0: float, d: float, bw: float, bd: float, comp: dict, pinned_stair: str | None,
+                     keep: int = 40) -> list[list[Cell]]:
+    """1.17: the best `keep` orders by direction score (the layout then picks the one that keeps rooms reachable)."""
+    scored = []
     perms = itertools.permutations(row) if len(row) <= 6 else [row]
     for p in perms:
         if pinned_stair and any(c.kind == "stair" for c in p):
@@ -190,9 +198,18 @@ def order_row(row: list[Cell], y0: float, d: float, bw: float, bd: float, comp: 
             if c.kind == "parking_car":
                 s += 0.8 * abs(xn)
             x += w
-        if s > best_s + 1e-9:
-            best, best_s = list(p), s
-    return best
+        scored.append((s, list(p)))
+    scored.sort(key=lambda t: -t[0])
+    out, seen = [], set()
+    for sc, p in scored:
+        key = tuple((c.kind, c.attached) for c in p)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(p)
+        if len(out) >= keep:
+            break
+    return out
 
 
 def size_row(row: list[Cell], bw: float) -> list[float]:
@@ -252,6 +269,53 @@ def _depths(rows, bd, template, cap_front=False):
 
 
 def build_level(lv: dict, bw: float, bd: float, comp: dict, multi: bool, template: dict | None) -> tuple[list[dict], dict]:
+    """1.17: lay the floor out; if a room cannot be reached without passing through another room, try again with
+    an access passage (spine) along one side. The first layout where every room is reachable wins."""
+    first = _build_level(lv, bw, bd, comp, multi, template)
+    if lv.get("stilt"):
+        return first
+    best, best_cost = first, _unreached_count(first[0], lv)
+    if best_cost == 0:
+        return first
+    carved = _carve_passage(first[0], lv, bw, bd)
+    if carved:
+        c = _unreached_count(carved, lv)
+        if c < best_cost:
+            best, best_cost = (carved, first[1]), c
+    sides = ([template["stair_side"]] if template and template.get("stair_side") in ("left", "right") else []) + ["left", "right"]
+    global SPINE
+    for sw in (3.5, 3.0):
+        if best_cost == 0:
+            break
+        SPINE = sw
+        try:
+            for side in dict.fromkeys(sides):
+                try:
+                    cand = _build_level(lv, bw, bd, comp, multi, template, side)
+                except LayoutError:
+                    continue
+                c = _unreached_count(cand[0], lv)
+                if c < best_cost:
+                    best, best_cost = cand, c
+                    if template:
+                        best[1]["stair_side"] = template.get("stair_side")
+                if best_cost == 0:
+                    break
+        finally:
+            SPINE = 3.5
+    if best_cost >= 10:  # 1.17: never hand out a plan with a room you cannot walk into
+        from .geometry import level_openings, reachable
+        tmp = {"name": lv.get("name", ""), "rooms": best[0], "stilt": False}
+        li = 0 if lv.get("hall") else 1
+        miss = reachable(tmp, level_openings(tmp, li, 0)[0], None, li)[1]
+        names = sorted({r["name"] for r in best[0] if r["id"] in miss})
+        raise LayoutError([f"{lv['name']}: {', '.join(names)} cannot be reached without walking through another room "
+                           f"on this plot."])
+    return best
+
+
+def _build_level(lv: dict, bw: float, bd: float, comp: dict, multi: bool, template: dict | None,
+                 spine: str | None = None) -> tuple[list[dict], dict]:
     stair_w = r2(SIZES["stair"][0])
     best_need, rows, depths = 1e9, None, None
     stilt = bool(lv.get("stilt"))
@@ -263,7 +327,7 @@ def build_level(lv: dict, bw: float, bd: float, comp: dict, multi: bool, templat
             rest = [rest[idx[id(c)]] for c in order]
             if stair:
                 stair.fixed_w = template["stair_w"] if template else stair_w
-            r = pack_rows(front, rest, stair, bw, tol, stilt, relax, upper=not lv.get("hall"))
+            r = pack_rows(front, rest, stair, bw, tol, stilt, relax, upper=not lv.get("hall"), spine_w=SPINE if spine else 0.0)
             if stilt:  # vehicles in one row; the rest of the stilt floor stays open
                 dd = max(c.dd for c in r[0])
                 if bd - dd > 0.5:
@@ -316,31 +380,208 @@ def build_level(lv: dict, bw: float, bd: float, comp: dict, multi: bool, templat
             for c in row:
                 if c.kind == "passage":
                     c.kind = "stilt_open"
-    rooms: list[dict] = []
-    y = 0.0
-    info = {"front_d": depths[0], "mid_d": depths[1] if len(depths) > 1 else 0, "stair_w": stair_w, "stair_side": None}
-    pinned = template["stair_side"] if template else ("edge" if multi else None)
-    counters: dict[str, int] = {}
-    for ri, (row, d) in enumerate(zip(rows, depths)):
-        row = order_row(row, y, d, bw, bd, comp, pinned)
-        widths = [r2(w) for w in size_row(row, bw)]
-        widths[-1] = r2(bw - sum(widths[:-1]))
-        x = 0.0
-        for c, w in zip(row, widths):
-            if c.mw - w > 0.6:
-                raise LayoutError([f"{lv['name']}: {NAMES[c.kind]} would be only {w:.1f} ft wide (minimum "
-                                   f"{c.mw:g} ft)."])
-            if c.kind in ("bedroom", "master"):
-                net_w = w - (SIZES["toilet"][0] if c.attached else 0)
-                if net_w * d < (100 if c.kind == "master" else 80) - 0.5:
-                    raise LayoutError([f"{lv['name']}: {NAMES[c.kind]} would be only {net_w * d:.0f} sq ft "
-                                       f"(minimum {100 if c.kind == 'master' else 80} sq ft)."])
-            if c.kind == "stair":
-                info["stair_side"] = "left" if x < 0.1 else ("right" if abs(x + w - bw) < 0.1 else "middle")
-            add_cell(rooms, c, x, y, w, d, counters)
-            x += w
-        y += d
-    return rooms, info
+    def place(spine: str | None):
+        """Lay the rows out. spine = 'left' / 'right': a 3.5 ft passage runs from the front row to the back along
+        that side (1.17), so every back room opens into a common passage instead of through another room."""
+        rooms: list[dict] = []
+        y = 0.0
+        info = {"front_d": depths[0], "mid_d": depths[1] if len(depths) > 1 else 0, "stair_w": stair_w, "stair_side": None}
+        pinned = template["stair_side"] if template else ("edge" if multi else None)
+        counters: dict[str, int] = {}
+        for ri, (row, d) in enumerate(zip(rows, depths)):
+            use = spine and ri >= 1 and not all(c.kind in ("terrace",) for c in row)
+            avail = bw - SPINE if use else bw
+            x0 = SPINE if use and spine == "left" else 0.0
+            if ri == 0 and spine:
+                row = _pin_edge(order_row(row, y, d, bw, bd, comp, pinned), spine)
+            elif ri == 0 or stilt:
+                row = order_row(row, y, d, avail, bd, comp, pinned)
+            else:  # 1.17: among the good orders, take the one that leaves the fewest rooms without access
+                cands = order_candidates(row, y, d, avail, bd, comp, pinned)
+                best_row, best_bad = cands[0] if cands else row, None
+                for cand in cands:
+                    trial = list(rooms)
+                    ws_ = [r2(w) for w in size_row(cand, avail)]
+                    ws_[-1] = r2(avail - sum(ws_[:-1]))
+                    xx, cnt = x0, dict(counters)
+                    if use:
+                        trial.append({"id": f"passage_s{ri}", "type": "passage", "name": "Passage",
+                                      "x": 0.0 if spine == "left" else r2(bw - SPINE), "y": r2(y), "w": SPINE, "d": r2(d)})
+                    for c, w in zip(cand, ws_):
+                        add_cell(trial, c, r2(xx), y, w, d, cnt)
+                        xx += w
+                    bad = _unreached_count(trial, lv)
+                    if best_bad is None or bad < best_bad:
+                        best_row, best_bad = cand, bad
+                    if bad == 0:
+                        break
+                row = best_row
+            widths = [r2(w) for w in size_row(row, avail)]
+            widths[-1] = r2(avail - sum(widths[:-1]))
+            x = x0
+            if use:
+                rooms.append({"id": f"passage_s{ri}", "type": "passage", "name": "Passage",
+                              "x": 0.0 if spine == "left" else r2(bw - SPINE), "y": r2(y), "w": SPINE, "d": r2(d)})
+            for c, w in zip(row, widths):
+                if c.mw - w > 0.6:
+                    raise LayoutError([f"{lv['name']}: {NAMES[c.kind]} would be only {w:.1f} ft wide (minimum "
+                                       f"{c.mw:g} ft)."])
+                if c.kind in ("bedroom", "master"):
+                    net_w = w - (SIZES["toilet"][0] if c.attached else 0)
+                    if net_w * d < (100 if c.kind == "master" else 80) - 0.5:
+                        raise LayoutError([f"{lv['name']}: {NAMES[c.kind]} would be only {net_w * d:.0f} sq ft "
+                                           f"(minimum {100 if c.kind == 'master' else 80} sq ft)."])
+                if c.kind == "stair":
+                    info["stair_side"] = "left" if x < 0.1 else ("right" if abs(x + w - bw) < 0.1 else "middle")
+                add_cell(rooms, c, r2(x), y, w, d, counters)
+                x += w
+            y += d
+        return rooms, info
+
+    return place(spine)
+
+
+SPINE = 3.5  # ft – width of the access passage (1.17)
+ENTRY = ("hall", "lounge", "stair", "passage", "dining")
+MIN_W = {"bedroom": 8.5, "kitchen": 6.5, "dining": 7.0, "toilet": 4.0, "common_toilet": 4.0, "pooja": 3.5,
+         "dress": 3.0, "passage": 3.0, "lounge": 8.0, "hall": 9.0, "utility": 4.0, "store": 4.0, "terrace": 3.0}
+
+
+MIN_D = {"bedroom": 8.0, "kitchen": 7.0, "dining": 7.0, "toilet": 5.0, "common_toilet": 5.0, "pooja": 3.5,
+         "dress": 3.0, "passage": 3.0, "lounge": 8.0, "hall": 9.0, "utility": 4.0, "store": 4.0, "terrace": 3.0}
+
+
+def _cut(rooms: list[dict], x0: float, y0: float, x1: float, y1: float) -> list[dict] | None:
+    """Cut the rectangle out of the rooms it touches – only from a room's side (never splitting a room in two) and
+    never below a room's minimum size. Returns the new rooms incl. the passage, or None."""
+    new = []
+    for r in rooms:
+        rx1, ry1 = r["x"] + r["w"], r["y"] + r["d"]
+        ox, oy = min(x1, rx1) - max(x0, r["x"]), min(y1, ry1) - max(y0, r["y"])
+        if ox <= 0.01 or oy <= 0.01:
+            new.append(dict(r)); continue
+        if r["type"] in ("hall", "lounge", "stair", "parking", "terrace") or r["id"].startswith("passage_c"):
+            return None  # never cut into the entry rooms / an earlier passage
+        q = dict(r)
+        full_x, full_y = ox >= r["w"] - 0.01, oy >= r["d"] - 0.01
+        if full_x and full_y:
+            if r["type"] == "passage":
+                continue  # an old small passage simply becomes part of the new one
+            return None
+        if full_y:  # vertical strip through the room
+            if x0 <= r["x"] + 0.01:
+                q["x"], q["w"] = round(x1, 2), round(rx1 - x1, 2)
+            elif x1 >= rx1 - 0.01:
+                q["w"] = round(x0 - r["x"], 2)
+            else:
+                return None
+        elif full_x:  # horizontal strip through the room
+            if y0 <= r["y"] + 0.01:
+                q["y"], q["d"] = round(y1, 2), round(ry1 - y1, 2)
+            elif y1 >= ry1 - 0.01:
+                q["d"] = round(y0 - r["y"], 2)
+            else:
+                return None
+        else:
+            return None  # a corner bite – not allowed
+        if q["w"] < MIN_W.get(q["type"], 3.0) - 0.01 or q["d"] < MIN_D.get(q["type"], 3.0) - 0.01 \
+                or (q["type"] == "bedroom" and q["w"] * q["d"] < 80 - 0.5):
+            return None
+        new.append(q)
+    return new
+
+
+def _carve_passage(rooms: list[dict], lv: dict, bw: float, bd: float) -> list[dict] | None:
+    """1.17: when a room can only be reached through another room, cut a 3½ ft (or 3 ft) passage out of the side of
+    the back rooms – vertical along the rooms, or across a row – starting from a room you can already reach.
+    Up to three passages, each one only if it really gives access. Returns the new room list, or None."""
+    from .geometry import level_openings, reachable
+    cur, cost, k = rooms, _unreached_count(rooms, lv), 0
+    while cost > 0 and k < 3:
+        tmp = {"name": lv.get("name", ""), "rooms": cur, "stilt": False}
+        li = 0 if lv.get("hall") else 1
+        seen = reachable(tmp, level_openings(tmp, li, 0)[0], None, li)[0]
+        entries = [r for r in cur if r["id"] in seen and r["type"] in ("hall", "lounge", "stair", "dining", "passage")]
+        xs = sorted({round(v, 2) for r in cur for v in (r["x"], r["x"] + r["w"])})
+        ys = sorted({round(v, 2) for r in cur for v in (r["y"], r["y"] + r["d"])})
+        cands = []
+        for width in (SPINE, 3.0):
+            for e in entries:  # vertical: from the bottom of a reachable room to the back
+                yb = e["y"] + e["d"]
+                if yb > bd - 4:
+                    continue
+                for x0 in {v for x in xs for v in (x, x - width)}:
+                    if x0 < -0.01 or x0 + width > bw + 0.01:
+                        continue
+                    if min(x0 + width, e["x"] + e["w"]) - max(x0, e["x"]) < width - 0.01:
+                        continue
+                    for yend in [y for y in ys if y > yb + 4] or [bd]:
+                        cands.append((x0, yb, x0 + width, yend))
+            for y in ys:  # across: along the top of a row, full width or from a reachable passage to one side
+                if y < 0.01 or y + width > bd - 3:
+                    continue
+                for xa, xb in [(0.0, bw)] + [(e["x"], bw) for e in entries] + [(0.0, e["x"] + e["w"]) for e in entries]:
+                    if xb - xa >= 6:
+                        cands.append((xa, y, xb, y + width))
+        best = None
+        for x0, y0, x1, y1 in set(cands):
+            new = _cut(cur, x0, y0, x1, y1)
+            if new is None:
+                continue
+            k_id = f"passage_c{k + 1}"
+            new.append({"id": k_id, "type": "passage", "name": "Passage", "x": round(x0, 2), "y": round(y0, 2),
+                        "w": round(x1 - x0, 2), "d": round(y1 - y0, 2)})
+            c = _unreached_count(new, lv)
+            area = (x1 - x0) * (y1 - y0)
+            if c < cost and (best is None or (c, area) < (best[0], best[2])):
+                best = (c, new, area)
+        if not best:
+            break
+        cost, cur, _ = best
+        k += 1
+    return cur if cur is not rooms else None
+
+
+def _pin_edge(row: list, side: str) -> list:
+    """Front row: put the hall / stair (where the passage starts) at the spine side."""
+    k = next((i for i, c in enumerate(row) if c.kind == "stair"), None)
+    if k is None:
+        k = next((i for i, c in enumerate(row) if c.kind in ENTRY), None)
+    if k is None:
+        return row
+    row = list(row)
+    c = row.pop(k)
+    return [c] + row if side == "left" else row + [c]
+
+
+def _unreached_count(rooms: list[dict], lv: dict) -> int:
+    """Layout access cost: a room you cannot reach = 10, a bedroom / pooja that opens only into the kitchen = 3."""
+    from .geometry import level_openings, reachable
+    tmp = {"name": lv.get("name", ""), "rooms": rooms, "stilt": bool(lv.get("stilt"))}
+    li = 0 if lv.get("hall") else 1
+    ops, _ = level_openings(tmp, li, 0)
+    by = {r["id"]: r for r in rooms}
+    cost = 10 * len(reachable(tmp, ops, None, li)[1])
+    for o in ops:
+        if o["type"] in ("door", "pooja_door") and by.get(o["room"], {}).get("type") in ("bedroom", "pooja"):
+            r = by[o["room"]]
+            horiz = o["y1"] == o["y2"]
+            for q in rooms:
+                if q["type"] != "kitchen":
+                    continue
+                if horiz and (abs(q["y"] - o["y1"]) < 0.02 or abs(q["y"] + q["d"] - o["y1"]) < 0.02) and q["x"] <= o["x1"] + 0.01 and o["x2"] <= q["x"] + q["w"] + 0.01:
+                    cost += 3
+                if not horiz and (abs(q["x"] - o["x1"]) < 0.02 or abs(q["x"] + q["w"] - o["x1"]) < 0.02) and q["y"] <= o["y1"] + 0.01 and o["y2"] <= q["y"] + q["d"] + 0.01:
+                    cost += 3
+    return cost
+
+
+def _all_reached(rooms: list[dict], lv: dict) -> bool:
+    from .geometry import level_openings, reachable
+    tmp = {"name": lv.get("name", ""), "rooms": rooms, "stilt": bool(lv.get("stilt"))}
+    li = 0 if lv.get("hall") else 1
+    ops, _ = level_openings(tmp, li, 0)
+    return not reachable(tmp, ops, None, li)[1]
 
 
 def add_cell(rooms: list[dict], c: Cell, x: float, y: float, w: float, d: float, counters: dict):
