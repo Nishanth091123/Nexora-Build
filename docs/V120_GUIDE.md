@@ -1,6 +1,6 @@
 # Nexora Build 1.20 – Realistic 3D + free AI Render
 
-Version **1.20.0** (it includes everything from 1.19). No database change. No new Python or npm packages.
+Version **1.20.1** (1.20.1: AI Render uses FLUX.2 [klein] – the older SD 1.5 model is not allowed on new Cloudflare accounts) (it includes everything from 1.19). No database change. No new Python or npm packages.
 
 ## Before you update – Cloudflare keys (only for AI Render)
 Put these two lines in `C:\PROJECTS\Nexora_Build\.env`, and add the same two on **Render → nexora-build-api →
@@ -38,8 +38,10 @@ Never send them in chat. Without them everything else works; only AI Render says
 
 How it works:
 - **Your 3D view is the base**, so the floors, windows and outline come from your drawing.
-- **Free only:** Cloudflare Workers AI daily allowance, about 20–50 renders a day. It resets at 5:30 am India time.
-  When the allowance is used up, the app says so.
+- **Free only:** Cloudflare Workers AI daily allowance. The app uses **FLUX.2 [klein]** (best quality – it edits the
+  picture and keeps the building), then dreamshaper if FLUX is not allowed on the account. FLUX uses more of the
+  allowance, so expect a limited number of renders a day. It resets at 5:30 am India time. When the allowance is
+  used up, the app says so.
 - If Google gives your Gemini key free image quota, that is tried as a second option. Nothing is paid.
 - Every render is stamped **"AI concept render – not to scale"**. It is for showing the client – the drawing stays
   the working document.

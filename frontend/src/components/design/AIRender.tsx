@@ -69,7 +69,7 @@ export default function AIRender({ pid, base, kind, style, light, onClose }: {
                 </div>
               </div>
             ))}
-            {res.length > 0 && <p className="text-xs text-slate-500">Not happy? Press “Make AI render” again – every try is different. Free allowance is about 20–50 renders a day.</p>}
+            {res.length > 0 && <p className="text-xs text-slate-500">Not happy? Press “Make AI render” again – every try is different. The free daily allowance gives a limited number of renders (FLUX uses more of it); it resets at 5:30 am.</p>}
           </div>
         </div>
       </div>

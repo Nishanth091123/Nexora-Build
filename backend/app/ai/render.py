@@ -1,7 +1,7 @@
 """1.20 AI Render – turns a picture of OUR 3D model into a photo-like concept render, keeping its shape.
 
 Free services only, tried in this order:
-  1. Cloudflare Workers AI (free daily allowance) – image-to-image Stable Diffusion; the 3D picture is the base, so
+  1. Cloudflare Workers AI (free daily allowance) – FLUX.2 [klein] picture editing (then dreamshaper / SD img2img); the 3D picture is the base, so
      walls, floors, windows and the outline stay where the drawing has them. Needs CLOUDFLARE_ACCOUNT_ID and
      CLOUDFLARE_AI_TOKEN in .env (and on Render).
   2. Gemini image model with the GEMINI_API_KEY you already have – only if Google gives free image quota to that key.
@@ -17,7 +17,10 @@ import httpx
 from .. import config
 
 log = logging.getLogger("nexora.render")
-CF_MODELS = ["@cf/runwayml/stable-diffusion-v1-5-img2img", "@cf/lykon/dreamshaper-8-lcm"]
+# best first; all share the same free daily allowance. FLUX.2 [klein] edits the picture (keeps the building),
+# dreamshaper / SD 1.5 are image-to-image with a "strength". Models an account may not use (code 5018) are skipped.
+CF_MODELS = ["@cf/black-forest-labs/flux-2-klein-9b", "@cf/black-forest-labs/flux-2-klein-4b",
+             "@cf/lykon/dreamshaper-8-lcm", "@cf/runwayml/stable-diffusion-v1-5-img2img"]
 NEG = ("cartoon, sketch, drawing, toy, plastic, blurry, low quality, distorted, deformed building, extra floors, "
        "warped lines, text, watermark, logo, people, car crash, oversaturated")
 
@@ -62,32 +65,73 @@ def prompt_for(kind: str, style: str, light: str, extra: str) -> str:
     return ", ".join(words)
 
 
+def _fit(img: bytes, max_side: int) -> tuple[bytes, int, int]:
+    """PNG no bigger than max_side (FLUX.2 takes input pictures below 512 px); sizes rounded to 8."""
+    import io
+    from PIL import Image
+    im = Image.open(io.BytesIO(img)).convert("RGB")
+    k = min(1.0, max_side / max(im.size))
+    w, h = max(64, int(im.width * k) // 8 * 8), max(64, int(im.height * k) // 8 * 8)
+    im = im.resize((w, h), Image.LANCZOS)
+    buf = io.BytesIO()
+    im.save(buf, "PNG")
+    return buf.getvalue(), w, h
+
+
+def _cf_error(r) -> tuple[int, str]:
+    try:
+        e = (r.json().get("errors") or [{}])[0]
+        return int(e.get("code") or 0), str(e.get("message") or "")[:200]
+    except Exception:
+        return 0, r.text[:200]
+
+
 def _cloudflare(img: bytes, prompt: str, strength: float, seed: int | None) -> tuple[bytes, str]:
     acc, tok = config.env("CLOUDFLARE_ACCOUNT_ID"), config.env("CLOUDFLARE_AI_TOKEN")
-    body = {"prompt": prompt, "negative_prompt": NEG, "image_b64": base64.b64encode(img).decode(),
-            "strength": max(0.2, min(0.85, strength)), "num_steps": 20, "guidance": 7.5}
-    if seed is not None:
-        body["seed"] = int(seed)
+    small, w, h = _fit(img, 504)
+    k = 1024 / max(w, h)
+    ow, oh = int(w * k) // 8 * 8, int(h * k) // 8 * 8  # output about 1024 px on the long side
+    keep = max(0.0, min(1.0, (0.85 - strength) / 0.6))  # 1 = keep my design exactly
+    edit = ("Turn this 3D model render into a photorealistic architectural photograph. "
+            + ("Keep exactly the same building: same shape, number of floors, walls, windows, doors, balconies, colours "
+               "and the same camera angle. Only make the materials, lighting, sky and garden look real. " if keep >= 0.5 else
+               "Keep the same building shape, floors and camera angle; you may refine materials, details and landscaping. ")
+            + prompt)
     last = ""
-    with httpx.Client(timeout=httpx.Timeout(120.0, connect=15.0)) as c:
+    with httpx.Client(timeout=httpx.Timeout(150.0, connect=15.0)) as c:
         for model in CF_MODELS:
-            r = c.post(f"https://api.cloudflare.com/client/v4/accounts/{acc}/ai/run/{model}",
-                       headers={"Authorization": f"Bearer {tok}"}, json=body)
+            url = f"https://api.cloudflare.com/client/v4/accounts/{acc}/ai/run/{model}"
+            if "flux-2" in model:
+                data = {"prompt": edit[:2000], "width": str(ow), "height": str(oh)}
+                if seed is not None:
+                    data["seed"] = str(int(seed))
+                r = c.post(url, headers={"Authorization": f"Bearer {tok}"}, data=data,
+                           files={"input_image_0": ("view.png", small, "image/png")})
+            else:
+                body = {"prompt": prompt, "negative_prompt": NEG, "image_b64": base64.b64encode(small).decode(),
+                        "strength": max(0.2, min(0.85, strength)), "num_steps": 20, "guidance": 7.5, "width": w, "height": h}
+                if seed is not None:
+                    body["seed"] = int(seed)
+                r = c.post(url, headers={"Authorization": f"Bearer {tok}"}, json=body)
             ct = r.headers.get("content-type", "")
             if r.status_code == 200 and ct.startswith("image/"):
                 return r.content, model
-            if r.status_code == 200 and "json" in ct:  # some models answer {"result": {"image": base64}}
+            if r.status_code == 200 and "json" in ct:  # FLUX answers {"result": {"image": base64}}
                 res = (r.json() or {}).get("result") or {}
                 if isinstance(res, dict) and res.get("image"):
                     return base64.b64decode(res["image"]), model
-            if r.status_code == 429:
+                last = f"{model}: empty answer"
+                continue
+            code, msg = _cf_error(r)
+            low = msg.lower()
+            if r.status_code == 429 or code in (4006, 3036) or "allocation" in low or "neurons" in low:
                 raise RenderError("Today's free Cloudflare AI allowance is used up. It resets every day (00:00 UTC = "
                                   "5:30 am India) – try again then.", 429)
-            if r.status_code in (401, 403):
-                raise RenderError("Cloudflare refused the token – check CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_AI_TOKEN "
-                                  "(Workers AI token) in .env and on Render.", 400)
-            last = f"{model}: HTTP {r.status_code} {r.text[:200]}"
-            log.warning("cloudflare render failed %s", last)
+            if r.status_code == 401 or code in (10000, 9109):
+                raise RenderError(f"Cloudflare refused the token ({code} {msg}) – check CLOUDFLARE_ACCOUNT_ID / "
+                                  f"CLOUDFLARE_AI_TOKEN in .env and on Render.", 400)
+            last = f"{model.split('/')[-1]}: {r.status_code} {code} {msg}"  # e.g. 5018 not allowed → next model
+            log.warning("cloudflare render: %s", last)
     raise RenderError(f"Cloudflare AI could not make the render ({last}).", 502)
 
 
@@ -112,8 +156,8 @@ def _gemini(img: bytes, prompt: str) -> tuple[bytes, str]:
                             return base64.b64decode(d["data"]), m
                 last = f"{m}: no picture in the answer"
             else:
-                last = f"{m}: HTTP {r.status_code} {r.text[:160]}"
-    raise RenderError(f"Gemini has no free image quota for this key ({last[:220]}).", 429 if "429" in last else 502)
+                last = f"{m}: HTTP {r.status_code}"
+    raise RenderError("Gemini: no free image quota for this key.", 502)
 
 
 def render(img: bytes, kind: str, style: str, light: str, extra: str, strength: float, seed: int | None = None) -> dict:
@@ -135,13 +179,15 @@ def render(img: bytes, kind: str, style: str, light: str, extra: str, strength: 
                 raise
         except httpx.HTTPError as e:
             errors.append(f"Cloudflare not reachable: {e}")
-    if cfg["gemini"]:
+    if cfg["gemini"] and not (cfg["cloudflare"] and errors and "used up" in errors[0]):
         try:
             out, model = _gemini(img, prompt)
             return {"image_b64": base64.b64encode(out).decode(), "provider": "Google Gemini (free quota)", "model": model, "prompt": prompt}
         except RenderError as e:
-            errors.append(str(e))
+            if not cfg["cloudflare"]:
+                errors.append(str(e))
         except httpx.HTTPError as e:
-            errors.append(f"Gemini not reachable: {e}")
+            if not cfg["cloudflare"]:
+                errors.append(f"Gemini not reachable: {e}")
     status = 429 if any("used up" in x or "quota" in x for x in errors) else 502
     raise RenderError(" | ".join(errors), status)
