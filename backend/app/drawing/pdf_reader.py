@@ -93,7 +93,75 @@ def _segments(pdf, contents, resources, ctm, out, depth=0):
             return
 
 
-def parse(data: bytes, page_no: int = 0) -> dict:
+def _texts(data: bytes, pdf, page_no: int) -> list[dict]:
+    """Text with its centre point in PDF points (origin bottom-left).
+    1.18: pdfplumber gives exact word boxes (words on one line are joined into a phrase); pypdf is the fallback."""
+    out: list[dict] = []
+    try:
+        import pdfplumber
+        with pdfplumber.open(io.BytesIO(data)) as doc:
+            pg = doc.pages[page_no]
+            H = float(pg.height)
+            words = pg.extract_words(keep_blank_chars=False, use_text_flow=False, x_tolerance=2, y_tolerance=2,
+                                     extra_attrs=["size"])
+            words.sort(key=lambda w: (round(w["top"]), w["x0"]))
+            line: list[dict] = []
+
+            def flush():
+                if not line:
+                    return
+                x0 = min(w["x0"] for w in line); x1 = max(w["x1"] for w in line)
+                top = min(w["top"] for w in line); bot = max(w["bottom"] for w in line)
+                out.append({"text": " ".join(w["text"] for w in line), "x": (x0 + x1) / 2, "y": H - (top + bot) / 2})
+            for w in words:
+                if line and (abs(w["top"] - line[-1]["top"]) > 1.5 or w["x0"] - line[-1]["x1"] > max(4.0, 0.6 * float(w.get("size") or 6))):
+                    flush()
+                    line = []
+                line.append(w)
+            flush()
+        return out
+    except ImportError:
+        pass
+    except Exception:
+        out = []
+    page = pdf.pages[page_no]
+
+    def visit(text, cm, tm, font, size):
+        s = (text or "").strip()
+        if not s:
+            return
+        cmf = tuple(float(v) for v in cm)
+        x, y = _pt(cmf, float(tm[4]), float(tm[5]))
+        sc = (abs(float(tm[0])) or 1.0) * (abs(cmf[0]) or 1.0)
+        w = len(s) * float(size or 8) * 0.5 * sc
+        h = float(size or 8) * sc
+        out.append({"text": s, "x": x + w / 2, "y": y + h * 0.35})
+    try:
+        page.extract_text(visitor_text=visit)
+    except Exception:
+        pass
+    return out
+
+
+def render_page(data: bytes, page_no: int = 0, max_px: int = 2200) -> tuple[bytes, int, int] | None:
+    """1.18: the PDF page as a PNG for the AI reader (scanned PDFs and PDFs whose text is drawn as lines)."""
+    try:
+        import pypdfium2 as pdfium
+        doc = pdfium.PdfDocument(data)
+        if page_no >= len(doc):
+            page_no = 0
+        pg = doc[page_no]
+        w, h = pg.get_size()
+        scale = max_px / max(w, h)
+        img = pg.render(scale=scale).to_pil()
+        buf = io.BytesIO()
+        img.save(buf, format="PNG", optimize=True)
+        return buf.getvalue(), img.width, img.height
+    except Exception:
+        return None
+
+
+def parse(data: bytes, page_no: int | None = None) -> dict:
     try:
         from pypdf import PdfReader
     except ImportError as e:  # pragma: no cover
@@ -107,25 +175,19 @@ def parse(data: bytes, page_no: int = 0) -> dict:
             pdf.decrypt("")
         except Exception:
             raise PdfError("This PDF is password protected – please upload an unprotected copy.")
-    if page_no >= len(pdf.pages):
-        page_no = 0
+    pages_with_plans = []
+    if page_no is None or page_no < 0 or page_no >= len(pdf.pages):
+        # 1.18: the plan is often not on page 1 (cover / index sheet first) – pick the page with the most room names
+        best, best_n = 0, -1
+        for i in range(min(len(pdf.pages), 15)):
+            n = sum(1 for t in _texts(data, pdf, i) if len(t["text"]) <= 32 and room_type(t["text"]))
+            if n >= 2:
+                pages_with_plans.append(i)
+            if n > best_n:
+                best, best_n = i, n
+        page_no = best
     page = pdf.pages[page_no]
-    texts: list[dict] = []
-
-    def visit(text, cm, tm, font, size):
-        s = (text or "").strip()
-        if not s:
-            return
-        cmf = tuple(float(v) for v in cm)
-        x, y = _pt(cmf, float(tm[4]), float(tm[5]))
-        sc = (abs(float(tm[0])) or 1.0) * (abs(cmf[0]) or 1.0)
-        w = len(s) * float(size or 8) * 0.5 * sc
-        h = float(size or 8) * sc
-        texts.append({"text": s, "x": x + w / 2, "y": y + h * 0.35})
-    try:
-        page.extract_text(visitor_text=visit)
-    except Exception:
-        pass
+    texts = _texts(data, pdf, page_no)
     segs: list = []
     _segments(pdf, page.get_contents(), page.get("/Resources"), (1, 0, 0, 1, 0, 0), segs)
     n_images = 0
@@ -136,10 +198,18 @@ def parse(data: bytes, page_no: int = 0) -> dict:
     labels = [{**t, "type": room_type(t["text"])} for t in texts if len(t["text"]) <= 32 and ":" not in t["text"]
               and room_type(t["text"])]
     info = {"pages": len(pdf.pages), "page": page_no, "lines": len(segs), "texts": len(texts), "labels": len(labels),
-            "images": n_images, "page_w": float(page.mediabox.width), "page_h": float(page.mediabox.height)}
+            "images": n_images, "page_w": float(page.mediabox.width), "page_h": float(page.mediabox.height),
+            "pages_with_plans": [i + 1 for i in pages_with_plans]}
     if len(labels) < 2 or len(segs) < 8:
-        return {"method": "pdf", "vector_ok": False, "info": info,
-                "reason": "No readable room names / lines in this PDF (scanned or text drawn as lines)."}
+        short = sum(1 for q in segs if abs(q[2] - q[0]) + abs(q[3] - q[1]) < 4)
+        if len(texts) < 3 and len(segs) > 400 and short > len(segs) * 0.5:
+            why = ("The text in this PDF is drawn as lines (AutoCAD SHX font), so room names cannot be read as text. "
+                   "Best: upload the DXF, or plot the PDF again with TrueType fonts (Arial). The AI reader is used meanwhile – check every size.")
+        elif n_images and len(segs) < 8:
+            why = "This PDF is a scanned picture – the AI reader is used; check every size."
+        else:
+            why = "No readable room names / lines in this PDF (scanned or text drawn as lines)."
+        return {"method": "pdf", "vector_ok": False, "info": info, "reason": why}
     rooms_raw, unplaced = find_regions(segs, labels)
     if segs:  # labels outside all line work are legends / schedules, not rooms
         sx0 = min(min(q[0], q[2]) for q in segs); sx1 = max(max(q[0], q[2]) for q in segs)

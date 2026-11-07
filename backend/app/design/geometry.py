@@ -523,4 +523,16 @@ def estimate_inputs(plan: dict, base: dict | None = None) -> dict:
     if plan.get("roof_sheets"):  # 1.17
         from .roof import estimate_rows
         inp["roof_sheets"] = estimate_rows(plan)
+    if plan["plot"].get("poly"):  # 1.18 irregular plot: compound wall along the real boundary (minus a 3.6 m gate)
+        from .plot import info as poly_info
+        per = poly_info([tuple(p) for p in plan["plot"]["poly"]])["perimeter_ft"]
+        inp["compound_wall_length_m"] = round(per * 0.3048 - 3.6, 2)
+    if len(lv) > 1:  # 1.18 designed staircase
+        try:
+            from .stair import estimate_row
+            row = estimate_row(plan)
+            if row:
+                inp["stair"] = row
+        except Exception:
+            pass
     return inp

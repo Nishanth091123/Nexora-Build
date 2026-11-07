@@ -87,3 +87,9 @@ def seed(db: Session) -> None:
             if merged != row.value:
                 row.value = merged
     db.commit()
+    from .market_seed import seed_market  # 1.18 Material Library brands / variants (added once, never overwritten)
+    try:
+        seed_market(db)
+    except Exception as e:  # never block start-up
+        log.warning("Material library seed skipped: %s", e)
+        db.rollback()

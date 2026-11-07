@@ -26,7 +26,10 @@ export default function MaterialPanel({ plan, picks, items, swatch, isOwner, cod
   const rooms = plan.levels.flatMap((lv, li) => lv.rooms.filter((r) => !["terrace", "balcony", "sitout", "parking"].includes(r.type)).map((r) => ({ lv: lv.name, r, key: `${li}:${r.id}` })));
   const slotDef = SLOTS.find((x) => x.key === slot)!;
   const cats: Cat[] = room ? (roomKind === "floor" ? ["flooring"] : ["paint", "wall_tile", "cladding"]) : slotDef.cats;
-  const list = items.filter((i) => cats.includes(i.cat) && (!q || `${i.name} ${i.brand || ""} ${i.code || ""}`.toLowerCase().includes(q.toLowerCase())));
+  // 1.18: a code typed here ("09") lists 0901, 0902 … first; name / brand also match
+  const ql = q.trim().toLowerCase();
+  const list = items.filter((i) => cats.includes(i.cat) && (!ql || (i.code || "").toLowerCase().startsWith(ql) || `${i.name} ${i.brand || ""} ${i.code || ""}`.toLowerCase().includes(ql)))
+    .sort((a, b) => (ql ? Number(!(a.code || "").toLowerCase().startsWith(ql)) - Number(!(b.code || "").toLowerCase().startsWith(ql)) : 0));
   const current = room ? picks.rooms?.[room]?.[roomKind] : picks.mat?.[slot];
   const apply = (ref: string | null) => (room ? onRoomPick(room, roomKind, ref) : onPick(slot, ref));
   const chip = (ref?: string) => { const it = ref ? byRef.get(ref) : undefined; return it ? <img src={swatch(it)} alt="" className="h-5 w-5 rounded border border-slate-300 object-cover" /> : <span className="h-5 w-5 rounded border border-dashed border-slate-300" />; };
@@ -80,12 +83,14 @@ export default function MaterialPanel({ plan, picks, items, swatch, isOwner, cod
                 className={`rounded-lg border p-1 text-left ${current === it.ref ? "border-brand-500 ring-2 ring-brand-500" : "border-line hover:border-brand-300"}`}>
                 <img src={swatch(it)} alt="" className="h-12 w-full rounded object-cover" />
                 <div className="mt-0.5 truncate text-[10px] font-medium text-navy-ink">{it.name}</div>
-                <div className="truncate text-[9px] text-slate-500">{it.custom ? `${it.brand || "Your item"}${it.code ? ` · ${it.code}` : ""}` : CAT_LABEL[it.cat]}</div>
+                <div className="truncate text-[9px] text-slate-500">{it.custom || it.market ? `${it.brand || "Your item"}${it.code ? ` · ${it.code}` : ""}` : CAT_LABEL[it.cat]}</div>
               </button>
             ))}
             {!list.length && <div className="col-span-full text-xs text-slate-500">Nothing here yet{isOwner ? " – use “Add your own”." : "."}</div>}
           </div>
-          <p className="mt-2 text-[11px] text-slate-500">The 3D view changes as you click. Picks are saved with the design (press Save).</p>
+          <p className="mt-2 text-[11px] text-slate-500">The 3D view changes as you click. Picks are saved with the design (press Save).
+            {!room && slot === "ext_wall" && " Front feature walls keep the style’s stone / wood – change them under “Feature walls (front)”."}
+            {" "}Brand shades with a colour come from the Material Library (menu → Material Library → Import list).</p>
         </div>
       </div>
       <AddItem open={addOpen} onClose={() => setAddOpen(false)} onSaved={onLibraryChanged} defaultCat={cats[0]} />
@@ -104,6 +109,8 @@ function AddItem({ open, onClose, onSaved, defaultCat }: { open: boolean; onClos
   const set = (k: keyof typeof blank) => (e: any) => setF({ ...f, [k]: e.target.value });
   const save = async () => {
     if (!f.name.trim()) return toast("Give the item a name", "err");
+    if (f.category === "paint" && f.color === blank.color && !img && !f.url.trim()
+      && !window.confirm("The colour is still the default grey-beige. A shade code alone does not tell the 3D view the colour – pick the colour from the shade card (or its #hex). Save anyway?")) return;
     setBusy(true);
     try {
       const it = await api<any>("/api/materials", { body: { category: f.category, name: f.name, brand: f.brand, code: f.code, color: f.color, finish: f.finish,

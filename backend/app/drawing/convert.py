@@ -42,11 +42,19 @@ def rooms_from_raw(ext: dict, units: str | None = None, scale: float | None = No
             unit_hint = hint.rstrip("?") if hint != "ft?" else "ft"
             sa, sb = to_ft(a, unit_hint), to_ft(b, unit_hint)
             room["stated"] = f"{a:g} × {b:g}" + ("" if unit_hint == "ft" else f" {unit_hint}")
-            best = min(abs(room["w"] - sa) + abs(room["d"] - sb), abs(room["w"] - sb) + abs(room["d"] - sa))
-            if best > 1.5:
-                room["confidence"] = 0.5
-                room["note"] = (f"Written size {room['stated']} differs from measured {room['w']:g}' × {room['d']:g}' "
-                                f"– check the units / scale")
+            # orientation of the written size that fits the measured box best
+            if abs(room["w"] - sa) + abs(room["d"] - sb) <= abs(room["w"] - sb) + abs(room["d"] - sa):
+                ow, od = sa, sb
+            else:
+                ow, od = sb, sa
+            dw, dd = ow - room["w"], od - room["d"]
+            if -0.5 <= dw <= 1.5 and -0.5 <= dd <= 1.5:
+                pass  # measured inside the walls, written centre-to-centre (or the same) – both fine
+            elif ow > 0 and od > 0:
+                # 1.18: the size WRITTEN on the drawing wins over a box that was measured wrongly (furniture / hatch lines)
+                room["note"] = (f"Measured {room['w']:g}' × {room['d']:g}', written {room['stated']} – the written size is used, please check")
+                room["w"], room["d"] = _r(ow), _r(od)
+                room["confidence"] = 0.6
         rooms.append(room)
     for j, u in enumerate(ext.get("unplaced", [])):
         ps = parse_size(u["text"])

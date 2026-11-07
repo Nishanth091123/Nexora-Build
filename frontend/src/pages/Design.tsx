@@ -9,6 +9,8 @@ import Page from "../components/Page";
 import OwnerDelete from "../components/OwnerDelete";
 import PlanSvg from "../components/design/PlanSvg";
 import RoofSheetsPanel, { type RoofSheet } from "../components/design/RoofSheetsPanel";
+import StairPanel, { type StairOpts } from "../components/design/StairPanel";
+import PlotShapePanel, { type PlotShape } from "../components/design/PlotShapePanel";
 import DrawingSheets from "../components/design/DrawingSheets";
 import StructuralPanel from "../components/design/StructuralPanel";
 import ApprovalPanel from "../components/design/ApprovalPanel";
@@ -23,7 +25,7 @@ import { FACINGS, ROOM_TYPES, clone, type Plan, type Room } from "../lib/plan";
 
 type Tab = "ai" | "editor" | "3d" | "sheets" | "structural" | "approval" | "upload" | "rev";
 type Quick = { totals: Record<string, number>; breakdown: { group: string; amount: number; pct: number }[]; spec_level: string; rates_state: string; warnings: string[] };
-type DesignRow = { id: number; version: number; title: string; prompt: string; source: string; spec_level: string; estimate_total: number; cost_per_sqft: number; builtup_sqft: number; summary: any; created_at: string; parent_id: number | null };
+type DesignRow = { id: number; version: number; title: string; prompt: string; source: string; spec_level: string; estimate_total: number; cost_per_sqft: number; builtup_sqft: number; summary: any; created_at: string; parent_id: number | null; active?: boolean };
 type Suggestion = { label: string; requirements: any; notes: string[] };
 
 const EXAMPLES = [
@@ -101,6 +103,8 @@ export default function DesignPage() {
       road_width_m: r.road_width_m ?? f.road_width_m, floors: lv.length || f.floors, stilt, bedrooms: sum("bedrooms"),
       toilets: sum("attached_toilets") + sum("common_toilets"), parking_car: lv.some((l: any) => l.parking_car && !l.stilt) || f.parking_car,
       pooja: lv.some((l: any) => l.pooja) || f.pooja, corner: !!r.corner, area_type: r.area_type || "other", floor_height_ft: r.floor_height_ft || 10 }));
+    setPlotShape(r.plot_shape && r.plot_shape.mode ? r.plot_shape : { mode: "rect" });
+    setSbOverride(Object.fromEntries(Object.entries(r.setback_override || {}).map(([k, v]) => [k, String(v)])));
   };
   const openDesign = async (id: number) => {
     const d = await api<any>(`/api/designs/${id}`);
@@ -115,7 +119,7 @@ export default function DesignPage() {
     setForm({ ...defaultForm, plot_w_ft: currentProject?.plot_width && currentProject.unit === "ft" ? currentProject.plot_width : "",
       plot_d_ft: currentProject?.plot_length && currentProject.unit === "ft" ? currentProject.plot_length : "" });
     const want = Number(params.get("design")) || 0;
-    loadDesigns().then((d) => { const pick = d.find((x) => x.id === want) || d[0]; if (pick) openDesign(pick.id); }).catch((e) => toast(e.message, "err"));
+    loadDesigns().then((d) => { const pick = d.find((x) => x.id === want) || d.find((x: any) => x.active) || d[0]; if (pick) openDesign(pick.id); }).catch((e) => toast(e.message, "err"));
   }, [pid, allowed]);
 
   // ---------------------------------------------------------------- AI flow
@@ -134,8 +138,24 @@ export default function DesignPage() {
     runQuick(p, spec, source === "ai");
   };
 
-  const generate = async (requirements: any) => {
+  const [plotShape, setPlotShape] = useState<PlotShape>({ mode: "rect" });  // 1.18 irregular plots
+  const [sbOverride, setSbOverride] = useState<Record<string, string>>({});  // 1.18 manual setbacks (ft); blank = auto
+  const changeShape = (sh: PlotShape) => {
+    setPlotShape(sh);
+    const sd = (sh.sides || []).map(Number);
+    if (sh.mode === "quad" && sd[0] > 0) setForm((f: any) => ({ ...f, plot_w_ft: sd[0], plot_d_ft: Math.max(sd[1] || 0, sd[3] || 0) || f.plot_d_ft }));
+    if (sh.mode === "points" && (sh.points || []).length >= 3) {
+      const xs = sh.points!.map((q) => q[0]), ys = sh.points!.map((q) => q[1]);
+      setForm((f: any) => ({ ...f, plot_w_ft: Math.max(...xs) - Math.min(...xs), plot_d_ft: Math.max(...ys) - Math.min(...ys) }));
+    }
+    if (sh.mode === "angles" && sd[0] > 0) setForm((f: any) => ({ ...f, plot_w_ft: sd[0], plot_d_ft: f.plot_d_ft || Math.max(...sd.slice(1)) }));
+  };
+  const generate = async (requirements0: any) => {
     if (!pid) return;
+    const requirements = { ...requirements0 };
+    if (plotShape.mode !== "rect") requirements.plot_shape = plotShape; else delete requirements.plot_shape;
+    const sbo = Object.fromEntries(Object.entries(sbOverride).filter(([, v]) => v !== "" && v != null).map(([k, v]) => [k, Number(v)]));
+    if (Object.keys(sbo).length) requirements.setback_override = sbo; else delete requirements.setback_override;
     setBusy("gen"); setSuggestions([]);
     try {
       const p = await api<Plan>(`/api/projects/${pid}/design/generate`, { body: { requirements } });
@@ -199,6 +219,16 @@ export default function DesignPage() {
     if (!plan) return;
     const next = clone(plan) as any;
     next.roof_sheets = list;
+    setPast((p) => [...p.slice(-40), JSON.stringify(plan)]); setFuture([]); setDirty(true); setPlan(next);
+    (async () => {
+      try { showPlan(await api<Plan>(`/api/projects/${pid}/design/recompute`, { body: { plan: next } }), "edit"); }
+      catch (e: any) { toast(e.message, "err"); }
+    })();
+  };
+  const setStair = (o: StairOpts) => {  // 1.18 staircase choices
+    if (!plan) return;
+    const next = clone(plan) as any;
+    next.stair = Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined && v !== ""));
     setPast((p) => [...p.slice(-40), JSON.stringify(plan)]); setFuture([]); setDirty(true); setPlan(next);
     (async () => {
       try { showPlan(await api<Plan>(`/api/projects/${pid}/design/recompute`, { body: { plan: next } }), "edit"); }
@@ -499,6 +529,23 @@ export default function DesignPage() {
 
             <Card title="Confirm details" icon={<Compass size={20} />} action={<button className="btn-outline btn-sm" onClick={buildFromForm} disabled={busy !== ""}><Wand2 size={14} />Generate from form</button>}>
               <div className="grid gap-3 sm:grid-cols-3">
+                <div className="sm:col-span-3"><PlotShapePanel shape={plotShape} onChange={changeShape} /></div>
+                <div className="sm:col-span-3 rounded-lg border border-line p-3">
+                  <div className="mb-2 text-xs"><b className="text-navy-ink">Setbacks (ft)</b> <span className="text-slate-500">– blank = Auto (TNCDBR 2019). Type a value to use your own; a value below the rule is warned, not blocked.</span></div>
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    {(["front", "rear", "left", "right"] as const).map((k) => {
+                      const auto = ((plan as any)?.setbacks?.ft_rule || plan?.setbacks?.ft || {})[k];
+                      const manual = sbOverride[k] !== undefined && sbOverride[k] !== "";
+                      return (
+                        <label key={k} className="text-xs"><span className="label flex items-center gap-1 capitalize">{k}
+                          <span className={`rounded px-1 text-[9px] font-bold ${manual ? "bg-amber-100 text-amber-800" : "bg-emerald-50 text-emerald-700"}`}>{manual ? "MANUAL" : "AUTO"}</span>
+                          {manual && <button type="button" className="text-slate-400 hover:text-brand-600" title="Back to auto" onClick={() => setSbOverride({ ...sbOverride, [k]: "" })}>↺</button>}</span>
+                          <input className="input py-1" type="number" min={0} step={0.25} placeholder={auto != null ? `auto ${auto}` : "auto"} value={sbOverride[k] ?? ""}
+                            onChange={(e) => setSbOverride({ ...sbOverride, [k]: e.target.value })} /></label>
+                      );
+                    })}
+                  </div>
+                </div>
                 <Field label="Plot frontage (ft) *"><input className={`input ${!form.plot_w_ft ? "border-amber-400" : ""}`} type="number" value={form.plot_w_ft} onChange={(e) => setF("plot_w_ft", e.target.value)} /></Field>
                 <Field label="Plot depth (ft) *"><input className={`input ${!form.plot_d_ft ? "border-amber-400" : ""}`} type="number" value={form.plot_d_ft} onChange={(e) => setF("plot_d_ft", e.target.value)} /></Field>
                 <Field label="Facing (road side) *">
@@ -600,6 +647,9 @@ export default function DesignPage() {
             <Card title="Roof & sheets" icon={<Warehouse size={20} />}>
               <RoofSheetsPanel plan={plan} onChange={setRoofSheets} />
             </Card>
+            {pid && <Card title="Staircase" icon={<Ruler size={20} />}>
+              <StairPanel plan={plan} pid={pid} onChange={setStair} />
+            </Card>}
             {quickCard}
             {lvl && lvl.warnings.length > 0 && (
               <Card title="Checks" icon={<TriangleAlert size={20} />}>
@@ -657,7 +707,7 @@ export default function DesignPage() {
                   <tbody>
                     {designs.map((d) => (
                       <tr key={d.id} className={saved?.id === d.id ? "bg-brand-50/50" : ""}>
-                        <td className="table-td font-bold">v{d.version}</td>
+                        <td className="table-td font-bold">v{d.version}{d.active && <span className="ml-1.5 rounded-full bg-emerald-600 px-1.5 py-0.5 text-[10px] font-bold text-white" title="Estimate, structural, approval, Vastu and 3D use this drawing">ACTIVE</span>}</td>
                         <td className="table-td">{d.title}</td>
                         <td className="table-td"><Badge color={d.source === "ai" ? "blue" : d.source === "upload" ? "green" : "purple"}>{d.source === "ai" ? "AI" : d.source === "upload" ? "Drawing" : "Edited"}</Badge></td>
                         <td className="table-td">{inr(d.builtup_sqft)} sft</td>
@@ -666,6 +716,9 @@ export default function DesignPage() {
                         <td className="table-td text-xs">{fmtDateTime(d.created_at)}</td>
                         <td className="table-td whitespace-nowrap">
                           <button className="btn-ghost btn-sm" onClick={() => { openDesign(d.id); setTab("ai"); }}>Open</button>
+                          {!d.active && <button className="btn-ghost btn-sm text-emerald-700" title="Estimate, structural, approval, Vastu and 3D will use this version" onClick={async () => {
+                            try { await api(`/api/projects/${pid}/active-design`, { method: "PUT", body: { design_id: d.id } }); await loadDesigns(); toast(`v${d.version} is now the active drawing for all modules`); } catch (e: any) { toast(e.message, "err"); }
+                          }}><Check size={14} />Use everywhere</button>}
                           <button className="btn-ghost btn-sm" title="Plan PDF" onClick={() => exportAs(d.id, d.version, "pdf")}><FileText size={14} />PDF</button>
                           <button className="btn-ghost btn-sm" title="AutoCAD DXF" onClick={() => exportAs(d.id, d.version, "dxf")}><Download size={14} />DXF</button>
                           <OwnerDelete entity="design" id={d.id} title={`${d.title} (v${d.version})`} onDone={loadDesigns} />

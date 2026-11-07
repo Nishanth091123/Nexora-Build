@@ -82,6 +82,8 @@ class Project(Base):
     is_hidden: Mapped[bool] = mapped_column(Boolean, default=False)  # in the Recycle Bin (6.6)
     client_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 1.8: Clients (owner only)
     workflow: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # 1.8: {stage: {"done": bool, "date": "..."}}
+    active_design_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 1.18: the drawing every module uses
+    brand_choices: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # 1.18: {category: variant id} for this project
     created_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
@@ -672,6 +674,40 @@ class LibraryItem(Base):
     unit: Mapped[str] = mapped_column(String(20), default="")
     source_url: Mapped[str] = mapped_column(String(500), default="")
     notes: Mapped[str] = mapped_column(Text, default="")
+    is_hidden: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MarketBrand(Base):
+    """1.18 Material Library: a brand sold in the market (names only – no logos) in one material category.
+    tier A / B / C is set by the owner → A = Premium, B = Standard, C = Basic estimates."""
+    __tablename__ = "market_brands"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    category: Mapped[str] = mapped_column(String(40), index=True)
+    name: Mapped[str] = mapped_column(String(80))
+    tier: Mapped[str] = mapped_column(String(1), default="")  # "" | A | B | C
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    is_hidden: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class MarketVariant(Base):
+    """1.18: one product / grade / size / shade of a brand, with the owner's own rate."""
+    __tablename__ = "market_variants"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    brand_id: Mapped[int] = mapped_column(Integer, index=True)
+    category: Mapped[str] = mapped_column(String(40), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    code: Mapped[str] = mapped_column(String(60), default="", index=True)  # shade / product code
+    spec: Mapped[dict] = mapped_column(JSON, default=dict)  # size, finish, grade, dia, type …
+    color: Mapped[str] = mapped_column(String(9), default="")  # shade colour (paint / tiles) when known
+    unit: Mapped[str] = mapped_column(String(20), default="")
+    rate: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    gst_pct: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    rate_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
     is_hidden: Mapped[bool] = mapped_column(Boolean, default=False)
     created_by: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)

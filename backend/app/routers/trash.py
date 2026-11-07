@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from ..audit import log_action
 from ..backup import run_backup
 from ..db import get_db
-from ..models import (LibraryItem, Client, ProjectNote, StructuralDesign, AIConversation, AIDocChunk, AIIndexedFile, AIMessage, AIPhotoCheck, Approval, Attendance,
+from ..models import (LibraryItem, MarketBrand, MarketVariant, Client, ProjectNote, StructuralDesign, AIConversation, AIDocChunk, AIIndexedFile, AIMessage, AIPhotoCheck, Approval, Attendance,
                       BbsSchedule, Design, DrawingAnalysis, Estimate, MaterialEntry, PermitChecklist, Project,
                       ProjectAccess, QualityCheck, SafetyRecord, ScheduleStage, SiteActivity, SitePhoto, SiteReport,
                       StoredFile, Task, TrashLog, User, VastuReport, Worker)
@@ -57,6 +57,8 @@ ENTITIES = {
     "note": (ProjectNote, "Project note", lambda o: f"{o.activity} – {_d(o.note_date)}"),
     "structural": (StructuralDesign, "Structural design", lambda o: f"{o.title} (v{o.version})"),
     "library_item": (LibraryItem, "Material library item", lambda o: f"{o.name} ({o.category})"),
+    "market_brand": (MarketBrand, "Material brand", lambda o: f"{o.name} ({o.category})"),
+    "market_variant": (MarketVariant, "Material item", lambda o: f"{o.name}{' · ' + o.code if o.code else ''} ({o.category})"),
 }
 
 
@@ -182,6 +184,9 @@ def _purge(db: Session, entity: str, o) -> None:
         db.flush()
         if f:
             _drop_file(db, f)
+    elif entity == "market_brand":  # its products go with it
+        db.query(MarketVariant).filter(MarketVariant.brand_id == o.id).delete(synchronize_session=False)
+        db.delete(o)
     elif entity == "worker":
         db.query(Attendance).filter(Attendance.worker_id == o.id).delete(synchronize_session=False)
         db.delete(o)

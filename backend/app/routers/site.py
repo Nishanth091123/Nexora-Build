@@ -707,6 +707,13 @@ def weather_context(project_id: int, user: User = Depends(get_current_user), db:
     current.sort(key=lambda s: (s.start_date or today))
     out["stages"] = [{"name": s.name, "group": s.stage_group, "progress": round(s.progress or 0),
                       "start": iso(s.start_date), "end": iso(s.end_date)} for s in current[:3]]
+    # today's work (Site → Daily Work): what is planned / running today and tomorrow drives the weather tips
+    tw = (db.query(SiteActivity).filter(SiteActivity.project_id == project_id, SiteActivity.is_hidden.is_(False),
+                                        SiteActivity.work_date >= today, SiteActivity.work_date <= today + timedelta(days=1),
+                                        SiteActivity.status != "completed")
+          .order_by(SiteActivity.work_date, SiteActivity.id).all())
+    out["today_work"] = [{"name": a.title + (f" · {a.location}" if a.location else ""), "group": names.get(a.stage_id, ""),
+                          "progress": round(a.progress or 0), "date": iso(a.work_date)} for a in tw[:6]]
     if perms.get("site"):
         acts = (db.query(SiteActivity).filter(SiteActivity.project_id == project_id, SiteActivity.is_hidden.is_(False),
                                               SiteActivity.work_date >= today - timedelta(days=13),

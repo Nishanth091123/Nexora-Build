@@ -119,7 +119,9 @@ def generate_plan(project_id: int, body: GenIn, user: User = Depends(get_current
     try:
         return generate(body.requirements)
     except LayoutError as e:
-        raise HTTPException(422, {"message": "The rooms do not fit this plot after setbacks",
+        plot_q = any(w in " ".join(e.questions).lower() for w in ("diagonal", "side", "corner", "plot", "measurement"))
+        raise HTTPException(422, {"message": "Please complete the plot measurements" if plot_q and not e.suggestions
+                                  else "The rooms do not fit this plot after setbacks",
                                   "questions": e.questions, "suggestions": e.suggestions})
     except SetbackError as e:
         raise HTTPException(422, {"message": str(e), "questions": [str(e)]})
@@ -154,13 +156,32 @@ def quick_estimate(db: Session, plan: dict, spec: str, state: str, structure: st
     used, fallback, rows = rates_for(db, state)
     inp = estimate_inputs(plan, {"spec_level": spec, "structure": structure})
     try:
-        res = calculate(inp, rates_dict(rows))
+        rd = rates_dict(rows)
+        from ..market import apply_market  # 1.18 brand grades from the Material Library
+        apply_market(db, rd)
+        res = calculate(inp, rd)
     except MissingInfo as e:
         raise HTTPException(422, {"message": "Please confirm these details", "questions": e.questions})
     t = res["totals"]
     return {"inputs": inp, "rates_state": used, "using_fallback": fallback, "spec_level": spec,
             "totals": t, "breakdown": res["breakdown"], "floors": res.get("floors", []),
             "warnings": res.get("warnings", [])}
+
+
+class StairIn(BaseModel):
+    plan: dict
+    opts: dict = {}
+
+
+@router.post("/projects/{project_id}/design/stair")
+def stair_design(project_id: int, body: StairIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """1.18: staircase geometry + checks + waist-slab design + BBS for the plan (opts = what the user changed)."""
+    require_any(db, user, project_id, ("design", "estimate"))
+    from ..design.stair import design as stair_design_fn
+    try:
+        return stair_design_fn(body.plan, body.opts)
+    except (KeyError, TypeError, ValueError, ZeroDivisionError) as e:
+        raise HTTPException(400, f"Staircase could not be worked out: {e}")
 
 
 @router.post("/projects/{project_id}/design/quick-estimate")
@@ -206,6 +227,8 @@ def save_design(project_id: int, body: SaveIn, user: User = Depends(get_current_
                parent_id=body.parent_id, created_by=user.id)
     db.add(d)
     db.commit()
+    p.active_design_id = d.id  # 1.18: a newly saved design is what every module uses from now on
+    db.commit()
     log_action(db, user, "created", "design", f"v{ver}",
                f"{d.title}: {plan['summary']['builtup_sqft']:g} sq ft, Rs {t['grand_total']:,.0f}", project_id=p.id)
     return design_summary(d) | {"plan": plan, "estimate": q}
@@ -213,10 +236,44 @@ def save_design(project_id: int, body: SaveIn, user: User = Depends(get_current_
 
 @router.get("/projects/{project_id}/designs")
 def list_designs(project_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    require_any(db, user, project_id, ("design", "estimate"))
+    p = require_any(db, user, project_id, ("design", "estimate", "vastu"))
     rows = (db.query(Design).filter(Design.project_id == project_id, Design.is_hidden.is_(False))
             .order_by(Design.version.desc()).all())
-    return [design_summary(d) for d in rows]
+    act = active_design(db, p)
+    return [design_summary(d) | {"active": bool(act and d.id == act.id)} for d in rows]
+
+
+def active_design(db: Session, p: Project) -> Design | None:
+    """1.18: the project's active drawing – the one the owner marked, else the newest saved / uploaded version."""
+    if p.active_design_id:
+        d = db.get(Design, p.active_design_id)
+        if d and not d.is_hidden and d.project_id == p.id:
+            return d
+    return (db.query(Design).filter(Design.project_id == p.id, Design.is_hidden.is_(False))
+            .order_by(Design.version.desc()).first())
+
+
+@router.get("/projects/{project_id}/active-design")
+def get_active_design(project_id: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    p = require_any(db, user, project_id, ("design", "estimate", "vastu", "view"))
+    d = active_design(db, p)
+    return {"design": design_summary(d) | {"active": True} if d else None}
+
+
+class ActiveIn(BaseModel):
+    design_id: int
+
+
+@router.put("/projects/{project_id}/active-design")
+def set_active_design(project_id: int, body: ActiveIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    p = require_any(db, user, project_id, ("design",))
+    d = db.get(Design, body.design_id)
+    if not d or d.project_id != p.id or d.is_hidden:
+        raise HTTPException(404, "Design not found")
+    p.active_design_id = d.id
+    db.commit()
+    log_action(db, user, "updated", "design", f"v{d.version}", f"Active drawing for all modules: {d.title}", project_id=p.id)
+    return {"design": design_summary(d) | {"active": True}}
 
 
 def load_design(db: Session, user: User, design_id: int, modules=("design",)) -> tuple[Design, Project]:
@@ -324,7 +381,8 @@ def export_current(project_id: int, body: ExportIn, kind: str = "sheets_pdf", st
                 raise HTTPException(400, f"page must be one of {', '.join(pages)}")
             data = sheets.pdf_pages(data, [pages[page]])
             label = {"title": "Title_Sheet", "site": "Site_Plan", "elevation": "Front_Elevation", "section": "Section",
-                     "schedule": "Door_Window_Schedule", "roof": "Roof_Plan", "truss": "Truss_Detail"}.get(page) or \
+                     "schedule": "Door_Window_Schedule", "roof": "Roof_Plan", "truss": "Truss_Detail",
+                     "stair": "Staircase_Detail"}.get(page) or \
                 (plan["levels"][int(page.split("_")[1])]["name"].replace(" ", "_") + "_Plan")
         mt, ext = "application/pdf", "pdf"
         name = f"{p.code}_{label}_{tag}{'_CAD' if st == 'cad' else ''}.{ext}"

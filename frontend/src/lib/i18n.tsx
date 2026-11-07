@@ -6,7 +6,7 @@ export type Lang = "en" | "ta";
 const TA: Record<string, string> = {
   // navigation
   "Home": "முகப்பு", "Design": "வடிவமைப்பு", "Site": "தளம்", "Vastu": "வாஸ்து", "Estimate": "மதிப்பீடு",
-  "Projects": "திட்டங்கள்", "AI Assistant": "AI உதவியாளர்", "Settings": "அமைப்புகள்",
+  "Projects": "திட்டங்கள்", "AI Assistant": "AI உதவியாளர்", "Material Library": "பொருள் நூலகம்", "Settings": "அமைப்புகள்",
   "Design · Estimate · Build · Manage": "வடிவமை · மதிப்பிடு · கட்டு · நிர்வகி",
   // help card
   "Need Help?": "உதவி வேண்டுமா?", "Open AI Assistant": "AI உதவியாளரை திற",

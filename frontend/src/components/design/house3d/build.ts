@@ -14,7 +14,9 @@ import { addPlants, plantsOf, PLANT_MATS, type Plants } from "./plants";
 
 export const PLINTH = 1.5, SLAB = 0.42, PARAPET = 3, HEADROOM = 8;
 const SILL: Record<string, number> = { window: 3, vent: 5.5 };
-const OPEN = new Set(["terrace", "balcony", "sitout", "parking", "portico"]);
+const OPEN = new Set(["terrace", "balcony", "sitout", "parking", "portico", "stilt_open"]);
+/** rooms with no walls that still carry the floor above → columns + beams (1.18) */
+const CARRY = new Set(["parking", "stilt_open", "portico"]);
 const NO_SLAB = new Set(["terrace", "balcony", "sitout"]);
 const DOORS = new Set(["main_door", "door", "toilet_door", "pooja_door"]);
 
@@ -152,7 +154,7 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
     // ---------- floors (on top of the slab – never in the same plane)
     for (const r of lv.rooms) {
       const wet = r.type === "toilet" || r.type === "common_toilet";
-      const m = r.type === "parking" ? (style === "basic" ? std("#bdbdbd") : texMat("pav", T.pavers()))
+      const m = r.type === "parking" || r.type === "stilt_open" ? (style === "basic" ? std("#bdbdbd") : texMat("pav", T.pavers()))
         : r.type === "terrace" ? pick("roof", () => std(fin.roof))
         : shiny(pick(wet ? "wet_floor" : "floor", () => (wet ? std("#dbe7ef", { roughness: 0.4 }) : std(fin.floor, { roughness: 0.45 })), `${li}:${r.id}`));
       box(r.x, r.y, z, r.x + r.w, r.y + r.d, z + 0.04, m, g, `floor ${r.name}`, false);
@@ -216,17 +218,16 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
       piece(cur, s1, z, wallTop);
     }
 
-    // ---------- parking: columns, beam, ramp
+    // ---------- open floors (stilt / parking / portico): columns on a grid + beams under the slab (1.18)
+    const carry = lv.rooms.filter((q) => CARRY.has(q.type));
+    if (carry.length && (li < levels.length - 1 || lv.rooms.some((q) => q.type === "stilt_open"))) carryFrame(lv, carry, z, g);
     for (const r of lv.rooms.filter((q) => q.type === "parking")) {
-      const colM = style === "modern" ? stoneM() : std("#e6e1d8");
-      for (const [cx, cy] of [[r.x, r.y], [r.x + r.w - 0.75, r.y]] as [number, number][])
-        box(cx, cy, z, cx + 0.75, cy + 0.75, z + H - SLAB, colM, g, "column");
       if (li === 0 && r.y <= extent(lv.rooms).y0 + 0.01 && o.surround) ramp(r, g);
       if (o.furniture) car(r, z, g);
     }
 
     // ---------- stairs
-    for (const r of lv.rooms.filter((q) => q.type === "stair" && q.d >= 7 && q.w >= 3)) stairs(r, z, g);
+    for (const r of lv.rooms.filter((q) => q.type === "stair" && Math.max(q.d, q.w) >= 7 && Math.min(q.d, q.w) >= 3)) stairs(r, z, g);
     if (o.furniture) { furnish(lv.rooms, z, g); details(lv, z, g, cutInterior); }
 
     // ---------- slab + overhang over this floor
@@ -501,6 +502,41 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
     wbox(horiz, s, e, c0, -0.25, 0.25, z, z + PARAPET, std(fin.ext), g);
   }
 
+  /** Columns (9" x 9" min, 12" for 2+ floors above) at every corner of the open rooms and at most ~12 ft apart along
+   *  their edges, joined by beams under the slab – the floor above never "floats" over a stilt / parking floor. */
+  function carryFrame(lv: Lv, carry: Room[], z: number, g: THREE.Object3D) {
+    const above = levels.length - 1 - levels.indexOf(lv);
+    const cs = above >= 2 ? 1.0 : 0.75;
+    const colM = style === "modern" ? stoneM() : std("#e6e1d8");
+    const beamM = std(style === "contemporary" ? "#d9d6d0" : "#efece6");
+    const pts: [number, number][] = [];
+    const add = (x: number, y: number) => { if (!pts.some(([a, c]) => Math.abs(a - x) < 3 && Math.abs(c - y) < 3)) pts.push([x, y]); };
+    const edges: [number, number, number, number][] = [];
+    for (const r of carry) {
+      const cx = [r.x, r.x + r.w], cy = [r.y, r.y + r.d];
+      const nx = Math.max(1, Math.ceil(r.w / 12)), ny = Math.max(1, Math.ceil(r.d / 12));
+      for (let i = 0; i <= nx; i++) for (const y of cy) add(r.x + (r.w * i) / nx, y);
+      for (let j = 1; j < ny; j++) for (const x of cx) add(x, r.y + (r.d * j) / ny);
+      edges.push([r.x, r.y, r.x + r.w, r.y], [r.x, r.y + r.d, r.x + r.w, r.y + r.d], [r.x, r.y, r.x, r.y + r.d], [r.x + r.w, r.y, r.x + r.w, r.y + r.d]);
+    }
+    const e = extent(lv.rooms);
+    for (const [x, y] of pts) {
+      // keep the column inside the building outline
+      const x0 = Math.min(Math.max(x - cs / 2, e.x0), e.x1 - cs), y0 = Math.min(Math.max(y - cs / 2, e.y0), e.y1 - cs);
+      box(x0, y0, z, x0 + cs, y0 + cs, z + H - SLAB, colM, g, "column");
+    }
+    const bd = 1.25;  // beam depth below the slab
+    const seen = new Set<string>();
+    for (const [x1, y1, x2, y2] of edges) {
+      const k = [x1, y1, x2, y2].map((v) => v.toFixed(1)).join(",");
+      if (seen.has(k)) continue; seen.add(k);
+      const horiz = Math.abs(y1 - y2) < 1e-6;
+      const c = horiz ? Math.min(Math.max(y1, e.y0 + cs / 2), e.y1 - cs / 2) : Math.min(Math.max(x1, e.x0 + cs / 2), e.x1 - cs / 2);
+      if (horiz) box(Math.max(x1, e.x0), c - cs / 2, z + H - SLAB - bd, Math.min(x2, e.x1), c + cs / 2, z + H - SLAB, beamM, g, "beam");
+      else box(c - cs / 2, Math.max(y1, e.y0), z + H - SLAB - bd, c + cs / 2, Math.min(y2, e.y1), z + H - SLAB, beamM, g, "beam");
+    }
+  }
+
   function slabOver(lv: Lv, li: number, zTop: number, isRoof: boolean, keepStairHole: boolean, g: THREE.Object3D) {
     // the slab also carries the next floor's balconies / sit-outs (cantilevers)
     const above = li + 1 < levels.length ? levels[li + 1].rooms.filter((r) => NO_SLAB.has(r.type)) : [];
@@ -613,32 +649,48 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
   }
 
   function stairs(r: Room, z: number, g: THREE.Object3D) {
-    const steps = Math.max(8, Math.round(H / 0.5));
-    const half = Math.ceil(steps / 2);
-    const run = (r.d - 3.5) / half;
-    const wHalf = r.w / 2 - 0.1;
+    // 1.18: risers / tread / type from the staircase design (plan.stair), flights along the longer side of the room
+    const so: any = (plan as any).stair || {};
+    const steps = Math.max(8, Math.ceil((H * 304.8) / (Number(so.riser_mm) || 175) - 1e-6));
+    const along = r.d >= r.w;  // u = along the flights, v = across
+    const Lu = along ? r.d : r.w, Lv = along ? r.w : r.d;
+    // flights always climb CLOCKWISE seen from above (Vastu) – the second flight is on the right-hand side of the first
+    const U = (u: number, v: number): [number, number] => (along ? [r.x + v, r.y + u] : [r.x + u, r.y + Lv - v]);
+    const ub = (u0: number, v0: number, u1: number, v1: number, z0: number, z1: number, m: THREE.Material, name: string) => {
+      const [x0, y0] = U(u0, v0), [x1, y1] = U(u1, v1);
+      box(Math.min(x0, x1), Math.min(y0, y1), z0, Math.max(x0, x1), Math.max(y0, y1), z1, m, g, name);
+    };
     const sm = style === "basic" ? std("#d6d3d1") : std("#e9e4dc", { roughness: 0.4 });
-    for (let k = 0; k < half; k++)
-      box(r.x + 0.1, r.y + 0.5 + k * run, z, r.x + 0.1 + wHalf, r.y + 0.5 + (k + 1) * run, z + (k + 1) * (H / steps), sm, g, "step");
-    box(r.x + 0.1, r.y + r.d - 3.0, z + half * (H / steps) - 0.4, r.x + r.w - 0.1, r.y + r.d - 0.1, z + half * (H / steps), sm, g, "landing");
-    for (let k = 0; k < steps - half; k++)
-      box(r.x + r.w / 2, r.y + r.d - 3.0 - (k + 1) * run, z + (half + k) * (H / steps), r.x + r.w - 0.1, r.y + r.d - 3.0 - k * run, z + (half + k + 1) * (H / steps), sm, g, "step");
-    // sloping hand rails along the inner edge of both flights
-    const railM = std("#2a2c30", { metalness: 0.5, roughness: 0.4 }, "none");
-    const rise = half * (H / steps), runL = half * run;
-    const flight = (xr: number, yA: number, yB: number, zA: number, zB: number) => {
-      const L = Math.hypot(yB - yA, zB - zA);
+    const railM = std(so.railing === "wood" ? "#7a4e2b" : so.railing === "ms" ? "#2a2c30" : "#b8bcc2", { metalness: so.railing === "wood" ? 0 : 0.6, roughness: 0.35 }, "none");
+    const rh = H / steps;
+    const rail = (vr: number, uA: number, uB: number, zA: number, zB: number) => {
+      const [xa, ya] = U(uA, vr), [xb, yb] = U(uB, vr);
+      const L = Math.hypot(Math.hypot(xb - xa, yb - ya), zB - zA);
       const m = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, L), railM);
-      m.position.set(b.x + xr, (zA + zB) / 2 + 3, -(b.y + (yA + yB) / 2));
-      m.rotation.x = Math.atan2(zB - zA, yB - yA);
+      m.position.set(b.x + (xa + xb) / 2, (zA + zB) / 2 + 3, -(b.y + (ya + yb) / 2));
+      m.lookAt(new THREE.Vector3(b.x + xb, zB + 3, -(b.y + yb)));
       g.add(m);
       for (let t = 0; t <= 1.001; t += 0.25) {  // balusters
-        const yy = yA + (yB - yA) * t, zz = zA + (zB - zA) * t;
-        box(xr - 0.04, yy - 0.04, zz, xr + 0.04, yy + 0.04, zz + 3, railM, g, "baluster");
+        const xx = xa + (xb - xa) * t, yy = ya + (yb - ya) * t, zz = zA + (zB - zA) * t;
+        box(xx - 0.04, yy - 0.04, zz, xx + 0.04, yy + 0.04, zz + 3, railM, g, "baluster");
       }
     };
-    flight(r.x + 0.1 + wHalf, r.y + 0.5, r.y + 0.5 + runL, z, z + rise);
-    flight(r.x + r.w / 2 + 0.05, r.y + r.d - 3.0, r.y + r.d - 3.0 - (steps - half) * run, z + rise, z + H);
+    if (so.type === "straight") {
+      const run = Math.min((Number(so.tread_mm) || 250) / 304.8, (Lu - 0.6) / steps);
+      for (let k = 0; k < steps; k++) ub(0.3 + k * run, 0.1, 0.3 + (k + 1) * run, Lv - 0.1, z, z + (k + 1) * rh, sm, "step");
+      rail(Lv - 0.15, 0.3, 0.3 + steps * run, z, z + H);
+      return;
+    }
+    const half = Math.ceil(steps / 2);
+    const land = Math.min(3.0, Lv / 2 + 0.3);
+    const run = Math.min((Number(so.tread_mm) || 250) / 304.8, (Lu - land - 0.5) / half);
+    const vHalf = Lv / 2 - 0.1;
+    for (let k = 0; k < half; k++) ub(0.5 + k * run, 0.1, 0.5 + (k + 1) * run, 0.1 + vHalf, z, z + (k + 1) * rh, sm, "step");
+    const uL = 0.5 + half * run;
+    ub(uL, 0.1, Math.min(Lu - 0.1, uL + land), Lv - 0.1, z + half * rh - 0.4, z + half * rh, sm, "landing");
+    for (let k = 0; k < steps - half; k++) ub(uL - (k + 1) * run, Lv / 2, uL - k * run, Lv - 0.1, z + (half + k) * rh, z + (half + k + 1) * rh, sm, "step");
+    rail(0.1 + vHalf, 0.5, uL, z, z + half * rh);
+    rail(Lv / 2 + 0.05, uL, uL - (steps - half) * run, z + half * rh, z + H);
   }
 
   function ramp(r: Room, g: THREE.Object3D) {
@@ -929,7 +981,14 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
     // ground layers are kept well apart in height so they never flicker
     plane(P.w + 160, P.d + 160, std("#6f8f55", { roughness: 1 }), P.w / 2, -P.d / 2, -0.15);
     const lawn = plantsOf(fin.plants).lawn.on;  // 1.16: lawn is your choice (else plain earth)
-    plane(P.w, P.d, lawn ? flat("grass", T.grass()) : std("#cbbf9f", { roughness: 1 }), P.w / 2, -P.d / 2, -0.05);
+    const poly: [number, number][] | null = (P as any).poly && (P as any).poly.length >= 3 ? (P as any).poly : null;  // 1.18 irregular plot
+    if (poly) {
+      const sh = new THREE.Shape(poly.map(([x, y]) => new THREE.Vector2(x, y)));
+      const geo = new THREE.ShapeGeometry(sh);
+      const uv = geo.getAttribute("uv") as THREE.BufferAttribute;
+      for (let i = 0; i < uv.count; i++) uv.setXY(i, uv.getX(i) / 8, uv.getY(i) / 8);
+      const me = add(geo, lawn ? flat("grass", T.grass()) : std("#cbbf9f", { roughness: 1 }), 0, -0.05, 0); me.rotation.x = -Math.PI / 2;
+    } else plane(P.w, P.d, lawn ? flat("grass", T.grass()) : std("#cbbf9f", { roughness: 1 }), P.w / 2, -P.d / 2, -0.05);
     plane(P.w + 160, 22, flat("asphalt", T.asphalt()), P.w / 2, 14, 0.0);
     for (let x = -70; x < P.w + 70; x += 12) plane(5, 0.4, std("#f1f1f1", { roughness: 0.6 }, "none"), x, 14, 0.06);  // lane marks
     plane(P.w + 160, 3, std("#b7b2a8"), P.w / 2, 1.5, 0.04);  // footpath
@@ -945,7 +1004,7 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
     }
     // compound wall + gate
     const gateW = park ? Math.min(Math.max(10, park.w), P.w * 0.5) : Math.min(12, P.w * 0.4);
-    const gx = park ? Math.min(Math.max(bx0 + park.x + park.w / 2 - gateW / 2, 1.5), P.w - gateW - 1.5) : P.w / 2 - gateW / 2;
+    let gx = park ? Math.min(Math.max(bx0 + park.x + park.w / 2 - gateW / 2, 1.5), P.w - gateW - 1.5) : P.w / 2 - gateW / 2;
     const wallH = style === "modern" ? 5 : 4.5;
     const cwPick = lk("compound");
     const cw = style === "traditional" ? std("#fbf3e0") : style === "contemporary" ? std("#f5f5f3") : style === "modern" ? std("#2a2c30", { roughness: 0.6 }, "none") : std("#e7e1d6");
@@ -974,8 +1033,26 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
         if (style === "contemporary" && front) mk(along ? len : 0.8, 1.2, along ? 0.8 : len, tileM(), cx, 0.6, cz);
       }
     };
-    seg(0, 0, gx, 0, true); seg(gx + gateW, 0, P.w, 0, true);
-    seg(0, P.d, P.w, P.d, false); seg(0, 0, 0, P.d, false); seg(P.w, 0, P.w, P.d, false);
+    if (poly) {  // 1.18: the compound wall follows every side of an irregular plot (sloping sides are turned)
+      const [fx0, fx1] = [Math.min(poly[0][0], poly[1][0]), Math.max(poly[0][0], poly[1][0])];
+      gx = Math.min(Math.max(gx, fx0 + 1.5), fx1 - gateW - 1.5);
+      seg(fx0, 0, gx, 0, true); seg(gx + gateW, 0, fx1, 0, true);
+      const cwM = cwPlain || (style === "modern" ? std("#e9e4db") : cw);
+      const cap = style === "traditional" ? std("#b9473a", {}, "none") : style === "contemporary" ? std("#55595f", {}, "none") : std("#c9c3b8");
+      for (let i = 1; i < poly.length; i++) {
+        const [x0, y0] = poly[i], [x1, y1] = poly[(i + 1) % poly.length];
+        const len = Math.hypot(x1 - x0, y1 - y0);
+        if (len < 0.3) continue;
+        const rotY = Math.atan2(y1 - y0, x1 - x0);  // plan y → −Z
+        for (const [h, y, w, m] of [[wallH, wallH / 2, 0.75, cwM], [0.25, wallH + 0.12, 1.0, cap]] as [number, number, number, THREE.Material][]) {
+          const geo = new THREE.BoxGeometry(len + (m === cap ? 0.2 : 0), h, w); T.worldUV(geo, len, h, w);
+          const me = add(geo, m, (x0 + x1) / 2, y, -(y0 + y1) / 2, true); me.rotation.y = rotY;
+        }
+      }
+    } else {
+      seg(0, 0, gx, 0, true); seg(gx + gateW, 0, P.w, 0, true);
+      seg(0, P.d, P.w, P.d, false); seg(0, 0, 0, P.d, false); seg(P.w, 0, P.w, P.d, false);
+    }
     // gate pillars + gate
     const gpm = style === "modern" ? stoneM() : style === "traditional" ? std("#fbf3e0") : style === "contemporary" ? tileM() : std("#d6d0c4");
     for (const px of [gx - 0.75, gx + gateW + 0.75]) {

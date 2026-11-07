@@ -65,7 +65,8 @@ export default function DrawingSheets({ pid, plan, saved, dirty, code, onSpecs }
   if (!pv) return <Card><Empty text="Preparing drawing sheets..." /></Card>;
   const sheets: [string, string][] = [["site", "A-02 Site Plan"], ...pv.levels.map((l, i) => [`plan_${i}`, `A-${String(3 + i).padStart(2, "0")} ${l} Plan`] as [string, string]),
     ["elevation", `A-${String(3 + pv.levels.length).padStart(2, "0")} Front Elevation`], ["section", `A-${String(4 + pv.levels.length).padStart(2, "0")} Section A-A`],
-    ...(pv.svgs.roof ? [["roof", `A-${String(5 + pv.levels.length).padStart(2, "0")} Roof Plan (sheet roof)`], ["truss", `A-${String(6 + pv.levels.length).padStart(2, "0")} Truss & Purlin Detail`]] as [string, string][] : [])];
+    ...(pv.svgs.roof ? [["roof", `A-${String(5 + pv.levels.length).padStart(2, "0")} Roof Plan (sheet roof)`], ["truss", `A-${String(6 + pv.levels.length).padStart(2, "0")} Truss & Purlin Detail`]] as [string, string][] : []),
+    ...(pv.svgs.stair ? [["stair", `A-${String(5 + pv.levels.length + (pv.svgs.roof ? 2 : 0)).padStart(2, "0")} Staircase Detail`]] as [string, string][] : [])];
   const a = pv.area;
   return (
     <div className="space-y-4">

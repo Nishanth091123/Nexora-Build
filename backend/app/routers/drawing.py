@@ -57,8 +57,12 @@ def run_analysis(f: StoredFile, data: bytes, page: int = 0) -> tuple[str, str, d
                 return "pdf", "", ext, res
         info = ext.get("info", {})
         try:
-            v = vision.read_plan(data, "application/pdf", (info.get("page_w", 842), info.get("page_h", 595)),
-                                 image_fallback=pdf_reader.largest_image(data, page))
+            png = pdf_reader.render_page(data, info.get("page", 0))
+            if png:  # 1.18: a sharp picture of the right page works with every AI provider
+                v = vision.read_plan(png[0], "image/png")
+            else:
+                v = vision.read_plan(data, "application/pdf", (info.get("page_w", 842), info.get("page_h", 595)),
+                                     image_fallback=pdf_reader.largest_image(data, info.get("page", 0)))
         except LLMError as e:
             raise HTTPException(422, {"message": "This PDF has no readable lines / text and the AI reader failed.",
                                       "questions": [str(e)[:300], "Upload a DXF (best) or a clear JPG/PNG of the plan."]})
@@ -81,6 +85,10 @@ def run_analysis(f: StoredFile, data: bytes, page: int = 0) -> tuple[str, str, d
 def _finish(db: Session, user: User, f: StoredFile, page: int) -> dict:
     data = backend_for(f.storage_backend).read(f.storage_key)
     method, model, ext, res = run_analysis(f, data, page)
+    pw = (ext.get("info") or {}).get("pages_with_plans") or []
+    if len(pw) > 1:
+        ext.setdefault("warnings", []).append(f"Plans found on PDF pages {', '.join(map(str, pw))} – page {(ext.get('info') or {}).get('page', 0) + 1} was read. "
+                                              "Choose another page and press Analyse again for the other floors (then “Add to design”).")
     qs = list(ext.get("questions", []))
     if not any(r["placed"] for r in res["rooms"]):
         qs.append("No room could be placed automatically – add / place the rooms in the table or the 2D editor.")
@@ -98,7 +106,7 @@ def _finish(db: Session, user: User, f: StoredFile, page: int) -> dict:
 
 
 @router.post("/projects/{project_id}/drawings/upload")
-async def upload_and_analyse(project_id: int, file: UploadFile = File(...), page: int = Form(0),
+async def upload_and_analyse(project_id: int, file: UploadFile = File(...), page: int = Form(-1),
                              user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     require_any(db, user, project_id, MODS)
     name, data, ctype = await read_and_check(file)
@@ -110,7 +118,7 @@ async def upload_and_analyse(project_id: int, file: UploadFile = File(...), page
 
 
 @router.post("/files/{file_id}/analyse")
-def analyse_existing(file_id: int, page: int = 0, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+def analyse_existing(file_id: int, page: int = -1, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     f = db.get(StoredFile, file_id)
     if not f or not f.project_id:
         raise HTTPException(404, "File not found")
@@ -226,6 +234,10 @@ def confirm(analysis_id: int, body: ConfirmIn, user: User = Depends(get_current_
     db.commit()
     a.status = "confirmed"
     a.design_id = d.id
+    from ..models import Project
+    proj = db.get(Project, a.project_id)
+    if proj:
+        proj.active_design_id = d.id  # 1.18: the uploaded drawing becomes the project's active drawing
     db.commit()
     log_action(db, user, "confirmed", "drawing", a.id, f"{a.file_name} → design v{ver}", project_id=a.project_id)
     return design_summary(d) | {"plan": plan, "estimate": q}

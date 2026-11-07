@@ -211,7 +211,17 @@ export function stageTips(stages: Stage[], days: Day[], lang: Lang): (Tip & { st
   }
   // at most 2 tips per stage, 4 in total
   const per: Record<string, number> = {};
-  return out.filter((t) => (per[t.stage] = (per[t.stage] || 0) + 1) <= 2).slice(0, 4);
+  return out.filter((t) => (per[t.stage] = (per[t.stage] || 0) + 1) <= 2).slice(0, 6);
+}
+
+/** When no daily work or schedule is entered yet: the usual house-site works, so the tips are never empty. */
+export function genericStages(lang: Lang): Stage[] {
+  return [
+    { name: L(lang, ["Concrete / slab work", "கான்கிரீட் / ஸ்லாப் வேலை"]), group: "slab", progress: 0 },
+    { name: L(lang, ["Brick / block work", "செங்கல் / பிளாக் வேலை"]), group: "masonry", progress: 0 },
+    { name: L(lang, ["Plastering", "பூச்சு வேலை"]), group: "plaster", progress: 0 },
+    { name: L(lang, ["Painting", "பெயிண்ட் வேலை"]), group: "paint", progress: 0 },
+  ];
 }
 
 /** Week summary for the planner chips. */

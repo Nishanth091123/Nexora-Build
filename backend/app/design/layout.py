@@ -689,9 +689,45 @@ def generate(req: dict, _probe: bool = False) -> dict:
     if q:
         raise LayoutError(q)
     n = len(levels)
+    shape = req.get("plot_shape") if isinstance(req.get("plot_shape"), dict) else None
+    poly = pinfo = None
+    if shape:  # 1.18 irregular plot: frontage = the road side, depth = the deepest point
+        from .plot import PlotError, buildable as poly_buildable, info as poly_info, polygon
+        try:
+            poly = polygon(shape)
+        except PlotError as e:
+            raise LayoutError(e.questions)
+        pinfo = poly_info(poly)
+        req = {**req, "plot_w_ft": pinfo["sides_ft"][0], "plot_d_ft": pinfo["d"]}
     sb = tn_setbacks(float(req["plot_w_ft"]), float(req["plot_d_ft"]), float(req["road_width_m"]), n,
                      float(req.get("floor_height_ft") or 10), req.get("area_type", "other"), bool(req.get("corner")),
                      req.get("side_road_width_m"), req.get("one_side", "left"))
+    man = {k: float(v) for k, v in (req.get("setback_override") or {}).items()
+           if k in ("front", "rear", "left", "right") and v not in (None, "") and float(v) >= 0}
+    if man:  # 1.18 Auto + Manual: the user's own setbacks win; the rule values stay for the compliance check
+        eff = {**sb["ft"], **man}
+        pw, pd = float(req["plot_w_ft"]), float(req["plot_d_ft"])
+        bw0, bd0 = round(pw - eff["left"] - eff["right"], 2), round(pd - eff["front"] - eff["rear"], 2)
+        if bw0 < 10 or bd0 < 15:
+            raise LayoutError([f"With your setbacks only {bw0:.1f} × {bd0:.1f} ft remains – too small for a house."])
+        below = [k for k, v in man.items() if v + 1e-6 < sb["ft"][k]]
+        sb = {**sb, "ft_rule": sb["ft"], "ft": eff, "manual": sorted(man),
+              "buildable": {"x": eff["left"], "y": eff["front"], "w": bw0, "d": bd0}}
+        sb["notes"] = list(sb.get("notes") or []) + [f"Manual setbacks used for: {', '.join(sorted(man))}" +
+                                                       (f" – {', '.join(below)} below the TNCDBR value (check with the local body)." if below else ".")]
+    if poly:
+        try:
+            bb = poly_buildable(poly, sb["ft"], shape.get("road_sides"))
+        except PlotError as e:
+            raise LayoutError(e.questions)
+        if bb["w"] < 10 or bb["d"] < 15:
+            raise LayoutError([f"After the setbacks only {bb['w']:.1f} × {bb['d']:.1f} ft fits as a rectangle on this plot – too small for a house."])
+        sb = {**sb, "buildable": {k: bb[k] for k in ("x", "y", "w", "d")}, "edge_kinds": bb["edge_kinds"],
+              "edge_setbacks_ft": bb["edge_setbacks_ft"],
+              "coverage_pct": round(100 * bb["w"] * bb["d"] / max(pinfo["area_sqft"], 1), 1)}
+        sb["notes"] = list(sb.get("notes") or []) + [
+            f"Irregular plot ({len(poly)} sides, {pinfo['area_sqft']:g} sq ft): setbacks kept from every side; the house is the "
+            f"largest rectangle that fits ({bb['w']:g}' × {bb['d']:g}'). Left-over corners → garden / parking / sump."]
     b = sb["buildable"]
     bw, bd = math.floor(b["w"] * 4) / 4, math.floor(b["d"] * 4) / 4  # snap to 3" grid, never into setbacks
     comp = compass(req["facing"])
@@ -721,7 +757,8 @@ def generate(req: dict, _probe: bool = False) -> dict:
         i += 1
     plan = {
         "version": 1, "units": "ft",
-        "plot": {"w": float(req["plot_w_ft"]), "d": float(req["plot_d_ft"])},
+        "plot": ({"w": pinfo["w"], "d": pinfo["d"], "poly": [list(p) for p in poly], "info": pinfo, "edges": sb["edge_kinds"]}
+                 if poly else {"w": float(req["plot_w_ft"]), "d": float(req["plot_d_ft"])}),
         "facing": req["facing"], "compass": comp, "setbacks": sb,
         "building": {"x": b["x"], "y": b["y"], "w": bw, "d": bd},
         "floor_height_ft": float(req.get("floor_height_ft") or 10),

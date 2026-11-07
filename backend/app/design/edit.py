@@ -82,7 +82,7 @@ def clean_plan(plan: dict) -> dict:
     if isinstance(fin, dict) and fin.get("style") in ("basic", "modern", "contemporary", "traditional"):
         clean["style"] = fin["style"]  # 1.13: 3D elevation style
     # 1.15 material library picks: {slot: "b:<built-in id>" | "c:<your item id>"} and per room {"floor:room id": {wall, floor}}
-    ref = _re.compile(r"(b|c):[A-Za-z0-9_-]{1,40}")
+    ref = _re.compile(r"(b|c|m):[A-Za-z0-9_:-]{1,40}")  # 1.18 m: = Material Library shade / tile
     slots = ("ext_wall", "cladding", "plinth", "roof", "door", "frame", "compound", "int_wall", "ceiling", "floor",
              "wet_floor", "wet_wall", "counter")
     if isinstance(fin, dict) and isinstance(fin.get("mat"), dict):
@@ -115,6 +115,25 @@ def clean_plan(plan: dict) -> dict:
     from .roof import clean as clean_roof
     if "roof_sheets" in plan:
         plan["roof_sheets"] = clean_roof(plan.get("roof_sheets"), plan)
+    # 1.18 staircase choices (everything else is worked out from the plan)
+    if isinstance(plan.get("stair"), dict):
+        st, out = plan["stair"], {}
+        if st.get("type") in ("auto", "straight", "dog_legged", "l_shape", "u_shape", "spiral"):
+            out["type"] = st["type"]
+        for k, lo, hi in (("width_ft", 2.5, 8), ("riser_mm", 120, 220), ("tread_mm", 200, 400), ("waist_mm", 100, 300), ("dia_mm", 1200, 3000)):
+            if st.get(k) not in (None, ""):
+                v = float(st[k])
+                if not lo <= v <= hi:
+                    raise PlanError(f"Staircase {k.split('_')[0]} must be {lo}–{hi} {k.split('_')[1]}.")
+                out[k] = v
+        if st.get("finish") in ("granite", "tiles", "kota", "cement"):
+            out["finish"] = st["finish"]
+        if st.get("railing") in ("ss", "ms", "glass", "wood"):
+            out["railing"] = st["railing"]
+        out["internal"] = bool(st.get("internal", True))
+        plan["stair"] = out
+    elif "stair" in plan:
+        plan.pop("stair")
     return plan
 
 

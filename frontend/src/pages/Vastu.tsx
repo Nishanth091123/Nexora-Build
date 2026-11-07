@@ -28,7 +28,7 @@ type Result = { checks: Check[]; overview: Record<string, { status: string; room
   mandala?: { after: string; dx: number; dy: number }[]; questions?: Question[];
   summary: { matched: number; partly: number; not_matched: number; total: number; label: string };
   suggestions: string[]; tips: string[]; north_deg: number; facing: string; note: string };
-type DesignRow = { id: number; version: number; title: string; source: string; builtup_sqft: number; created_at: string };
+type DesignRow = { id: number; version: number; title: string; source: string; builtup_sqft: number; created_at: string; active?: boolean };
 type Option = { label: string; changes: string[]; plan: Plan; score: number; summary: Result["summary"]; floors: Floor[]; remaining: string[] };
 
 const ICON: Record<string, any> = { entrance: DoorOpen, door_pada: DoorOpen, hall: Sofa, kitchen: CookingPot, master: BedDouble, bedroom: BedSingle,
@@ -134,7 +134,7 @@ export default function VastuPage() {
     setPlan(null); setRes(null); setStep(1); setLevel(0);
     const want = Number(params.get("design")) || 0;
     loadDesigns().then((d) => {
-      const pick = d.find((x) => x.id === want) || d[0];
+      const pick = d.find((x) => x.id === want) || d.find((x: any) => x.active) || d[0];
       if (pick) { setDesignId(pick.id); analyse(pick.id); }
     }).catch((e) => toast(e.message, "err"));
     api<any[]>(`/api/projects/${pid}/vastu/reports`).then(setReports).catch(() => {});

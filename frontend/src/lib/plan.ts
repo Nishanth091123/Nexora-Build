@@ -16,7 +16,7 @@ export type Setbacks = {
   coverage_pct: number; notes: string[];
 };
 export type Plan = {
-  version: number; units: string; plot: { w: number; d: number }; facing: string;
+  version: number; units: string; plot: { w: number; d: number; poly?: number[][]; info?: any; edges?: string[] }; facing: string;
   compass: { up: [number, number]; right: [number, number] }; setbacks: Setbacks;
   building: { x: number; y: number; w: number; d: number }; floor_height_ft: number; levels: Level[];
   roof_sheets?: any[];

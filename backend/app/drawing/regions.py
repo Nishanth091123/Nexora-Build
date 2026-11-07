@@ -27,6 +27,13 @@ ROOM_WORDS = [
     ("balcony", "balcony"), ("terrace", "terrace"), ("open", "terrace"),
     ("passage", "passage"), ("lobby", "passage"), ("corridor", "passage"), ("foyer", "passage"),
     ("dress", "dress"), ("wardrobe", "dress"), ("study", "bedroom"), ("office", "bedroom"),
+    # 1.18: more labels seen on Tamil Nadu drawings
+    ("mbr", "bedroom"), ("m.bed", "bedroom"), ("k.bed", "bedroom"), ("bdrm", "bedroom"),
+    ("kitchenette", "kitchen"), ("work area", "utility"), ("wash area", "utility"), ("washing", "utility"),
+    ("attached", "toilet"), ("c.toilet", "toilet"), ("common toilet", "toilet"), ("toi", "toilet"), ("w/c", "toilet"),
+    ("car park", "parking"), ("two wheeler", "parking"), ("bike", "parking"), ("entrance", "sitout"),
+    ("thinnai", "sitout"), ("courtyard", "terrace"), ("mutram", "terrace"), ("o.t.s", "terrace"), ("ots", "terrace"),
+    ("living cum dining", "hall"), ("hall cum dining", "hall"), ("sit-out", "sitout"), ("deck", "balcony"),
 ]
 NOT_ROOM = re.compile(r"^(n|north|scale|plan|ground floor|first floor|second floor|site plan|road|\d+(\.\d+)?)$", re.I)
 

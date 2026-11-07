@@ -28,7 +28,12 @@ Rules:
 - Feet-inches like 12'6" become 12.5 (feet). Metric like 3.60 x 3.00 -> units "m".
 - Include every labelled space: bedrooms, toilets, kitchen, hall/living, dining, pooja, staircase, parking, sit-out,
   utility, store, balcony, passage. Keep the label text as written (e.g. "M.Bed", "Toilet", "Car Parking").
-- bbox must be tight around the room's walls."""
+- bbox must be tight around the room's walls.
+- If the sheet has more than one plan (e.g. GROUND FLOOR and FIRST FLOOR side by side), list every floor in "floors"
+  and give each room the right "floor" index. Ignore elevations, sections, schedules and the title block.
+- Sizes are usually written under the room name; dimension lines along the outside give overall sizes – do not copy an
+  overall dimension into a single room.
+- Read carefully: 10'6" is 10.5, 9'9" is 9.75, 3.60 is metres. Copy digits exactly; when unsure set confidence below 0.6."""
 
 
 def image_size(blob: bytes) -> tuple[int, int]:

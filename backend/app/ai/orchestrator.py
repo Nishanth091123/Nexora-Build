@@ -87,6 +87,26 @@ def _ambiguous_rooms(text: str) -> bool:
                 and not re.search(r"bhk|bed\s*rooms?|bedrooms?", t))
 
 
+GREETING = re.compile(r"^\s*(hi+|hello|hey|hai|vanakkam|good (morning|afternoon|evening)|thanks?|thank you|thx|ok(ay)?|nandri|"
+                      r"வணக்கம்|நன்றி|சரி)[\s!.,🙏]*$", re.I)
+
+
+def quick_route(text: str) -> str | None:
+    """1.18: messages whose tool is obvious – answered without the AI router (one AI call instead of two)."""
+    t = " " + (text or "").lower() + " "
+    if GREETING.match(text or ""):
+        return "chat"
+    if re.search(r"\d", t):
+        return None  # numbers → the router reads them (plot sizes, areas…)
+    if re.search(r"vastu|vaastu|vasthu|வாஸ்து", t):
+        return "vastu"
+    if re.search(r"site status|progress today|today.*site|site.*today|behind schedule|\bdpr\b", t):
+        return "site"
+    if re.search(r"my document|my file|uploaded (doc|file)|in the contract|agreement says|soil report|ஆவண", t):
+        return "docs"
+    return None
+
+
 def regex_route(text: str, agent: str, has_attachment: bool, pending: dict | None) -> tuple[str, dict]:
     t = " " + (text or "").lower() + " "
     if has_attachment:
@@ -278,7 +298,7 @@ def llm_route(text: str, agent: str, history: str, pending: dict | None, last_pl
     pend = json.dumps({k: pending.get(k) for k in ("tool", "kind") if pending.get(k)}) if pending else "nothing"
     prompt = ROUTER_PROMPT.format(kinds=kinds, params=params, agent=AGENTS[agent][0], pending=pend,
                                   last_plan=last_plan or "none", history=history or "(none)", text=text)
-    data, prov = llm.ask(prompt, want_json=True, order=order, budget=15)  # router: quick, else pattern reader
+    data, prov = llm.ask(prompt, want_json=True, order=order, budget=12)  # router: quick, else pattern reader
     tool = str(data.get("tool", "")).strip().lower()
     if tool not in TOOLS:
         raise ValueError(f"router returned {tool!r}")
@@ -391,6 +411,10 @@ def respond(db: Session, user: User, conv: AIConversation, text: str, perms: dic
         # "20x40, 4 rooms – cost?": rooms could mean bedrooms or all rooms → always the tool that asks
         # (never left to the AI model, which sometimes answered with a guess)
         tool, args = regex_route(text, agent, False, pending)
+    elif not pending and quick_route(text):
+        # 1.18 speed: greetings, Vastu, site status and document questions are clear – no AI routing round-trip
+        tool = quick_route(text)
+        args = {"query": text} if tool == "docs" else {}
     else:
         try:
             if not any(llm.keys().values()):
@@ -500,7 +524,7 @@ def respond(db: Session, user: User, conv: AIConversation, text: str, perms: dic
     try:
         if not any(llm.keys().values()):
             raise llm.LLMError("No AI keys in .env")
-        content, prov = llm.ask(prompt, want_json=False, temperature=0.3, order=order, min_chars=20, budget=35)
+        content, prov = llm.ask(prompt, want_json=False, temperature=0.3, order=order, min_chars=20, budget=30)
         content = str(content).strip()
         provider_used.append(prov)
     except Exception as e:

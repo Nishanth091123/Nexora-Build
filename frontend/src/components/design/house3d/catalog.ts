@@ -8,7 +8,7 @@ export type Item = {
   ref: string; cat: Cat; name: string; color: string; brand?: string; code?: string;
   tex?: "stone" | "wood" | "tiles" | "marble" | "granite" | "brick" | "floor" | "mosaic" | "roof" | "pavers";
   tile?: number; rough?: number; metal?: number; n?: number;  // n = tiles per texture (floor / wall tiles)
-  image?: string | null; custom?: boolean; finish?: string; rate?: number | null; unit?: string; id?: number;
+  image?: string | null; custom?: boolean; finish?: string; rate?: number | null; unit?: string; id?: number; market?: boolean;
 };
 export type Look = { color: string; map: THREE.Texture | null; tile: number; rough: number; metal: number };
 

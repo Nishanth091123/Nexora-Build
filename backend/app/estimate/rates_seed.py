@@ -60,6 +60,8 @@ RATES: list[tuple] = [
     # ---------------- materials: external ----------------
     ("compound_wall", "material", "External Works", "Compound wall materials (1.5 m high, per running metre)", "rmt", 2600, 3000, 3600, "Foundation + brick + plaster + coping"),
     ("gate", "material", "External Works", "MS gate (fabricated, painted)", "nos", 25000, 40000, 75000, ""),
+    ("stair_railing", "material", "Doors & Windows", "Staircase railing with handrail (supply & fix)", "rmt", 1500, 2600, 4500,
+     "Basic MS painted · Standard SS 202 · Premium SS 304 / glass"),
     ("rwh", "material", "External Works", "Rain water harvesting pit (complete)", "nos", 15000, 20000, 30000, "Mandatory in Tamil Nadu"),
     ("parking_floor", "material", "External Works", "Parking / sit-out paver or tiles", "m2", 450, 650, 1100, ""),
 

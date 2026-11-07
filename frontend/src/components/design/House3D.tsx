@@ -110,7 +110,26 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
     setCustom([...its]); setPhotoVer((v) => v + 1);
   }).catch(() => {});
   useEffect(() => { loadLibrary(); }, []);  // eslint-disable-line react-hooks/exhaustive-deps
-  const items = useMemo(() => [...BUILTIN, ...custom], [custom]);
+  // 1.18: shades / tiles from the Material Library (brand lists with a colour) can be picked in 3D too
+  const [market, setMarket] = useState<Item[]>([]);
+  useEffect(() => {
+    api<any>("/api/market").then((r) => {
+      const bn = new Map<number, string>((r.brands || []).map((b: any) => [b.id, b.name]));
+      const MAP: Record<string, Partial<Item>[]> = {
+        paint_interior: [{ cat: "paint" }], paint_exterior: [{ cat: "paint" }],
+        floor_tiles: [{ cat: "flooring", tex: "floor", n: 2, tile: 4, rough: 0.3 }], wall_tiles: [{ cat: "wall_tile", tex: "floor", n: 4, tile: 4, rough: 0.2 }],
+        granite_marble: [{ cat: "flooring", tex: "granite", tile: 2, rough: 0.25 }, { cat: "counter", tex: "granite", tile: 2, rough: 0.2 }],
+      };
+      const out: Item[] = [];
+      for (const v of r.variants || []) {
+        if (!v.color || !MAP[v.category]) continue;
+        MAP[v.category].forEach((m, k) => out.push({ ref: k ? `m:${v.id}:${k}` : `m:${v.id}`, name: v.name, brand: bn.get(v.brand_id) || "", code: v.code, color: v.color,
+          rate: v.rate, unit: v.unit, finish: v.spec?.finish === "gloss" ? "gloss" : v.spec?.finish === "sheen" ? "satin" : "matt", market: true, ...m } as Item));
+      }
+      setMarket(out);
+    }).catch(() => {});
+  }, []);
+  const items = useMemo(() => [...BUILTIN, ...custom, ...market], [custom, market]);
   const byRef = useMemo(() => new Map(items.map((i) => [i.ref, i])), [items]);
   const swatches = useRef(new Map<string, string>());
   const swatch = (it: Item) => {
@@ -141,7 +160,7 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
   const smooth = useRef({ x: 0, y: 0, h: 0, yaw: 0, pitch: 0 });
 
   // geometry key: the camera is reset only when the SHAPE of the plan changes (not on colour changes)
-  const planKey = useMemo(() => JSON.stringify({ l: plan.levels.map((l) => [l.rooms, l.openings, l.walls]), b: plan.building, p: plan.plot, h: plan.floor_height_ft, rs: (plan as any).roof_sheets }), [plan]);
+  const planKey = useMemo(() => JSON.stringify({ l: plan.levels.map((l) => [l.rooms, l.openings, l.walls]), b: plan.building, p: plan.plot, h: plan.floor_height_ft, rs: (plan as any).roof_sheets, st: (plan as any).stair }), [plan]);
   const planRef = useRef(plan); planRef.current = plan;
   const lightRef = useRef(light); lightRef.current = light;
   const centre = useMemo(() => {
@@ -723,7 +742,9 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
               <div key={k} className="flex flex-wrap items-center gap-1.5">
                 <span className="w-28 shrink-0 text-xs text-slate-500">{FIN_LABEL[k]}</span>
                 {SWATCHES[k].map(([col, name]) => (
-                  <button key={col} title={name} onClick={() => onFinishes?.({ ...fin, [k]: col })}
+                  <button key={col} title={name} onClick={() => {  // 1.18: a quick colour replaces a library pick on the same walls
+                    const mat = { ...(fin.mat || {}) }; delete mat[k === "ext" ? "ext_wall" : "int_wall"]; onFinishes?.({ ...fin, [k]: col, mat });
+                  }}
                     className={`h-6 w-6 rounded-md border ${fin[k] === col ? "ring-2 ring-brand-500 ring-offset-1" : "border-slate-300"}`} style={{ background: col }} />
                 ))}
               </div>

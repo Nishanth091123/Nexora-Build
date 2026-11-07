@@ -9,7 +9,7 @@ import { api } from "../../lib/api";
 import { useAuth } from "../../lib/auth";
 import { useI18n, type Lang } from "../../lib/i18n";
 import {
-  bestHours, bestPourDay, curingDays, geocode, getForecast, placeName, pourOk, pourReason, pourScore, safetyAlert, searchPlaces, sky, stageTips, todayTips, weekSummary, type Place,
+  bestHours, bestPourDay, curingDays, genericStages, geocode, getForecast, placeName, pourOk, pourReason, pourScore, safetyAlert, searchPlaces, sky, stageTips, todayTips, weekSummary, type Place,
   type Forecast, type Stage, type Tip, type Tone,
 } from "../../lib/siteWeather";
 
@@ -27,7 +27,7 @@ const TONE: Record<Tone, string> = {
 };
 const TONE_ICON: Record<Tone, string> = { good: "bg-emerald-500", warn: "bg-amber-500", bad: "bg-red-500", info: "bg-sky-500" };
 
-type Ctx = { project: any; stages: Stage[]; curing: { title: string; location: string; cast_on: string; day: number }[]; can_set_location: boolean };
+type Ctx = { project: any; stages: Stage[]; today_work?: (Stage & { date?: string })[]; curing: { title: string; location: string; cast_on: string; day: number }[]; can_set_location: boolean };
 export type Sel = { kind: "project" } | { kind: "gps" } | ({ kind: "place" } & Place);
 export type WeatherState = {
   ctx: Ctx | null; fc: Forecast | null; place: string; err: string; loading: boolean; needPlace: boolean; approx: number;
@@ -298,7 +298,11 @@ export function WeekWeatherRow({ w }: { w: WeatherState }) {
   const best = bestPourDay(days);
   const bd = best ? days[best.index] : null;
   const cureN = curingDays(days);
-  const tips = stageTips(w.ctx?.stages || [], days, lang);
+  const work = w.ctx?.today_work || [];
+  const sched = w.ctx?.stages || [];
+  let tips = stageTips(work.length ? work : sched, days, lang);
+  const tipSrc: "work" | "schedule" | "general" = work.length && tips.length ? "work" : sched.length && tips.length ? "schedule" : "general";
+  if (!tips.length) tips = stageTips(genericStages(lang), days, lang);
   const curing = (w.ctx?.curing || []).filter((c) => c.day <= cureN + 2);
   const hotToday = days[0].tmax >= 35;
   const ws = weekSummary(days);
@@ -375,17 +379,18 @@ export function WeekWeatherRow({ w }: { w: WeatherState }) {
           )}
           <p className="mt-2 text-[10px] text-slate-400">{T(lang, `IS 456: keep concrete wet ${cureN} days${cureN === 10 ? " (hot weather / PPC)" : " (OPC; 10 days for PPC or hot weather)"}.`, `IS 456: கான்கிரீட்டை ${cureN} நாள் ஈரமாக வை.`)}</p>
         </Card>
-        <Card title={T(lang, "Tips for current work", "நடப்பு வேலைக்கான குறிப்புகள்")} icon={<HardHat size={20} />}>
-          {!tips.length ? <p className="text-sm text-slate-500">{T(lang, "Create the project schedule (Site → Overview) to get tips for each stage of work.", "ஒவ்வொரு வேலை கட்டத்திற்கும் குறிப்புகள் பெற திட்ட அட்டவணையை உருவாக்கவும் (Site → Overview).")}</p> : (
-            <div className="grid gap-3">
-              {Array.from(new Set(tips.map((t) => t.stage))).map((st) => (
-                <div key={st}>
-                  <div className="mb-1 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-500"><HardHat size={13} />{st}</div>
-                  <div className="grid gap-2">{tips.filter((t) => t.stage === st).map((t) => <TipTile key={t.key} tip={t} />)}</div>
-                </div>
-              ))}
-            </div>
-          )}
+        <Card title={T(lang, "Today's work – weather tips", "இன்றைய வேலை – வானிலை குறிப்புகள்")} icon={<HardHat size={20} />}>
+          <p className="mb-2 text-[11px] text-slate-500">{tipSrc === "work" ? T(lang, "From today's work in Site → Daily Work", "Site → Daily Work-ல் உள்ள இன்றைய வேலையிலிருந்து")
+            : tipSrc === "schedule" ? T(lang, "From the current stages of the schedule", "அட்டவணையின் நடப்பு கட்டங்களிலிருந்து")
+            : T(lang, "Usual site work – add today's work in Site → Daily Work for exact tips", "வழக்கமான வேலைகள் – சரியான குறிப்புகளுக்கு Site → Daily Work-ல் இன்றைய வேலையை சேர்")}</p>
+          <div className="grid gap-3">
+            {Array.from(new Set(tips.map((t) => t.stage))).map((st) => (
+              <div key={st}>
+                <div className="mb-1 flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wide text-slate-500"><HardHat size={13} />{st}</div>
+                <div className="grid gap-2">{tips.filter((t) => t.stage === st).map((t) => <TipTile key={t.key} tip={t} />)}</div>
+              </div>
+            ))}
+          </div>
         </Card>
       </div>
     </div>

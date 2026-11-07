@@ -42,6 +42,8 @@ def work_of(i: dict) -> str:
         return "roofing"
     if cat == "Earthwork":
         return "excavation"
+    if "staircase railing" in d or "staircase treads" in d:  # 1.18
+        return "staircase"
     if cat == "Concrete (PCC)" or (i["floor"] in ("Foundation", "Plinth") and cat in STRUCT + ("Masonry",)):
         return "foundation"
     if cat in STRUCT:

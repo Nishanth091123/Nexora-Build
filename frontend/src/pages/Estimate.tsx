@@ -18,6 +18,7 @@ import { useI18n } from "../lib/i18n";
 
 type Item = {
   sl: number; category: string; group: string; description: string; floor: string; qty: number; unit: string;
+  key?: string; manual?: boolean; auto_qty?: number;
   rate: number; material_cost: number; labour_cost: number; equipment_cost: number; amount: number;
   materials: { name: string; qty: number; unit: string; rate: number; amount: number }[];
   labour: { name: string; days: number; rate: number; amount: number }[];
@@ -298,6 +299,7 @@ export default function EstimatePage() {
   }, [pid]);
 
   const [defaults, setDefaults] = useState<any>(null);
+  const [active, setActive] = useState<any>(null);  // 1.18: project's active drawing
   const openVersion = async (id: number, base?: any) => {
     const e = await api<any>(`/api/estimates/${id}`);
     setInputs({ ...(base || defaults || {}), ...e.inputs }); setNeeds([]); setResult(e.result); setState(e.rate_state); setSaved({ id: e.id, version: e.version, title: e.title }); setDirty(false);
@@ -310,9 +312,20 @@ export default function EstimatePage() {
       try {
         const d = await api<any>(`/api/projects/${pid}/estimate-defaults`);
         setInputs(d.inputs); setDefaults(d.inputs); setState(d.state); setNeeds(d.needs_confirmation);
+        setActive(d.active_design || null);
         const v = await loadVersions();
+        const act = d.active_design;
         if (designParam) await applyDesign(Number(designParam), d.inputs);
-        else if (v.length) await openVersion(v[0].id, d.inputs);
+        else if (v.length) {
+          // 1.18: a saved estimate is opened only when it was made from the project's active drawing;
+          // after a new upload / save the estimate is recalculated from that drawing automatically (old versions stay)
+          const e = await api<any>(`/api/estimates/${v[0].id}`);
+          const madeFromNone = !e.inputs?.design_id && !e.inputs?.geometry;
+          if (act && e.inputs?.design_id !== act.id && !(madeFromNone && e.inputs?.source === "excel")) {
+            toast(`Drawing v${act.version} is the active drawing – estimate recalculated from it (old estimate versions are kept)`);
+            await applyDesign(act.id, d.inputs, true);
+          } else await openVersion(v[0].id, d.inputs);
+        } else if (act) await applyDesign(act.id, d.inputs, true);
         else setShowInputs(true);
       } catch (e: any) { toast(e.message, "err"); }
     })();
@@ -320,13 +333,13 @@ export default function EstimatePage() {
 
   useEffect(() => { api(`/api/rates?state=${encodeURIComponent(state)}`).then((d) => setRates(d.items)).catch(() => {}); }, [state]);
 
-  const applyDesign = async (id: number, base?: any) => {
+  const applyDesign = async (id: number, base?: any, quiet = false) => {
     setDesignPick(null);
     try {
       const d = await api<any>(`/api/designs/${id}/estimate-inputs`);
-      const inp = { ...(base || defaults || inputs || {}), ...d.inputs };
+      const inp = { ...(base || defaults || inputs || {}), ...d.inputs, ...(inputs?.qty_overrides ? { qty_overrides: inputs.qty_overrides } : {}) };  // manual quantities stay
       setInputs(inp); setNeeds([]); setSaved(null);
-      toast(`Using design v${d.design.version} – quantities measured from the drawing`);
+      if (!quiet) toast(`Using design v${d.design.version} – quantities measured from the drawing`);
       await calculate(undefined, inp);
     } catch (e: any) { toast(e.message, "err"); }
   };
@@ -464,13 +477,34 @@ export default function EstimatePage() {
     </div>
   );
 
+  // 1.18 Auto + Manual: type your own quantity – it wins; the auto value stays visible with a reset button
+  const setQty = async (it: Item, v: number | null) => {
+    if (!it.key) return;
+    const ov = { ...(inputs?.qty_overrides || {}) };
+    if (v === null) delete ov[it.key]; else ov[it.key] = v;
+    const inp = { ...(inputs || {}), qty_overrides: ov };
+    setInputs(inp);
+    await calculate(undefined, inp);
+  };
+  const qtyInner = (i: Item) => (
+    <>
+      <div className="flex items-center justify-end gap-1">
+        {i.manual && <span className="rounded bg-amber-100 px-1 text-[9px] font-bold text-amber-800" title={`Auto value: ${num(i.auto_qty || 0)}`}>MANUAL</span>}
+        <QtyInput value={i.qty} onSave={(v) => setQty(i, v)} />
+        {i.manual && <button className="rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-brand-600" title={`Back to auto (${num(i.auto_qty || 0)})`} onClick={(e) => { e.stopPropagation(); setQty(i, null); }}>↺</button>}
+      </div>
+      {i.manual && <div className="text-[10px] text-slate-400">auto {num(i.auto_qty || 0)}</div>}
+    </>
+  );
+  const qtyCell = (i: Item) => <td className="table-td text-right">{qtyInner(i)}</td>;
+
   const takeoffTable = (
     <div className="overflow-x-auto rounded-lg border border-line">
       <table className="w-full min-w-[720px]">
         <thead><tr><th className="table-th">#</th><th className="table-th">Item</th><th className="table-th">Floor</th><th className="table-th text-right">Quantity</th><th className="table-th">Unit</th><th className="table-th text-right">Rate (₹)</th><th className="table-th text-right">Amount (₹)</th></tr></thead>
         <tbody>{items.map((i) => (
           <tr key={i.sl}><td className="table-td">{i.sl}</td><td className="table-td text-navy-ink">{i.description}</td><td className="table-td text-xs text-slate-500">{i.floor}</td>
-            <td className="table-td text-right">{num(i.qty)}</td><td className="table-td">{i.unit}</td><td className="table-td text-right">{inr(i.rate)}</td><td className="table-td text-right font-semibold">{inr(i.amount)}</td></tr>
+            {qtyCell(i)}<td className="table-td">{i.unit}</td><td className="table-td text-right">{inr(i.rate)}</td><td className="table-td text-right font-semibold">{inr(i.amount)}</td></tr>
         ))}</tbody>
       </table>
     </div>
@@ -528,7 +562,7 @@ export default function EstimatePage() {
             <tr className="cursor-pointer hover:bg-slate-50" onClick={() => setOpen(open === i.sl ? null : i.sl)}>
               <td className="table-td">{open === i.sl ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</td>
               <td className="table-td">{i.sl}</td><td className="table-td text-navy-ink">{i.description}</td><td className="table-td text-xs text-slate-500">{i.floor}</td>
-              <td className="table-td text-right">{num(i.qty)}</td><td className="table-td">{i.unit}</td>
+              <td className="table-td text-right" onClick={(e) => e.stopPropagation()}>{qtyInner(i)}</td><td className="table-td">{i.unit}</td>
               <td className="table-td text-right">{inr(i.material_cost)}</td><td className="table-td text-right">{inr(i.labour_cost)}</td><td className="table-td text-right">{inr(i.equipment_cost)}</td>
               <td className="table-td text-right font-semibold">{inr(i.amount)}</td>
             </tr>
@@ -587,6 +621,13 @@ export default function EstimatePage() {
 
       {tab === "overview" && (
         <>
+          {active && inputs && inputs.design_id !== active.id && (
+            <div className="flex flex-wrap items-center gap-3 rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-900 ring-1 ring-amber-200">
+              <TriangleAlert size={18} className="shrink-0" />
+              <span className="flex-1">The project’s active drawing is <b>v{active.version} – {active.title}</b>. This estimate uses {inputs.geometry ? `another drawing (#${inputs.design_id})` : inputs.source === "excel" ? "an Excel sheet" : "manual sizes"}.</span>
+              <button className="btn-primary btn-sm" onClick={() => applyDesign(active.id)}>Use the active drawing</button>
+            </div>
+          )}
           <div className="grid gap-4 2xl:grid-cols-[1fr_420px]">
             <Steps step={step} />
             <div className="card p-4">
@@ -610,7 +651,7 @@ export default function EstimatePage() {
                   <dt className="text-slate-500">Project</dt><dd className="font-semibold text-navy-ink">{currentProject.name}</dd>
                   <dt className="text-slate-500">Built-up Area</dt><dd>{tt ? `${inr(tt.builtup_sqft)} sq ft` : "—"}</dd>
                   <dt className="text-slate-500">Floors</dt><dd>{inputs ? (inputs.floor_areas_sqft.length === 1 ? "G" : `${inputs.stilt ? "Stilt" : "G"} + ${inputs.floor_areas_sqft.length - 1}`) : currentProject.floors}</dd>
-                  <dt className="text-slate-500">Source</dt><dd>{inputs?.geometry ? <Badge color="blue">2D Drawing{inputs.design_id ? ` #${inputs.design_id}` : ""}</Badge> : <Badge>Manual sizes</Badge>}</dd>
+                  <dt className="text-slate-500">Source</dt><dd>{inputs?.geometry ? <Badge color="blue">{active && inputs.design_id === active.id ? `Active drawing v${active.version}` : `2D Drawing${inputs.design_id ? ` #${inputs.design_id}` : ""}`}</Badge> : inputs?.source === "excel" ? <Badge>Excel</Badge> : <Badge>Manual sizes</Badge>}</dd>
                   <dt className="text-slate-500">Structure</dt><dd>{inputs?.structure === "load_bearing" ? "Load bearing" : "RCC (framed)"}</dd>
                   <dt className="text-slate-500">Location</dt><dd>{[currentProject.location, currentProject.state === "Tamil Nadu" ? "TN" : currentProject.state].filter(Boolean).join(", ") || "—"}</dd>
                 </dl>
@@ -751,5 +792,18 @@ export default function EstimatePage() {
       </Modal>
       {busy && <div className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-full bg-navy-900 px-4 py-2 text-sm text-white shadow-lg">Calculating…</div>}
     </Page>
+  );
+}
+
+
+function QtyInput({ value, onSave }: { value: number; onSave: (v: number) => void }) {
+  const [v, setV] = useState(String(value));
+  useEffect(() => setV(String(value)), [value]);
+  return (
+    <input className="w-20 rounded-md border border-transparent bg-transparent px-1.5 py-0.5 text-right text-[13px] hover:border-line focus:border-brand-500 focus:bg-white focus:outline-none"
+      value={v} inputMode="decimal" title="Type your own quantity (Manual) – the auto value is kept"
+      onChange={(e) => setV(e.target.value)} onClick={(e) => e.stopPropagation()}
+      onBlur={() => { const n = Number(v); if (!isNaN(n) && n >= 0 && Math.abs(n - value) > 1e-6) onSave(n); else setV(String(value)); }}
+      onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }} />
   );
 }

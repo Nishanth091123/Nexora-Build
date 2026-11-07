@@ -47,7 +47,7 @@ export default function DrawingImport({ projectId, onSaved, designs = [] }: {
   const [pLevel, setPLevel] = useState(0);
   const [knownW, setKnownW] = useState("");
   const [appendTo, setAppendTo] = useState<number | "">("");
-  const [page, setPage] = useState(0);
+  const [page, setPage] = useState(-1);  // 1.18: -1 = find the plan page automatically
 
   const loadLists = async () => {
     try {
@@ -138,8 +138,17 @@ export default function DrawingImport({ projectId, onSaved, designs = [] }: {
           <select className="input w-auto min-w-[200px] flex-1 py-1.5" defaultValue="" onChange={(e) => e.target.value && analyseExisting(Number(e.target.value))}>
             <option value="">— choose —</option>{files.map((f) => <option key={f.id} value={f.id}>{f.name} (v{f.version})</option>)}
           </select>
-          <label className="flex items-center gap-1 text-xs text-slate-500">PDF page<input type="number" min={1} className="input w-16 py-1" value={page + 1} onChange={(e) => setPage(Math.max(0, Number(e.target.value) - 1))} /></label>
+          <label className="flex items-center gap-1 text-xs text-slate-500">PDF page<input type="number" min={1} placeholder="Auto" className="input w-20 py-1" value={page < 0 ? "" : page + 1} onChange={(e) => setPage(e.target.value === "" ? -1 : Math.max(0, Number(e.target.value) - 1))} /></label>
         </div>
+        <details className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-xs text-slate-600">
+          <summary className="cursor-pointer font-semibold text-navy-ink">Which file reads best?</summary>
+          <ol className="mt-1.5 list-decimal space-y-1 pl-4">
+            <li><b>DXF</b> (AutoCAD → Save As → DXF 2018) – exact sizes, every room. Best.</li>
+            <li><b>PDF plotted from AutoCAD</b> with <b>TrueType text</b> (Arial / Calibri, not SHX fonts) and a scale note like “SCALE 1:100” – rooms and sizes are measured from the lines. One or more floors per sheet is fine; the plan page is found automatically.</li>
+            <li>Room names inside the rooms and sizes written under them (12'0"X10'0") make every reading more accurate.</li>
+            <li><b>Scanned PDF / photo</b> – read by AI from the picture: straight, sharp, whole sheet in view. Sizes not written on the drawing are left empty for you – never guessed. Check every row before saving.</li>
+          </ol>
+        </details>
         {history.length > 0 && (
           <div className="mt-3 text-xs text-slate-500">Earlier reads:{" "}
             {history.slice(0, 6).map((h) => <span key={h.id} className="mr-2 inline-flex items-center"><button className="underline hover:text-brand-600" onClick={async () => take(await api(`/api/analyses/${h.id}`))}>{h.file_name} ({h.rooms} rooms, {fmtDateTime(h.created_at)}{h.status === "confirmed" ? ", saved" : ""})</button><OwnerDelete entity="analysis" id={h.id} title={h.file_name} onDone={loadLists} /></span>)}
@@ -158,6 +167,12 @@ export default function DrawingImport({ projectId, onSaved, designs = [] }: {
             <Card title="What was read" icon={<Sparkles size={20} />}>
               <div className="flex flex-wrap gap-2"><Badge color="blue">{METHOD[an.method] || an.method}</Badge>{an.model && <Badge color="purple">{an.model}</Badge>}
                 <Badge color="gray">{rooms.length} rooms</Badge>{an.info?.scale_source && <Badge color="green">Scale: {an.info.scale_source}</Badge>}</div>
+              {(an.info?.reason || (an.warnings?.length || 0) > 0) && (
+                <div className="mt-3 space-y-1 rounded-lg bg-sky-50 px-3 py-2 text-sm text-sky-900">
+                  {an.info?.reason && <p>{an.info.reason}</p>}
+                  {(an.warnings || []).map((w) => <p key={w}>• {w}</p>)}
+                </div>
+              )}
               {(an.questions?.length || 0) > 0 && (
                 <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
                   <div className="mb-1 flex items-center gap-2 font-semibold"><TriangleAlert size={15} />Please confirm</div>

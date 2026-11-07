@@ -97,7 +97,7 @@ except httpx.ConnectError:
         sys.exit("[ERROR] Backend did not start in 2 minutes.")
 check("health", r.status_code == 200 and r.json().get("status") == "ok", r.text)
 _v = tuple(int(x) for x in (r.json().get("version", "0.0").split("-")[0].split(".") + ["0", "0"])[:3] if x.isdigit())
-check("backend is the 1.17 version (not an old one still running)", _v >= (1, 17, 0), r.text)
+check("backend is the 1.18 version (not an old one still running)", _v >= (1, 18, 0), r.text)
 
 login = input("Owner username [nishanth_s]: ").strip() or "nishanth_s"
 pw = getpass.getpass("Owner password (hidden): ")
@@ -263,6 +263,11 @@ check("1.13 saved estimate shows floor-wise BOQ + payment schedule", r.status_co
 custom = [{"stage": "Advance", "pct": 20}, {"stage": "Structure", "pct": 50}, {"stage": "Finishing", "pct": 30}]
 r = c.post(f"/api/projects/{pid}/estimate/calculate", json={"inputs": {**inp, "payment_schedule": custom}, "state": "Tamil Nadu"})
 check("custom payment schedule", r.status_code == 200 and [x["pct"] for x in r.json()["payment_schedule"]] == [20, 50, 30], r.text[:200])
+# ---------------- 1.18: my own quantity wins (Manual), the auto value is kept ----------------
+it0 = (r.json().get("items") or [{}])[0] if r.status_code == 200 else {}
+r = c.post(f"/api/projects/{pid}/estimate/calculate", json={"inputs": {**inp, "qty_overrides": {it0.get("key", "?"): 12.5}}, "state": "Tamil Nadu"})
+m0 = next((i for i in r.json().get("items", []) if i.get("key") == it0.get("key")), {}) if r.status_code == 200 else {}
+check("1.18 manual quantity used, auto kept", m0.get("manual") and m0.get("qty") == 12.5 and m0.get("auto_qty") == it0.get("qty"), str(m0)[:200])
 r = c.post(f"/api/projects/{pid}/estimate/quick", json={"builtup_sqft": 2400, "floors": 2, "bedrooms": 3, "toilets": 3})
 qk = r.json() if r.status_code == 200 else {}
 check("quick estimate: Economy < Standard < Premium", bool(qk) and qk["specs"]["basic"]["grand_total"] < qk["specs"]["standard"]["grand_total"]
@@ -348,6 +353,58 @@ if plan:
     check("save second version", bool(d2), r.text[:200])
     r = c.get(f"/api/designs/compare?a={d1}&b={d2}")
     check("compare revisions", r.status_code == 200 and "totals" in r.json(), r.text[:200])
+    # ---------------- 1.18: one active drawing for every module ----------------
+    r = c.get(f"/api/projects/{pid}/active-design")
+    check("1.18 newest saved design is the active drawing", r.status_code == 200 and (r.json().get("design") or {}).get("id") == d2, r.text[:200])
+    r = c.put(f"/api/projects/{pid}/active-design", json={"design_id": d1})
+    check("1.18 owner picks the active drawing ('Use everywhere')", r.status_code == 200, r.text[:200])
+    r = c.get(f"/api/projects/{pid}/estimate-defaults")
+    check("1.18 estimate knows the active drawing (no manual sizes asked)", r.status_code == 200 and (r.json().get("active_design") or {}).get("id") == d1, r.text[:200])
+    r = c.get(f"/api/projects/{pid}/designs")
+    check("1.18 design list marks the active one", r.status_code == 200 and [x["id"] for x in r.json() if x.get("active")] == [d1], r.text[:200])
+    c.put(f"/api/projects/{pid}/active-design", json={"design_id": d2})
+    # ---------------- 1.18: staircase design ----------------
+    r = c.post(f"/api/projects/{pid}/design/stair", json={"plan": plan, "opts": {}})
+    sd = r.json() if r.status_code == 200 else {}
+    check("1.18 staircase designed (risers, checks, waist slab, BBS)", sd.get("risers", 0) >= 15 and len(sd.get("checks", [])) >= 6
+          and sd.get("structure", {}).get("waist_mm", 0) >= 150 and len(sd.get("bbs", [])) >= 4, r.text[:300])
+    r = c.post(f"/api/projects/{pid}/design/stair", json={"plan": plan, "opts": {"type": "straight"}})
+    check("1.18 staircase warns (long straight flight) – never blocks", r.status_code == 200 and any(not x["ok"] for x in r.json()["checks"]), r.text[:200])
+    st_plan = json.loads(json.dumps(plan)); st_plan["stair"] = {"type": "dog_legged", "riser_mm": 999, "railing": "ss"}
+    r = c.post(f"/api/projects/{pid}/design/recompute", json={"plan": st_plan})
+    check("1.18 staircase values checked (riser 999 refused)", r.status_code == 422, r.text[:200])
+    st_plan["stair"] = {"type": "dog_legged", "finish": "granite", "railing": "ss", "bogus": 1}
+    r = c.post(f"/api/projects/{pid}/design/recompute", json={"plan": st_plan})
+    check("1.18 staircase choices saved (and cleaned)", r.status_code == 200 and r.json().get("stair", {}).get("type") == "dog_legged"
+          and "bogus" not in r.json().get("stair", {}), r.text[:200])
+    r = c.post(f"/api/projects/{pid}/design/export?kind=sheets_pdf&page=stair", json={"plan": plan}, timeout=180)
+    check("1.18 Staircase Detail sheet", r.status_code == 200 and r.content[:4] == b"%PDF", r.text[:200] if r.status_code != 200 else "")
+    r = c.post(f"/api/projects/{pid}/design/quick-estimate", json={"plan": plan})
+    qi = r.json().get("inputs", {}) if r.status_code == 200 else {}
+    check("1.18 estimate inputs carry the designed staircase", (qi.get("stair") or {}).get("concrete_m3", 0) > 0, str(qi.get("stair"))[:200])
+    r = c.post(f"/api/projects/{pid}/estimate/part", json={"inputs": qi, "state": "Tamil Nadu", "floor": "all", "work": "staircase"})
+    its = r.json().get("items", []) if r.status_code == 200 else []
+    check("1.18 staircase in the estimate (concrete, steel, railing)", any("railing" in i["description"].lower() for i in its)
+          and any(i["unit"] == "kg" for i in its), r.text[:200])
+    # ---------------- 1.18: irregular plot ----------------
+    rq = dict(req, plot_shape={"mode": "quad", "sides": [30, 42, 34, 40]})
+    r = c.post(f"/api/projects/{pid}/design/generate", json={"requirements": rq})
+    check("1.18 irregular plot: asks the diagonal (never guesses the shape)", r.status_code == 422 and "diagonal" in r.text.lower(), r.text[:200])
+    rq["plot_shape"]["diagonal"] = 52
+    r = c.post(f"/api/projects/{pid}/design/generate", json={"requirements": rq})
+    ip = r.json() if r.status_code == 200 else {}
+    check("1.18 irregular plot planned (polygon + setbacks from every side)", len((ip.get("plot") or {}).get("poly") or []) == 4
+          and ip.get("setbacks", {}).get("edge_kinds", [None])[0] == "road" and ip["building"]["w"] >= 10, r.text[:300])
+    if ip:
+        r = c.post(f"/api/projects/{pid}/design/export?kind=sheets_pdf&page=site", json={"plan": ip}, timeout=180)
+        check("1.18 irregular plot site plan", r.status_code == 200 and r.content[:4] == b"%PDF", r.text[:200] if r.status_code != 200 else "")
+        r = c.post(f"/api/projects/{pid}/vastu/analyse", json={"plan": ip})
+        check("1.18 vastu reads the plot shape", r.status_code == 200, r.text[:200])
+    # ---------------- 1.18: auto + manual ----------------
+    r = c.post(f"/api/projects/{pid}/design/generate", json={"requirements": dict(req, setback_override={"front": 6})})
+    mp = r.json() if r.status_code == 200 else {}
+    check("1.18 manual setback used (auto kept for the check)", mp.get("setbacks", {}).get("ft", {}).get("front") == 6
+          and "front" in mp.get("setbacks", {}).get("manual", []), r.text[:200])
     r = c.get(f"/api/designs/{d2}/pdf")
     check("plan PDF export", r.status_code == 200 and r.content[:4] == b"%PDF", r.text[:200] if r.status_code != 200 else "")
     r = c.get(f"/api/designs/{d2}/dxf")
@@ -448,6 +505,34 @@ if plan:
         r = c.post(f"/api/trash/library_item/{li['id']}")
         check("1.15 own material to Recycle Bin", r.status_code == 200, r.text[:200])
         CLEANUP.append({"entity": "library_item", "id": li["id"]})
+    # ---------------- 1.18: Material Library (brands, A/B/C grades, rates, project choice) ----------------
+    r = c.get("/api/market")
+    mk = r.json() if r.status_code == 200 else {}
+    check("1.18 material library: every material of a house with brands", len(mk.get("categories", [])) >= 30
+          and any(b["name"] == "Ramco" and b["category"] == "cement" for b in mk.get("brands", [])), r.text[:200])
+    r = c.post("/api/market/brands", json={"category": "cement", "name": "SMOKE TEST BRAND", "tier": "A"})
+    tb = r.json() if r.status_code == 200 else {}
+    check("1.18 add a brand (grade A)", tb.get("tier") == "A", r.text[:200])
+    if tb:
+        r = c.post("/api/market/variants", json={"brand_id": tb["id"], "name": "PPC", "code": "SMK-01", "unit": "bag", "rate": 777, "gst_pct": 28})
+        tv = r.json() if r.status_code == 200 else {}
+        check("1.18 add a variant with my rate", tv.get("rate") == 777 and tv.get("rate_code") == "cement", r.text[:200])
+        r = c.get("/api/market")
+        prem = ((r.json().get("tiers") or {}).get("cement") or {}).get("premium") or {}
+        check("1.18 grade A brands → Premium rate", "SMOKE TEST BRAND" in prem.get("names", []), str(prem)[:200])
+        r = c.put(f"/api/projects/{pid}/brand-choices", json={"category": "cement", "variant_id": tv.get("id")})
+        check("1.18 brand chosen for this project", r.status_code == 200 and r.json()["choices"].get("cement") == tv.get("id"), r.text[:200])
+        r = c.post(f"/api/projects/{pid}/estimate/calculate", json={"inputs": inp, "state": "Tamil Nadu"})
+        check("1.18 estimate uses the chosen brand's rate", r.status_code == 200 and any("SMOKE TEST BRAND" in n for n in r.json().get("material_notes", [])), r.text[:200])
+        c.put(f"/api/projects/{pid}/brand-choices", json={"category": "cement", "variant_id": None})
+        buf = "category,brand,name,code,colour,unit,rate,gst_pct\npaint_interior,SMOKE TEST BRAND,Smoke shade,0951,#efe3cf,litre,,18\n"
+        r = c.post("/api/market/import", files={"file": ("smoke.csv", buf.encode(), "text/csv")})
+        check("1.18 import a shade list (CSV)", r.status_code == 200 and r.json().get("added", 0) >= 1, r.text[:200])
+        r = c.get("/api/market")
+        check("1.18 shade code searchable (0951)", any(v["code"] == "0951" and v["color"] == "#efe3cf" for v in r.json().get("variants", [])), "")
+        for b_ in [b for b in r.json().get("brands", []) if b["name"] == "SMOKE TEST BRAND"]:
+            c.post(f"/api/trash/market_brand/{b_['id']}")
+            CLEANUP.append({"entity": "market_brand", "id": b_["id"]})
     p4 = json.loads(json.dumps(plan)); p4["finishes"] = {"style": "traditional", "ext": "#f2deb0"}
     r = c.post(f"/api/projects/{pid}/designs", json={"plan": p4, "title": "SMOKE 3D style"})
     check("1.13 3D elevation style saved", r.status_code == 200 and (r.json().get("plan") or {}).get("finishes", {}).get("style") == "traditional", r.text[:200])
@@ -479,6 +564,9 @@ if plan and d2:
                    "opts": {"north_deg": 90, "plot_w_ft": 30, "plot_d_ft": 40, "road_width_m": 9.14}})
         up = r.json() if r.status_code == 200 else {}
         check("drawing confirmed -> design", bool(up.get("id")) and up["plan"]["facing"] == "east", r.text[:300])
+        if up:
+            r = c.get(f"/api/projects/{pid}/active-design")
+            check("1.18 uploaded drawing becomes the active drawing", (r.json().get("design") or {}).get("id") == up.get("id"), r.text[:200])
         if up:
             r = c.post(f"/api/projects/{pid}/vastu/analyse", json={"design_id": up["id"]})
             ok = r.status_code == 200 and r.json()["result"]["summary"]["total"] >= 8
@@ -518,6 +606,20 @@ if plan and d2:
     r = c.post(f"/api/projects/{pid}/drawings/upload", files={"file": ("smoke_plan.pdf", pdfp, "application/pdf")})
     check("vector PDF drawing read", r.status_code == 200 and r.json().get("method") == "pdf" and r.json().get("rooms", 0) >= 4,
           r.text[:300])
+    try:  # 1.18: the plan is on page 2 (cover sheet first) – found automatically
+        import io as _io
+        from pypdf import PdfReader, PdfWriter
+        from reportlab.pdfgen import canvas as _cv
+        cb = _io.BytesIO(); cv_ = _cv.Canvas(cb); cv_.drawString(100, 700, "COVER SHEET"); cv_.save()
+        w_ = PdfWriter(); w_.add_page(PdfReader(_io.BytesIO(cb.getvalue())).pages[0])
+        for pg_ in PdfReader(_io.BytesIO(pdfp)).pages:
+            w_.add_page(pg_)
+        out_ = _io.BytesIO(); w_.write(out_)
+        r = c.post(f"/api/projects/{pid}/drawings/upload", files={"file": ("smoke_two_pages.pdf", out_.getvalue(), "application/pdf")})
+        check("1.18 PDF: plan page found automatically", r.status_code == 200 and r.json().get("method") == "pdf" and r.json().get("rooms", 0) >= 4
+              and (((r.json().get("info") or {}).get("info") or {}).get("page") or 0) >= 1, r.text[:300])  # any plan page, never the cover
+    except ImportError as e:
+        check("1.18 PDF: plan page found automatically", False, f"needs pypdf + reportlab: {e}")
 
 # ---------------- Phase 5: schedule, tasks, approvals, site ----------------
 import base64
@@ -605,6 +707,7 @@ check("delete permanently (backup taken first)", r.status_code == 200 and r.json
 # ---------------- Phase 7.2: Home site-weather card data
 r = c.get(f"/api/projects/{pid}/weather-context")
 check("home weather card data", r.status_code == 200 and "stages" in r.json() and "curing" in r.json(), r.text[:200])
+check("1.18 weather tips get today's work", r.status_code == 200 and "today_work" in r.json(), r.text[:200])
 
 # ---------------- Phase 7.8: weather alerts (bell + phone push)
 r = c.get("/api/push/key")
@@ -778,4 +881,4 @@ if fail:
     print("Failed:", ", ".join(fail), "\nSend this output to Claude.")
     sys.exit(1)
 else:
-    print("NEXORA 1.17 API: ALL GOOD")
+    print("NEXORA 1.18 API: ALL GOOD")

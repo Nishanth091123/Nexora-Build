@@ -134,6 +134,8 @@ class Inputs:
     geometry: list[dict] | None = None        # per-level measured geometry from a design (Phase 3)
     payment_schedule: list[dict] | None = None  # 1.8: [{"stage": "...", "pct": 10}] – default made from floors
     roof_sheets: list[dict] | None = None     # 1.17: sheet roofs from the design (metric numbers, see design/roof.py)
+    stair: dict | None = None                 # 1.18: designed staircase (design/stair.py estimate_row) – per floor
+    qty_overrides: dict | None = None         # 1.18: {"floor|description": qty} – the user's own quantity wins (Manual)
 
     @staticmethod
     def from_dict(d: dict) -> "Inputs":
@@ -161,6 +163,10 @@ class Inputs:
                     v = [dict(x) for x in v] if isinstance(v, list) and v else None
                 elif k == "roof_sheets":
                     v = [dict(x) for x in v if isinstance(x, dict)] if isinstance(v, list) else None
+                elif k == "qty_overrides":
+                    v = {str(a): float(b) for a, b in v.items() if b not in (None, "")} if isinstance(v, dict) else None
+                elif k == "stair":
+                    v = dict(v) if isinstance(v, dict) and float(v.get("concrete_m3") or 0) > 0 else None
             except (TypeError, ValueError):
                 raise MissingInfo([f"'{k}' must be a number"])
             out[k] = v
@@ -259,13 +265,13 @@ class Calc:
         })
 
     # --- helpers for common work types ---
-    def rcc(self, desc, floor, vol, steel_key, formwork_m2):
+    def rcc(self, desc, floor, vol, steel_key, formwork_m2, steel_kg=None):
         c, s, a = MIX["M20"]
         mix_days = vol / 8.0
         self.add("RCC", f"RCC M20 – {desc}", floor, vol, "m³",
                  {"cement": c * vol, "msand": s * vol, "agg20": a * vol}, "rcc",
                  {"mixer": mix_days, "vibrator": mix_days})
-        kg = vol * STEEL_KG_PER_M3[steel_key]
+        kg = steel_kg if steel_kg is not None else vol * STEEL_KG_PER_M3[steel_key]
         self.add("Steel", f"Reinforcement (TMT) – {desc}", floor, kg, "kg",
                  {"steel": kg, "binding_wire": kg * 0.01}, "steel")
         if formwork_m2 > 0:
@@ -525,7 +531,17 @@ def calculate(inputs: dict, rates: dict[str, dict]) -> dict:
             if i == levels - 1 and sheet_mumty:  # 1.17: head room covered with a sheet – its roof slab is not cast
                 stair_vol = max(0.6, stair_vol - min(0.6, float(sheet_mumty[0].get("stair_m2") or 0) * slab_t))
                 label = " to terrace (head room: sheet roof)"
-            c.rcc("Staircase" + label, fl, stair_vol, "stair", 8 if i < levels - 1 else 6)
+            sd = inp.stair
+            if sd:  # 1.18: designed staircase (geometry + IS 456 waist slab + BBS) instead of the average allowance
+                k = stair_vol / (2.0 if i < levels - 1 else 1.2)  # keeps the 1.17 head-room sheet reduction
+                vol = float(sd["concrete_m3"]) * (k if i == levels - 1 else 1.0)
+                c.rcc(f"Staircase – {sd.get('label', 'designed')}" + label, fl, vol, "stair", float(sd.get("formwork_m2") or 8),
+                      steel_kg=float(sd.get("steel_kg") or 0) * vol / max(float(sd["concrete_m3"]), 1e-6))
+                if sd.get("railing_m"):
+                    c.add("Doors & Windows", f"Staircase railing with handrail ({str(sd.get('railing') or 'ss').upper()})" + label, fl,
+                          float(sd["railing_m"]), "rmt", {"stair_railing": float(sd["railing_m"])})
+            else:
+                c.rcc("Staircase" + label, fl, stair_vol, "stair", 8 if i < levels - 1 else 6)
 
         # masonry (deduct openings)
         win_ded = g["win_area"] * 0.23
@@ -558,7 +574,12 @@ def calculate(inputs: dict, rates: dict[str, dict]) -> dict:
         wt = r["toi"] * 15.5 + r["kit"] * 1.8
         c.add("Flooring & Tiling", "Wall tiles – toilets (2.1 m) & kitchen dado", fl, wt, "m²",
               {"wall_tile": wt, "tile_adhesive": wt}, "wall_tile")
-        gr = r["kit"] * 1.8 + (6.0 if (inp.staircase and i < levels - 1) else 0)
+        st_fin = float(inp.stair.get("finish_m2") or 6.0) if inp.stair else 6.0
+        st_gran = not inp.stair or (inp.stair.get("finish") or "granite") == "granite"
+        gr = r["kit"] * 1.8 + (st_fin if (inp.staircase and i < levels - 1 and st_gran) else 0)
+        if inp.staircase and i < levels - 1 and not st_gran:
+            c.add("Flooring & Tiling", f"Staircase treads & risers – {inp.stair.get('finish')}", fl, st_fin, "m²",
+                  {"floor_tile": st_fin * 1.08, "tile_adhesive": st_fin}, "floor_tile")
         c.add("Flooring & Tiling", "Granite – kitchen counter & staircase treads/risers", fl, gr, "m²",
               {"granite": gr}, "granite")
 
@@ -702,6 +723,7 @@ def calculate(inputs: dict, rates: dict[str, dict]) -> dict:
     c.add("Earthwork", "Watchman & curing during construction", "Site", months * 26, "day", None, None, None,
           {"watchman": months * 26})
 
+    apply_overrides(c, inp)
     out = summarize(c, inp, names, total_sqft, months)
     out.update(extras_v18(c, inp, names, geo))
     g = out["totals"]["grand_total"]
@@ -727,6 +749,38 @@ def default_payment_schedule(names: list[str], stilt: bool) -> list[dict]:
     out += [{"stage": "Finishing Works (plaster, flooring, painting)", "pct": 15},
             {"stage": "External Works & Handover", "pct": 5}]
     return out
+
+
+def item_key(it: dict) -> str:
+    return f"{it['floor']}|{it['description']}"
+
+
+def apply_overrides(c: Calc, inp: Inputs) -> None:
+    """1.18 Auto + Manual: every item is worked out automatically; a quantity the user typed replaces it. Materials,
+    labour and equipment scale with it. The auto value is kept on the item so the screen can show / restore it."""
+    ov = inp.qty_overrides or {}
+    used = set()
+    for it in c.items:
+        it["key"] = item_key(it)
+        if it["key"] not in ov:
+            continue
+        new = max(0.0, float(ov[it["key"]]))
+        used.add(it["key"])
+        old = it["qty"]
+        f = new / old if old else 0.0
+        for grp, field in (("materials", "qty"), ("labour", "days"), ("equipment", "qty")):
+            for x in it[grp]:
+                x[field] = round(x[field] * f, 3)
+                x["amount"] = round(x["amount"] * f, 2)
+        it.update({"auto_qty": old, "manual": True, "qty": round(new, 3), "rate": round(it["amount"] * f / new, 2) if new else 0,
+                   "material_cost": round(it["material_cost"] * f, 2), "labour_cost": round(it["labour_cost"] * f, 2),
+                   "equipment_cost": round(it["equipment_cost"] * f, 2), "amount": round(it["amount"] * f, 2)})
+        if abs(new - old) > max(0.2 * old, 0.01):
+            c.warnings.append(f"Manual quantity: {it['description']} ({it['floor']}) = {new:g} {it['unit']} – auto value {old:g}.")
+    stale = [k for k in ov if k not in used]
+    if stale:
+        c.warnings.append(f"{len(stale)} manual quantit{'y no longer matches' if len(stale) == 1 else 'ies no longer match'} an item (the plan changed) – "
+                          "check them in the table: " + "; ".join(k.split("|", 1)[1] for k in stale[:3]))
 
 
 def extras_v18(c: Calc, inp: Inputs, names: list[str], geo: list[dict]) -> dict:

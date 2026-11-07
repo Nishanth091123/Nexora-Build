@@ -45,6 +45,10 @@ def provided_setbacks(plan: dict) -> dict:
         for r in lv["rooms"]:
             xs += [b["x"] + r["x"], b["x"] + r["x"] + r["w"]]
             ys += [b["y"] + r["y"], b["y"] + r["y"] + r["d"]]
+    from ..design.plot import provided
+    pp = provided(P, min(xs), min(ys), max(xs), max(ys))  # 1.18 irregular plot: measured to every side
+    if pp:
+        return pp
     return {"front": round(min(ys), 2), "rear": round(P["d"] - max(ys), 2), "left": round(min(xs), 2),
             "right": round(P["w"] - max(xs), 2)}
 
@@ -86,13 +90,21 @@ def compliance(plan: dict, info: dict) -> dict:
 def approval_site_plan(plan: dict, info: dict) -> Dwg:
     P, b = plan["plot"], plan["building"]
     d = Dwg("Site Plan")
-    d.rect(0, 0, P["w"], P["d"], "PLOT")
+    from ..design.plot import draw_plot
+    poly = draw_plot(d, P)  # 1.18 irregular plot
+    if not poly:
+        d.rect(0, 0, P["w"], P["d"], "PLOT")
     prov = provided_setbacks(plan)
     for li, lv in enumerate(plan["levels"][:1]):
         for r in lv["rooms"]:
             d.rect(b["x"] + r["x"], b["y"] + r["y"], r["w"], r["d"], "BUILDING", "#ffffff")
-    bx0, by0 = prov["left"], prov["front"]
-    bx1, by1 = P["w"] - prov["right"], P["d"] - prov["rear"]
+    if poly:  # footprint straight from the rooms (the polygon setbacks are distances, not coordinates)
+        xs = [b["x"] + r["x"] for r in plan["levels"][0]["rooms"]] + [b["x"] + r["x"] + r["w"] for r in plan["levels"][0]["rooms"]]
+        ys = [b["y"] + r["y"] for r in plan["levels"][0]["rooms"]] + [b["y"] + r["y"] + r["d"] for r in plan["levels"][0]["rooms"]]
+        bx0, by0, bx1, by1 = min(xs), min(ys), max(xs), max(ys)
+    else:
+        bx0, by0 = prov["left"], prov["front"]
+        bx1, by1 = P["w"] - prov["right"], P["d"] - prov["rear"]
     d.hatch(bx0, by0, bx1 - bx0, by1 - by0, 1.2)
     d.text((bx0 + bx1) / 2, (by0 + by1) / 2 + 0.6, "PROPOSED BUILDING", 0.9, layer="ROOMTEXT", bold=True, mask=True)
     nlv = len(plan["levels"])
@@ -114,8 +126,9 @@ def approval_site_plan(plan: dict, info: dict) -> Dwg:
         d.dim_h(0, bx0, P["d"] + 1.6, m(prov["left"]))
     if prov["right"] > 0.05:
         d.dim_h(bx1, P["w"], P["d"] + 1.6, m(prov["right"]))
-    d.dim_h(0, P["w"], P["d"] + 4.2, f"PLOT {m(P['w'])}")
-    d.dim_v(P["w"] + 3.6, 0, P["d"], m(P["d"]))
+    if not poly:
+        d.dim_h(0, P["w"], P["d"] + 4.2, f"PLOT {m(P['w'])}")
+        d.dim_v(P["w"] + 3.6, 0, P["d"], m(P["d"]))
     d.dim_h(bx0, bx1, by0 - 1.4, ft_in(bx1 - bx0))
     # compound wall + gate
     d.text(P["w"] / 2, 0.5, "GATE", 0.6, layer="DIM")

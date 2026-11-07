@@ -190,6 +190,11 @@ def _shrink_image(blob: bytes, mime: str, max_side: int = 2000, max_bytes: int =
         return blob, mime
 
 
+_health: dict[str, float] = {}  # provider → time of its last failure (1.18)
+COOLDOWN = 180.0
+HEDGE_S = 5.0
+
+
 def ask(prompt: str, blob: bytes | None = None, mime: str = "", want_json: bool = True,
         image_fallback: tuple[bytes, str] | None = None, temperature: float = 0.0,
         order: list[str] | None = None, min_chars: int = 0, strict: bool = False,
@@ -233,26 +238,24 @@ def ask(prompt: str, blob: bytes | None = None, mime: str = "", want_json: bool 
             raise LLMError(f"AI took too long (over {budget:g} s)")
         client.timeout = httpx.Timeout(min(30.0, rem), connect=min(8.0, rem))
 
-    with httpx.Client(timeout=TIMEOUT) as client:
-        for prov in order:
-            key = k.get(prov)
-            if not key:
-                continue
+    def attempt(prov: str) -> tuple[dict | str, str]:
+        """All models of one provider; raises LLMError with what went wrong. Own HTTP client (runs in a thread)."""
+        key = k.get(prov)
+        errs: list[str] = []
+        with httpx.Client(timeout=TIMEOUT) as client:
             if left() < 3:
-                errors.append(f"time budget of {budget:g} s used up")
-                break
+                raise LLMError(f"time budget of {budget:g} s used up")
             if prov == "gemini":
                 for model in _pick_gemini(client, key):
                     try:
                         arm(client)
                         return done(_gemini(client, key, model, prompt, blob, mime, want_json, temperature), f"gemini/{model}")
                     except Exception as e:
-                        errors.append(f"gemini/{model}: {str(e)[:160]}")
-                continue
+                        errs.append(f"gemini/{model}: {str(e)[:160]}")
+                raise LLMError(" | ".join(errs))
             if blob is not None and other_blob is None:
-                errors.append(f"{prov}: can't read this file type ({mime})" if mime.startswith("audio/") else
-                              f"{prov}: can't read PDF files and no picture was found inside the PDF")
-                continue
+                raise LLMError(f"{prov}: can't read this file type ({mime})" if mime.startswith("audio/") else
+                               f"{prov}: can't read PDF files and no picture was found inside the PDF")
             base = "https://api.groq.com/openai/v1" if prov == "groq" else "https://openrouter.ai/api/v1"
             extra = {"X-Title": "Nexora Build"} if prov == "openrouter" else None
             for model in _pick_openai_like(prov, client, key, base + "/models", vision):
@@ -261,7 +264,58 @@ def ask(prompt: str, blob: bytes | None = None, mime: str = "", want_json: bool 
                     return done(_openai_like(client, base, key, model, prompt, other_blob, other_mime, want_json,
                                              extra, temperature), f"{prov}/{model}")
                 except Exception as e:
-                    errors.append(f"{prov}/{model}: {str(e)[:160]}")
+                    errs.append(f"{prov}/{model}: {str(e)[:160]}")
+        raise LLMError(" | ".join(errs) or f"{prov}: no model")
+
+    # 1.18 speed: providers that failed in the last few minutes go to the end of the line
+    live = [p for p in order if k.get(p)]
+    if not strict:
+        now = time.monotonic()
+        live.sort(key=lambda p: 1 if now - _health.get(p, -1e9) < COOLDOWN else 0)
+
+    def ok(prov):
+        _health.pop(prov, None)
+
+    def bad(prov):
+        _health[prov] = time.monotonic()
+
+    # 1.18 speed: a hedged request – if the first AI service has not answered within a few seconds, the next one is
+    # asked at the same time and the first good answer wins (no more waiting 30 s for a slow free service)
+    if len(live) >= 2 and not strict and blob is None:
+        from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+        ex = ThreadPoolExecutor(max_workers=2)
+        try:
+            futs = {ex.submit(attempt, live[0]): live[0]}
+            done_set, _ = wait(list(futs), timeout=HEDGE_S)
+            if not done_set or any(f.exception() for f in done_set):
+                futs[ex.submit(attempt, live[1])] = live[1]
+            pending = set(futs)
+            while pending:
+                done_set, pending = wait(pending, timeout=max(0.5, left()), return_when=FIRST_COMPLETED)
+                if not done_set:
+                    errors.append(f"time budget of {budget:g} s used up")
+                    break
+                for f in done_set:
+                    prov = futs[f]
+                    if f.exception() is None:
+                        ok(prov)
+                        return f.result()
+                    bad(prov)
+                    errors.append(str(f.exception())[:300])
+        finally:
+            ex.shutdown(wait=False, cancel_futures=True)
+        live = live[2:]
+    for prov in live:
+        if left() < 3:
+            errors.append(f"time budget of {budget:g} s used up")
+            break
+        try:
+            r = attempt(prov)
+            ok(prov)
+            return r
+        except Exception as e:
+            bad(prov)
+            errors.append(str(e)[:300])
     if not any(k.values()):
         raise LLMError("No AI keys in .env (GEMINI_API_KEY / GROQ_API_KEY / OPENROUTER_API_KEY).")
     errors = [re.sub(r"(key=|Bearer\s+)[A-Za-z0-9_\-.]+", r"\1***", e) for e in errors]

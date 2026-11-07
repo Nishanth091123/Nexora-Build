@@ -4,7 +4,7 @@ import OfflineBar from "./OfflineBar";
 import VersionBar from "./VersionBar";
 import NotifBell from "./NotifBell";
 import {
-  Calculator, ChevronDown, Compass, FolderKanban, HardHat, Home, LogOut, Menu, PenSquare,
+  Calculator, ChevronDown, Compass, FolderKanban, HardHat, Home, Library, LogOut, Menu, PenSquare,
   Search, Settings as SettingsIcon, Languages, Trash2, Users, X,
 } from "lucide-react";
 import { useOwnerOnly } from "../lib/ownerOnly";
@@ -18,6 +18,7 @@ const NAV: { to: string; label: string; icon: any; end?: boolean; module?: strin
   { to: "/site", label: "Site", icon: HardHat, module: "site" },
   { to: "/vastu", label: "Vastu", icon: Compass, module: "vastu" },
   { to: "/estimate", label: "Estimate", icon: Calculator, module: "estimate" },
+  { to: "/materials", label: "Material Library", icon: Library },
   { to: "/projects", label: "Projects", icon: FolderKanban },
   { to: "/ai", label: "AI Assistant", icon: Search, module: "ai" },
 ];
@@ -25,7 +26,7 @@ const NAV: { to: string; label: string; icon: any; end?: boolean; module?: strin
 // A different picture for each page (bottom of the sidebar).
 const SIDEBAR_IMG: [string, string][] = [
   ["/site", "sidebar_site.jpg"], ["/vastu", "sidebar_vastu.jpg"], ["/design", "proj_villa.jpg"],
-  ["/estimate", "estimate_house.jpg"], ["/projects", "proj_commercial.jpg"], ["/ai", "proj_residential.jpg"],
+  ["/estimate", "estimate_house.jpg"], ["/materials", "estimate_house.jpg"], ["/projects", "proj_commercial.jpg"], ["/ai", "proj_residential.jpg"],
   ["/settings", "company_building.jpg"],
 ];
 function sidebarImage(path: string) {

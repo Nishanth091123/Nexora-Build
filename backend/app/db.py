@@ -45,7 +45,8 @@ NO_DELETE_TABLES = ["projects", "files", "audit_logs", "backup_records", "projec
                     "material_entries", "workers", "attendance", "quality_checks", "safety_records",
                     "ai_conversations", "ai_messages", "ai_indexed_files", "ai_doc_chunks",
                     "trash_log", "invite_links", "bbs_schedules", "permit_checklists", "ai_photo_checks",
-                    "clients", "project_notes", "structural_designs", "library_items"]
+                    "clients", "project_notes", "structural_designs", "library_items",
+                    "market_brands", "market_variants"]
 
 PG_PROTECTION_SQL = [
     """
@@ -122,6 +123,11 @@ ADDITIVE_MIGRATIONS: dict[str, list[str]] = {
     "0012_v116_perms": [
         "ALTER TABLE project_access ADD COLUMN IF NOT EXISTS can_approval BOOLEAN DEFAULT FALSE",
         "ALTER TABLE project_access ADD COLUMN IF NOT EXISTS can_rates BOOLEAN DEFAULT FALSE",
+    ],
+    # 1.18: one active drawing per project (estimate / structural / approval / vastu / 3D all follow it)
+    "0013_v118_active_design": [
+        "ALTER TABLE projects ADD COLUMN IF NOT EXISTS active_design_id INTEGER",
+        "ALTER TABLE projects ADD COLUMN IF NOT EXISTS brand_choices JSON",
     ],
 }
 

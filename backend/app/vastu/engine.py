@@ -76,6 +76,32 @@ def zone_of(comp: dict, bw: float, bd: float, cx: float, cy: float) -> str:
     return ZONES[int(((b + 22.5) % 360) // 45)]
 
 
+def _plot_cuts(plan: dict) -> list[tuple[str, str]]:
+    """1.18: corners of an irregular plot that are cut (missing) or extended, as compass zones."""
+    P = plan.get("plot") or {}
+    pts = [tuple(p) for p in P.get("poly") or []]
+    if len(pts) < 3:
+        return []
+    from ..design.plot import _inside
+    W, D = P["w"], P["d"]
+    comp = plan.get("compass") or {"up": (0, 1), "right": (1, 0)}
+    out = []
+    for fx, fy in ((0, 0), (1, 0), (0, 1), (1, 1)):
+        # sample the quarter of the bounding box at this corner
+        n = tot = 0
+        for i in range(12):
+            for j in range(12):
+                x = (fx * 0.5 + (i + 0.5) / 24) * W
+                y = (fy * 0.5 + (j + 0.5) / 24) * D
+                tot += 1
+                n += 0 if _inside(x, y, pts) else 1
+        miss = n / tot
+        z = zone_of(comp, W, D, (0.05 + 0.9 * fx) * W, (0.05 + 0.9 * fy) * D)
+        if miss > 0.12:
+            out.append((z, "cut"))
+    return out
+
+
 def _room_kind(r: dict, master_ids: set) -> str:
     if r["type"] == "bedroom" and r["id"] in master_ids:
         return "master"
@@ -233,6 +259,29 @@ def analyse(plan: dict, site: dict | None = None, rules: dict | None = None, lan
                        "current": "", "better": "" if ok else tr("Slope down to North / East", "வடக்கு / கிழக்கு நோக்கி சரிவு"),
                        "remedy": "" if ok else tr("Turn the mono-pitch so the low side is North or East.",
                                                   "தாழ்வான பக்கம் வடக்கு அல்லது கிழக்கு வரும்படி திருப்பவும்."), "suggest_zones": []})
+    pc = _plot_cuts(plan)  # 1.18 irregular plot: corner cuts / extensions
+    if pc:
+        good = [z for z, kind in pc if kind == "extension" and z in ("NE", "N", "E")]
+        bad = [(z, kind) for z, kind in pc if (z, kind) not in [(g, "extension") for g in good]]
+        st = "matched" if not bad else ("not_matched" if any(z in ("NE", "SW") for z, _ in bad) else "partly")
+        desc = ", ".join(f"{'cut' if k == 'cut' else 'extension'} in {z}" for z, k in pc)
+        checks.append({"rule": "plot_cut", "title": tr("Plot shape (cuts / extensions)", "மனை வடிவம் (வெட்டு / நீட்சி)"), "room": "—",
+                       "room_id": None, "level": -1, "level_name": tr("Site", "மனை"), "zone": bad[0][0] if bad else "", "status": st,
+                       "message": tr(f"Irregular plot: {desc}.", f"ஒழுங்கற்ற மனை: {desc}."),
+                       "why": tr("A North-East extension is considered good; a cut in North-East or South-West, or an extension in "
+                                 "other corners, is not preferred.", "வடகிழக்கு நீட்சி நல்லது; வடகிழக்கு / தென்மேற்கு வெட்டு நல்லதல்ல."),
+                       "current": desc, "better": "" if st == "matched" else tr("Square up the plot with the compound wall / use the odd corner as garden",
+                                                                               "சுற்றுச்சுவரால் சதுரமாக்கு / கோணத்தை தோட்டமாக பயன்படுத்து"),
+                       "remedy": "" if st == "matched" else tr("Leave the odd corner open (garden / parking); keep the house rectangular.",
+                                                              "கோணத்தை திறந்து விடு (தோட்டம் / பார்க்கிங்); வீடு செவ்வகமாக இருக்கட்டும்."),
+                       "suggest_zones": []})
+    if len(plan["levels"]) > 1 and any(r["type"] == "stair" for lv in plan["levels"] for r in lv["rooms"]):  # 1.18
+        checks.append({"rule": "stair_turn", "title": tr("Staircase climbing direction", "படிக்கட்டு ஏறும் திசை"), "room": tr("Staircase", "படிக்கட்டு"),
+                       "room_id": None, "level": 0, "level_name": "", "zone": "", "status": "matched",
+                       "message": tr("The staircase climbs clockwise (as designed in Nexora) – good",
+                                     "படிக்கட்டு கடிகார திசையில் ஏறுகிறது (Nexora வடிவமைப்பு) – நல்லது"),
+                       "why": tr("Clockwise climbing (turning right while going up) is preferred.", "வலப்புறமாக திரும்பி ஏறுவது சிறந்தது."),
+                       "current": "", "better": "", "remedy": "", "suggest_zones": []})
     if not any(c["rule"] == "plot_shape" for c in checks):
         checks.append({"rule": "shape", "title": tr("Building shape", "கட்டட வடிவம்"), "room": "—", "room_id": None, "level": 0,
                        "level_name": "", "zone": "", "status": "matched",

@@ -162,9 +162,11 @@ class CalcIn(BaseModel):
     state: str = DEFAULT_STATE
 
 
-def run_calc(db: Session, inputs: dict, state: str):
+def run_calc(db: Session, inputs: dict, state: str, project_id: int | None = None):
     used, fallback, rows = rates_for(db, state)
     rates = rates_dict(rows)
+    from ..market import apply_market  # 1.18: brand grades (A/B/C) + this project's chosen brands
+    market_notes = apply_market(db, rates, project_id)
     try:
         result = calculate(inputs, rates)
     except MissingInfo as e:
@@ -173,6 +175,8 @@ def run_calc(db: Session, inputs: dict, state: str):
         raise HTTPException(400, f"Invalid input: {e}")
     if fallback:
         result["warnings"].insert(0, f"No rates saved for {state} yet – Tamil Nadu average rates used.")
+    result["warnings"].extend(market_notes)
+    result["material_notes"] = market_notes
     result["rates_state"] = used
     return result, rates
 
@@ -248,7 +252,7 @@ def quick_estimate(project_id: int, body: QuickIn, user: User = Depends(get_curr
     out = {}
     std = None
     for spec in ("basic", "standard", "premium"):
-        r, _ = run_calc(db, {**base, "spec_level": spec}, body.state)
+        r, _ = run_calc(db, {**base, "spec_level": spec}, body.state, project_id)
         t = r["totals"]
         out[spec] = {"grand_total": t["grand_total"], "cost_per_sqft": t["cost_per_sqft"]}
         if spec == "standard":
@@ -287,13 +291,21 @@ def estimate_defaults(project_id: int, user: User = Depends(get_current_user), d
         },
         "state": p.state or DEFAULT_STATE,
         "needs_confirmation": missing,
+        "active_design": _active_summary(db, p),
     }
+
+
+def _active_summary(db, p):
+    """1.18: the project's active drawing – the Estimate page uses it instead of asking for manual sizes."""
+    from .design import active_design, design_summary
+    d = active_design(db, p)
+    return design_summary(d) if d else None
 
 
 @router.post("/projects/{project_id}/estimate/calculate")
 def calc_preview(project_id: int, body: CalcIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     require_project(db, user, project_id, "estimate")
-    result, _ = run_calc(db, body.inputs, body.state)
+    result, _ = run_calc(db, body.inputs, body.state, project_id)
     return result
 
 
@@ -311,7 +323,7 @@ def est_summary(e: Estimate) -> dict:
 @router.post("/projects/{project_id}/estimates")
 def save_estimate(project_id: int, body: SaveIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     p = require_project(db, user, project_id, "estimate")
-    result, rates = run_calc(db, body.inputs, body.state)
+    result, rates = run_calc(db, body.inputs, body.state, project_id)
     ver = (db.query(func.max(Estimate.version)).filter(Estimate.project_id == p.id).scalar() or 0) + 1
     t = result["totals"]
     e = Estimate(project_id=p.id, version=ver, title=body.title.strip() or f"Estimate v{ver}",
@@ -430,7 +442,7 @@ def export_unsaved(project_id: int, body: ExportIn, kind: str = "pdf", user: Use
     kind: excel | pdf | bank | client."""
     from ..estimate.exports import to_pdf_bank, to_pdf_client
     p = require_project(db, user, project_id, "estimate")
-    result, _ = run_calc(db, body.inputs, body.state)
+    result, _ = run_calc(db, body.inputs, body.state, project_id)
     from datetime import datetime as _dt
     tmp = Estimate(title=body.title, version=0, rate_state=result["rates_state"], result=result, created_at=_dt.now())
     proj, est = export_payload(tmp, p, db)  # tmp is never added to the database
@@ -572,10 +584,10 @@ def tab_export(project_id: int, body: TabExportIn, tab: str = "overview", fmt: s
         raise HTTPException(400, "fmt must be pdf or excel")
     if tab not in T.TAB_TITLE or tab == "part":
         raise HTTPException(400, f"tab must be one of {', '.join(k for k in T.TAB_TITLE if k != 'part')}")
-    result, _ = run_calc(db, body.inputs, body.state)
+    result, _ = run_calc(db, body.inputs, body.state, project_id)
     extra = None
     if tab == "compare":
-        extra = {"compare": {lv: run_calc(db, {**body.inputs, "spec_level": lv}, body.state)[0]
+        extra = {"compare": {lv: run_calc(db, {**body.inputs, "spec_level": lv}, body.state, project_id)[0]
                              for lv in ("basic", "standard", "premium")}}
     secs = T.sections_for(tab, result, extra)
     if not secs:
@@ -603,7 +615,7 @@ def part_estimate(project_id: int, body: PartIn, fmt: str = "json", user: User =
     labour and total. fmt=json shows it; pdf / excel downloads it. Works unsaved (draft)."""
     from ..estimate import tabs as T
     p = require_project(db, user, project_id, "estimate")
-    result, _ = run_calc(db, body.inputs, body.state)
+    result, _ = run_calc(db, body.inputs, body.state, project_id)
     try:
         part = T.part_estimate(result, body.floor, body.work)
     except ValueError as e:

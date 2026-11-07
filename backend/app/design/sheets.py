@@ -106,7 +106,8 @@ def apply_specs(plan: dict) -> list[str]:
 # ---------------------------------------------------------------- area details
 def area_details(plan: dict) -> dict:
     plot = plan["plot"]
-    plot_sqft = plot["w"] * plot["d"]
+    from .plot import plot_area_sqft  # 1.18 irregular plots: real area
+    plot_sqft = plot_area_sqft(plot)
     rows = []
     for lv in plan["levels"]:
         s = lv["summary"]
@@ -514,7 +515,10 @@ def floor_plan(plan: dict, li: int) -> Dwg:
 def site_plan(plan: dict) -> Dwg:
     plot, b, sb = plan["plot"], plan["building"], plan.get("setbacks") or {}
     d = Dwg("Site Plan")
-    d.rect(0, 0, plot["w"], plot["d"], "PLOT")
+    from .plot import draw_plot
+    poly = draw_plot(d, plot)  # 1.18 irregular plot
+    if not poly:
+        d.rect(0, 0, plot["w"], plot["d"], "PLOT")
     lv0 = plan["levels"][0]
     xs = [r["x"] for r in lv0["rooms"]] + [r["x"] + r["w"] for r in lv0["rooms"]]
     ys = [r["y"] for r in lv0["rooms"]] + [r["y"] + r["d"] for r in lv0["rooms"]]
@@ -531,6 +535,9 @@ def site_plan(plan: dict) -> Dwg:
     road = (plan.get("requirements") or {}).get("road_width_m") or sb.get("road_width_m")
     d.text(plot["w"] / 2, -7.4, f"ROAD{f'  ({road:g} m WIDE)' if isinstance(road, (int, float)) else ''}", 0.8, bold=True)
     ft = sb.get("ft") or {}
+    if poly:
+        _north(d, plan, plot["w"] + 7, plot["d"] - 3)
+        return d
     if by0 > 0.1:
         d.dim_v(-1.5, 0, by0, f"FRONT {ft.get('front', by0):g}'")
     if plot["d"] - by1 > 0.1:
@@ -947,6 +954,10 @@ def sheet_set_pdf(plan: dict, project: dict, meta: dict, style: str = "paper") -
         from .roof import roof_plan, truss_detail
         drawings += [(f"A-{n0 + 2:02d}", "Roof Plan (Sheet Roof)", roof_plan(plan)), (f"A-{n0 + 3:02d}", "Truss & Purlin Detail", truss_detail(plan))]
         n0 += 2
+    from .stair import has_stair, stair_detail  # 1.18
+    if has_stair(plan):
+        drawings += [(f"A-{n0 + 2:02d}", "Staircase Detail", stair_detail(plan))]
+        n0 += 1
     sheet_list = [("A-01", "Title Sheet & Area Statement")] + [(no, t) for no, t, _ in drawings] + \
                  [(f"A-{n0 + 2:02d}", "Door & Window Schedule")]
     navy = colors.HexColor("#0F2350")
@@ -972,7 +983,7 @@ def sheet_set_pdf(plan: dict, project: dict, meta: dict, style: str = "paper") -
         rows = [("Project", project.get("name", "")), ("Project code", project.get("code", "")),
                 ("Client / owner", project.get("client_name") or "-"),
                 ("Location", ", ".join(v for v in [project.get("location"), project.get("district")] if v) or "-"),
-                ("Plot", f"{plan['plot']['w']:g}' x {plan['plot']['d']:g}' · {plan['facing'].title()} facing"),
+                ("Plot", (f"Irregular · {plan['plot']['info']['area_sqft']:g} sq ft" if plan['plot'].get('info') else f"{plan['plot']['w']:g}' x {plan['plot']['d']:g}'") + f" · {plan['facing'].title()} facing"),
                 ("Drawing", title), ("Sheet no.", no), ("Scale (on A3)", scale),
                 ("Design version", f"v{meta.get('version', '')}"), ("Date", meta.get("date", ""))]
         yy = y - 24 * mm
@@ -1109,6 +1120,9 @@ def sheets_dxf(plan: dict, project: dict, meta: dict) -> bytes:
     if plan.get("roof_sheets"):
         from .roof import roof_plan, truss_detail
         dwgs += [roof_plan(plan), truss_detail(plan)]
+    from .stair import has_stair, stair_detail  # 1.18
+    if has_stair(plan):
+        dwgs.append(stair_detail(plan))
     co = project.get("company") or {}
     return dwgs_dxf(dwgs, f"{co.get('name', '')} - {project.get('name', '')} - design v{meta.get('version', '')}")
 
@@ -1148,12 +1162,16 @@ def dwgs_dxf(dwgs: list, footer: str) -> bytes:
 
 def sheet_pages(plan: dict) -> dict:
     """1.13: preview key -> page number (1-based) in sheet_set_pdf, so each sheet can be downloaded alone."""
+    from .stair import has_stair
     n = len(plan["levels"])
     k = 2 if plan.get("roof_sheets") else 0
+    st = 1 if has_stair(plan) else 0
     out = {"title": 1, "site": 2, **{f"plan_{i}": 3 + i for i in range(n)}, "elevation": 3 + n, "section": 4 + n,
-           "schedule": 5 + n + k}
+           "schedule": 5 + n + k + st}
     if k:
         out.update({"roof": 5 + n, "truss": 6 + n})
+    if st:
+        out["stair"] = 5 + n + k
     return out
 
 
@@ -1180,7 +1198,11 @@ def sheet_previews(plan: dict) -> dict:
     if plan.get("roof_sheets"):
         from .roof import roof_plan, truss_detail
         dw.update({"roof": roof_plan(plan), "truss": truss_detail(plan)})
+    from .stair import design as stair_design, has_stair, stair_detail  # 1.18
+    if has_stair(plan):
+        dw["stair"] = stair_detail(plan)
     return {
+        "stair": stair_design(plan) if has_stair(plan) else None,
         "schedule": sched, "area": area_details(plan),
         "svgs": {k: to_svg(v) for k, v in dw.items()},
         "svgs_cad": {k: to_svg(v, style="cad") for k, v in dw.items()},
