@@ -15,12 +15,14 @@ import { api, fileObjectUrl } from "../../lib/api";
 import { useAuth } from "../../lib/auth";
 import { shadeAdvice, sunPosition, sunVector } from "../../lib/sun";
 import MaterialPanel from "./MaterialPanel";
+import AIRender from "./AIRender";
+import { renderRealistic } from "./house3d/postfx";
 import PlantsPanel, { plantSummary } from "./PlantsPanel";
 import { sheetLines } from "./RoofSheetsPanel";
 import { BUILTIN, lookOf, procTex, type Item, type Look, type Slot } from "./house3d/catalog";
 import {
   ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Camera, ChevronsDown, ChevronsUp, Download, Film, Footprints, Images,
-  Layers3, LogOut, Moon, RotateCcw, Sun, Sunset,
+  Layers3, LogOut, Moon, RotateCcw, Sparkles, Sun, Sunset,
 } from "lucide-react";
 import { toast } from "../ui";
 import type { Plan } from "../../lib/plan";
@@ -52,6 +54,7 @@ export const SWATCHES: Record<Exclude<keyof Finishes, "style" | "mat" | "rooms" 
 };
 export const FIN_LABEL: Record<Exclude<keyof Finishes, "style" | "mat" | "rooms" | "plants">, string> = { ext: "Exterior walls", int: "Interior walls", floor: "Flooring", door: "Doors", frame: "Window frames", roof: "Terrace", plinth: "Plinth" };
 const STYLES: [Style, string, string][] = [
+  ["luxury", "Luxury", "White curved frame, jaali screens, glass rails, wooden ceilings, wall lights, flower boxes"],
   ["modern", "Modern", "Stone + wood cladding, black frames, deep roof overhang with lights"],
   ["contemporary", "Contemporary", "Two-tone, grey tiles, wooden fins, terrace pergola"],
   ["traditional", "Traditional TN", "Tiled sloping roof, thinnai, round pillars, arches"],
@@ -84,6 +87,7 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
   const [flat, setFlat] = useState(false);
   const [structure, setStructure] = useState<any>(null);
   const [busy, setBusy] = useState(false);
+  const [aiBase, setAiBase] = useState<string | null>(null);  // 1.20 AI Render: picture of the current view
   const [quality, setQuality] = useState<Quality>(readQuality);
   const qualityRef = useRef(quality);
   const [walkInfo, setWalkInfo] = useState<{ level: number; room: string; stair: boolean }>({ level: 0, room: "", stair: false });
@@ -554,7 +558,7 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
     save(c.renderer.domElement.toDataURL("image/png"), `${fileBase()}_view.png`);
   };
   /** 1.17 Photo mode: the CURRENT view (walkthrough too) rendered once at high resolution with fine shadows. */
-  const photo = () => {
+  const photo = async () => {
     const c = ctx.current, el = host.current; if (!c || !el) return;
     const r = c.renderer, size = r.getSize(new THREE.Vector2()), pr = r.getPixelRatio();
     const W = 3200, Hh = Math.round(W * (el.clientHeight / Math.max(1, el.clientWidth)));
@@ -564,14 +568,30 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
       r.shadowMap.enabled = true; r.shadowMap.type = THREE.PCFSoftShadowMap; c.sun.castShadow = true;
       c.sun.shadow.mapSize.set(4096, 4096); c.sun.shadow.map?.dispose(); (c.sun.shadow as any).map = null; r.shadowMap.needsUpdate = true;
       r.setPixelRatio(1); r.setSize(W, Hh, false); cam.aspect = W / Hh; cam.updateProjectionMatrix();
-      r.render(c.scene, cam);
+      const real = await renderRealistic(r, c.scene, cam, W, Hh);  // 1.20 soft contact shadows (ambient occlusion)
       save(r.domElement.toDataURL("image/png"), `${fileBase()}_${mode === "walk" ? "Walkthrough" : "View"}_Photo.png`);
-      toast("HD photo saved");
+      toast(real ? "HD photo saved (realistic shading)" : "HD photo saved");
     } finally {
       cam.aspect = aspect; cam.updateProjectionMatrix();
       c.sun.shadow.mapSize.set(ms, ms); c.sun.shadow.map?.dispose(); (c.sun.shadow as any).map = null;
       r.shadowMap.enabled = wasShadow; c.sun.castShadow = wasShadow; r.shadowMap.needsUpdate = true;
       r.setPixelRatio(pr); r.setSize(size.x, size.y, false);
+    }
+  };
+  /** 1.20 AI Render: the current view at the size the AI works best with (768 × 512), realistic shading on */
+  const aiRender = async () => {
+    const c = ctx.current, el = host.current; if (!c || !el) return;
+    if (!pid) return toast("Save the project first", "err");
+    const r = c.renderer, size = r.getSize(new THREE.Vector2()), pr = r.getPixelRatio();
+    const cam = c.camera as THREE.PerspectiveCamera, aspect = cam.aspect;
+    const land = el.clientWidth >= el.clientHeight;
+    const W = land ? 768 : 512, Hh = land ? 512 : 768;
+    try {
+      r.setPixelRatio(1); r.setSize(W, Hh, false); cam.aspect = W / Hh; cam.updateProjectionMatrix();
+      await renderRealistic(r, c.scene, cam, W, Hh);
+      setAiBase(r.domElement.toDataURL("image/png"));
+    } finally {
+      cam.aspect = aspect; cam.updateProjectionMatrix(); r.setPixelRatio(pr); r.setSize(size.x, size.y, false);
     }
   };
   /** render one preset view at a fixed size; returns a PNG data URL */
@@ -744,6 +764,7 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
         <span className="mr-1 text-xs font-semibold text-slate-500"><Download size={13} className="mr-1 inline" />Download</span>
         <button className="btn-outline btn-sm" onClick={png}><Download size={14} />This view (PNG)</button>
         <button className="btn-primary btn-sm" onClick={photo} title="High-resolution photo of exactly what you see – also inside the walkthrough"><Camera size={14} />Photo mode (HD)</button>
+        <button className="btn-primary btn-sm" onClick={aiRender} title="Free AI turns this view into a photo-like concept render (keeps your design's shape)"><Sparkles size={14} />AI Render (photo)</button>
         <button className="btn-outline btn-sm" disabled={busy} onClick={() => views(false)}><Images size={14} />Front · Sides · Rear · 3D (5 PNG)</button>
         <button className="btn-outline btn-sm" disabled={busy} onClick={() => views(true)}><Images size={14} />All views on one sheet</button>
         <label className="ml-1 flex items-center gap-1.5 text-xs"><input type="checkbox" className="h-4 w-4 accent-brand-600" checked={flat} onChange={(e) => setFlat(e.target.checked)} />Flat elevations (no perspective)</label>
@@ -810,6 +831,7 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
           onFinishes?.({ ...fin, rooms });
         }}
         shot={() => { const c = ctx.current; if (!c || mode === "walk") return null; c.renderer.render(c.scene, c.camera); return c.renderer.domElement.toDataURL("image/png"); }} />
+      {aiBase && pid && <AIRender pid={pid} base={aiBase} kind={mode === "interior" || mode === "walk" ? "interior" : "exterior"} style={style} light={light} onClose={() => setAiBase(null)} />}
     </div>
   );
 }

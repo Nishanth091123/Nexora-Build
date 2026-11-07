@@ -363,7 +363,9 @@ def level_openings(lv: dict, level_index: int, building_d: float) -> tuple[list[
         if t in WIN:
             ext = [w for w in ws if w["kind"] == "ext" and rid in (w["a"], w["b"]) and seg_len(w) >= WIN[t] + 1]
             spot = None
-            for w in sorted(ext, key=seg_len, reverse=True):  # 1.15: never on top of the main door / another opening
+            y_front = min(q["y"] for q in rooms)  # 1.20: a living room / bedroom on the road side gets its window on the front
+            on_front = lambda w: (t in HABITABLE and w["y1"] == w["y2"] and abs(w["y1"] - y_front) < 0.01)  # noqa: E731
+            for w in sorted(ext, key=lambda w: (on_front(w), seg_len(w)), reverse=True):  # 1.15: never on top of the main door / another opening
                 spot = place_free(w, WIN[t], ops)
                 if spot:
                     break

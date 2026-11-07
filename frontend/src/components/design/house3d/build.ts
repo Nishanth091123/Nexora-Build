@@ -20,7 +20,7 @@ const CARRY = new Set(["parking", "stilt_open", "portico"]);
 const NO_SLAB = new Set(["terrace", "balcony", "sitout"]);
 const DOORS = new Set(["main_door", "door", "toilet_door", "pooja_door"]);
 
-export type Style = "basic" | "modern" | "contemporary" | "traditional";
+export type Style = "basic" | "modern" | "contemporary" | "traditional" | "luxury";
 export type LightMode = "day" | "dusk" | "night";
 export type Mode = "exterior" | "interior" | "walk" | "exploded" | "structure";
 export type Finishes = { ext: string; int: string; floor: string; door: string; frame: string; roof: string; plinth: string; style?: Style;
@@ -32,6 +32,7 @@ export const STYLE_FINISH: Record<Style, Partial<Finishes>> = {
   modern: { ext: "#efe7d8", frame: "#1d2024", door: "#9a6a3f", plinth: "#3b3a38", roof: "#d6d2ca" },
   contemporary: { ext: "#f5f5f3", frame: "#3a3f46", door: "#5b3a1e", plinth: "#55595f", roof: "#d9d9d6" },
   traditional: { ext: "#f2deb0", frame: "#6b3f1f", door: "#6b3f1f", plinth: "#7a2e1f", roof: "#cfcac2" },
+  luxury: { ext: "#ead9c0", frame: "#1d2024", door: "#7a4e2b", plinth: "#3b3a38", roof: "#d6d2ca" },
 };
 
 export type BuildOpts = {
@@ -71,6 +72,8 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
   const H = plan.floor_height_ft || 10;
   const b = plan.building;
   const style = o.style;
+  const LUX = style === "luxury";  // 1.20 "Luxury" – white curved frame, jaali, glass + steel rails, wood ceilings, wall lights
+  const MOD = style === "modern" || LUX;  // luxury builds on the modern details
   const lit = o.light !== "day";
   const mats = new Map<string, THREE.Material>();
   const M = (key: string, make: () => THREE.Material) => { if (!mats.has(key)) mats.set(key, make()); return mats.get(key)!; };
@@ -80,8 +83,9 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
       polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1, ...p }));
   const texMat = (key: string, map: THREE.Texture, p: Partial<THREE.MeshStandardMaterialParameters> = {}) =>
     M(`t${key}${JSON.stringify(p)}`, () => new THREE.MeshStandardMaterial({ map, roughness: 0.85, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1, ...p }));
-  const stoneM = () => texMat("stone", T.stone(), { roughness: 0.95 });
-  const woodM = (tone = "#9a6a3f") => texMat("wood" + tone, T.wood(tone), { roughness: 0.6 });
+  // 1.20: stone / wood / pavers get relief (bump) from their own picture – joints and grain catch the light
+  const stoneM = () => texMat("stone", T.stone(), { roughness: 0.95, bumpMap: T.bumpOf(T.stone()), bumpScale: 2.2 });
+  const woodM = (tone = "#9a6a3f") => texMat("wood" + tone, T.wood(tone), { roughness: 0.6, bumpMap: T.bumpOf(T.wood(tone)), bumpScale: 0.6 });
   const tileM = () => texMat("tiles", T.tiles(), { roughness: 0.55 });
   const lk = (slot: Slot, roomId?: string) => (o.look ? o.look(slot, roomId) : null);
   const lookMats = new Map<Look, THREE.Material>();
@@ -103,7 +107,7 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
     depthWrite: false, side: THREE.DoubleSide }));
   const railGlass = M("rglass", () => new THREE.MeshPhysicalMaterial({ color: "#cfe7f2", transparent: true, opacity: 0.28, roughness: 0.05, depthWrite: false, side: THREE.DoubleSide }));
   const glow = M("glow", () => new THREE.MeshStandardMaterial({ color: "#fff3d6", emissive: new THREE.Color(lit ? "#ffe2a8" : "#666055"), emissiveIntensity: lit ? 2.2 : 0.2 }));
-  const frameM = pick("frame", () => std(fin.frame, { roughness: 0.4, metalness: style === "modern" ? 0.3 : 0 }, "none"));
+  const frameM = pick("frame", () => std(fin.frame, { roughness: 0.4, metalness: MOD ? 0.3 : 0 }, "none"));
   const edgeMat = M("edge", () => new THREE.LineBasicMaterial({ color: "#3f3f46", transparent: true, opacity: 0.4 }));
 
   const box = (x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, m: THREE.Material | THREE.Material[], parent: THREE.Object3D, name = "", shadow = true) => {
@@ -131,13 +135,13 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
   const sheetMumty = sheets.some((s) => s.place === "headroom");
   const gap = o.mode === "exploded" ? 6 : 0;
   const zOf = (li: number) => PLINTH + li * H + li * gap;
-  const ov = style === "modern" ? 2.25 : style === "contemporary" ? 1.4 : style === "traditional" ? 0.6 : 0.4;
+  const ov = MOD ? 2.25 : style === "contemporary" ? 1.4 : style === "traditional" ? 0.6 : 0.4;
 
   // ---------------- plinth (exact outline of the ground floor)
   const g0 = new Grid(levels[0].rooms, 2);
   levels[0].rooms.forEach((r) => g0.fill(r));
   const plinthGrid = g0.dilate(0.4);
-  const plinthM = pick("plinth", () => (style === "modern" ? stoneM() : std(fin.plinth)));
+  const plinthM = pick("plinth", () => (MOD ? stoneM() : std(fin.plinth)));
   for (const r of plinthGrid.rects()) box(r.x, r.y, 0, r.x + r.w, r.y + r.d, PLINTH, plinthM, root, "plinth");
 
   let mainDoor: { op: Lv["openings"][number]; out: number } | null = null;
@@ -239,6 +243,8 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
       if (slabOn && isRoof && li === levels.length - 1 && style === "traditional") { slabOver(lv, li, z + H, false, false, g); hipRoof(lv, z + H, g); }
       if (li === levels.length - 1 && topShown && o.roof && o.mode !== "interior" && style !== "traditional") terrace(lv, z + H, g);
     }
+    if (LUX && o.mode !== "interior" && !cutInterior) luxCanopies(lv, li, z, g);
+    if (MOD && o.furniture && !cutInterior) coves(lv, z, g);  // 1.20 false-ceiling border with warm cove light inside
     if (lit) {  // warm light inside each floor (night / dusk)
       const e = extent(lv.rooms);
       const l = new THREE.PointLight("#ffd9a0", o.light === "night" ? 70 : 45, 45, 1.6);
@@ -248,6 +254,7 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
 
   if (o.mode !== "interior" || o.only == null) sheetRoofs();
   if (mainDoor && o.mode !== "interior") entrance(mainDoor.op, mainDoor.out);
+  if (LUX && o.mode !== "interior" && o.only == null && o.roof && nShow === levels.length) luxFrame();
   if (o.surround) surroundings();
   if (!o.edges) optimize(root);
   lights.forEach((l) => root.add(l));
@@ -368,12 +375,170 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
     }
   }
 
+  /** 1.20 interiors: gypsum false-ceiling border round the hall / bedrooms / dining, cove light strip, skirting */
+  function coves(lv: Lv, z: number, g: THREE.Object3D) {
+    const gyp = std("#fbfaf7", { roughness: 0.7 }, "none");
+    const strip = M("cove", () => new THREE.MeshStandardMaterial({ color: "#fff1d6", emissive: new THREE.Color("#ffd9a0"), emissiveIntensity: lit ? 1.6 : 0.35 }));
+    const skirt = std("#8d867b", { roughness: 0.4 }, "none");
+    const top = z + H - SLAB;
+    for (const r of lv.rooms.filter((q) => ["hall", "bedroom", "dining", "lounge"].includes(q.type) && q.w >= 9 && q.d >= 9)) {
+      const bw = 1.6, dz = 0.5, i = 0.25;  // band width, drop, wall gap
+      const x0 = r.x + i, x1 = r.x + r.w - i, y0 = r.y + i, y1 = r.y + r.d - i;
+      for (const [a, c, d2, e] of [[x0, y0, x1, y0 + bw], [x0, y1 - bw, x1, y1], [x0, y0 + bw, x0 + bw, y1 - bw], [x1 - bw, y0 + bw, x1, y1 - bw]] as [number, number, number, number][])
+        box(a, c, top - dz, d2, e, top, gyp, g, "false ceiling", false);
+      for (const [a, c, d2, e] of [[x0 + bw, y0 + bw, x1 - bw, y0 + bw + 0.08], [x0 + bw, y1 - bw - 0.08, x1 - bw, y1 - bw], [x0 + bw, y0 + bw, x0 + bw + 0.08, y1 - bw], [x1 - bw - 0.08, y0 + bw, x1 - bw, y1 - bw]] as [number, number, number, number][])
+        box(a, c, top - 0.12, d2, e, top - 0.04, strip, g, "cove light", false);
+      for (const [a, c, d2, e] of [[r.x + 0.26, r.y + 0.26, r.x + r.w - 0.26, r.y + 0.32], [r.x + 0.26, r.y + r.d - 0.32, r.x + r.w - 0.26, r.y + r.d - 0.26], [r.x + 0.26, r.y + 0.26, r.x + 0.32, r.y + r.d - 0.26], [r.x + r.w - 0.32, r.y + 0.26, r.x + r.w - 0.26, r.y + r.d - 0.26]] as [number, number, number, number][])
+        box(a, c, z + 0.04, d2, e, z + 0.35, skirt, g, "skirting", false);
+    }
+  }
+
+  // =================================================================== 1.20 luxury elevation parts
+  /** front windows: upper floors get a white CNC jaali screen in front; every front window gets wall lights at its sides */
+  function luxWindow(horiz: boolean, s: number, e: number, c0: number, out: number, o2: number, zs: number, zt: number, li: number, front: boolean, g: THREE.Object3D) {
+    if (!front) return;
+    if (li > 0 && e - s >= 2.5) {
+      const jm = M("jaali", () => {
+        const t = T.jaali().clone(); t.needsUpdate = true; t.repeat.set(0.3, 0.3);
+        return new THREE.MeshStandardMaterial({ color: "#fbfaf7", map: t, alphaTest: 0.5, transparent: false, side: THREE.DoubleSide, roughness: 0.5 });
+      });
+      wbox(horiz, s - 0.3, e + 0.3, c0, o2 + out * 0.55, o2 + out * 0.62, zs - 0.4, zt + 0.25, jm, g, "jaali");
+      const fr = std("#1d2024", { roughness: 0.5 }, "none");  // black frame round the jaali
+      wbox(horiz, s - 0.45, e + 0.45, c0, o2 + out * 0.5, o2 + out * 0.7, zt + 0.25, zt + 0.4, fr, g);
+      wbox(horiz, s - 0.45, e + 0.45, c0, o2 + out * 0.5, o2 + out * 0.7, zs - 0.55, zs - 0.4, fr, g);
+      wbox(horiz, s - 0.45, s - 0.3, c0, o2 + out * 0.5, o2 + out * 0.7, zs - 0.55, zt + 0.4, fr, g);
+      wbox(horiz, e + 0.3, e + 0.45, c0, o2 + out * 0.5, o2 + out * 0.7, zs - 0.55, zt + 0.4, fr, g);
+    }
+    wallLight(horiz, s - 1.1, c0, out, o2, zt + 0.9, g);
+  }
+
+  /** small dark up-down wall light; at evening / night it glows and washes the wall */
+  function wallLight(horiz: boolean, at: number, c0: number, out: number, o2: number, zc: number, g: THREE.Object3D) {
+    const body = std("#1f2226", { roughness: 0.4, metalness: 0.4 }, "none");
+    wbox(horiz, at - 0.18, at + 0.18, c0, o2, o2 + out * 0.35, zc - 0.35, zc + 0.35, body, g, "wall light");
+    if (!lit) return;
+    const beam = M("beam", () => new THREE.MeshBasicMaterial({ color: "#ffd59a", transparent: true, opacity: 0.22, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }));
+    for (const dir of [1, -1]) {
+      const cone = new THREE.Mesh(new THREE.ConeGeometry(0.75, 3.2, 16, 1, true), beam);
+      const [px, py] = horiz ? [at, c0 + o2 + out * 0.2] : [c0 + o2 + out * 0.2, at];
+      cone.position.set(b.x + px, zc + dir * 1.75, -(b.y + py));
+      if (dir > 0) cone.rotation.x = Math.PI;  // wide end away from the lamp
+      cone.userData.keep = true; g.add(cone);
+    }
+  }
+
+  /** planter box with flowers and trailing leaves on the outside of a balcony rail */
+  function planter(horiz: boolean, s: number, e: number, c0: number, out: number, z: number, g: THREE.Object3D) {
+    const pm = std("#2a2c30", { roughness: 0.6 }, "none");
+    wbox(horiz, s, e, c0, out * 0.25, out * 1.25, z + 0.2, z + 1.2, pm, g, "planter");
+    const cols = ["#d9468f", "#e86aa8", "#b5179e", "#f472b6", "#fde68a"];
+    const leaf = std("#3f7d3a", { roughness: 0.9 }, "none");
+    let k = 0;
+    for (let t = s + 0.35; t < e - 0.2; t += 0.45, k++) {
+      const [px, py] = horiz ? [t, c0 + out * 0.75] : [c0 + out * 0.75, t];
+      const lb = new THREE.Mesh(new THREE.IcosahedronGeometry(0.42, 0), leaf);
+      lb.position.set(b.x + px, z + 1.45, -(b.y + py)); lb.scale.set(1, 0.7, 1); g.add(lb);
+      const fl = new THREE.Mesh(new THREE.IcosahedronGeometry(0.2, 0), std(cols[k % cols.length], { roughness: 0.7 }, "none"));
+      fl.position.set(b.x + px + 0.1, z + 1.75, -(b.y + py)); g.add(fl);
+      if (k % 2 === 0) {  // trailing leaves over the front
+        const tr = new THREE.Mesh(new THREE.BoxGeometry(horiz ? 0.25 : 0.12, 1.2, horiz ? 0.12 : 0.25), leaf);
+        const [qx, qy] = horiz ? [t, c0 + out * 1.3] : [c0 + out * 1.3, t];
+        tr.position.set(b.x + qx, z + 0.6, -(b.y + qy)); g.add(tr);
+      }
+    }
+  }
+
+  /** balconies / sit-outs get a covered top: slab, wooden louvre ceiling and downlights (like the reference elevations) */
+  function luxCanopies(lv: Lv, li: number, z: number, g: THREE.Object3D) {
+    if (li === 0) return;
+    const above = levels[li + 1];
+    for (const r of lv.rooms.filter((q) => q.type === "balcony" || q.type === "sitout")) {
+      const covered = above && above.rooms.some((q) => !NO_SLAB.has(q.type) && q.x < r.x + r.w - 0.5 && q.x + q.w > r.x + 0.5 && q.y < r.y + r.d - 0.5 && q.y + q.d > r.y + 0.5);
+      const zt = z + H;
+      if (!covered) box(r.x - 0.3, r.y - 0.3, zt - SLAB, r.x + r.w + 0.3, r.y + r.d + 0.3, zt, [std("#f7f5f0", { roughness: 0.35 }, "none"), std("#f7f5f0", { roughness: 0.35 }, "none"), std(fin.roof), std("#f4f2ee"), std("#f7f5f0", { roughness: 0.35 }, "none"), std("#f7f5f0", { roughness: 0.35 }, "none")], g, "canopy");
+      const wd = woodM("#8a5a34");
+      const alongX = r.w >= r.d;
+      const L = alongX ? r.w : r.d;
+      for (let t = 0.4; t < (alongX ? r.d : r.w) - 0.2; t += 0.55) {  // louvres
+        if (alongX) box(r.x + 0.15, r.y + t, zt - SLAB - 0.45, r.x + r.w - 0.15, r.y + t + 0.25, zt - SLAB, wd, g, "louvre");
+        else box(r.x + t, r.y + 0.15, zt - SLAB - 0.45, r.x + t + 0.25, r.y + r.d - 0.15, zt - SLAB, wd, g, "louvre");
+      }
+      for (let t = 1.5; t < L - 1; t += 3) {  // downlights
+        const [px, py] = alongX ? [r.x + t, r.y + r.d / 2] : [r.x + r.w / 2, r.y + t];
+        const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.05, 12), glow);
+        disc.position.set(b.x + px, zt - SLAB - 0.48, -(b.y + py)); g.add(disc);
+      }
+      if (lit) {
+        const l = new THREE.PointLight("#ffd29a", 18, 12, 1.8);
+        l.position.set(b.x + r.x + r.w / 2, zt - SLAB - 1, -(b.y + r.y + r.d / 2)); lights.push(l);
+      }
+    }
+  }
+
+  /** the white rounded frame round the upper floors at the front (the "C" band of modern Indian elevations) */
+  function luxFrame() {
+    const ups = levels.length > 1 ? levels.slice(1) : levels;
+    let x0 = Infinity, x1 = -Infinity, yF = Infinity;
+    for (const lv of ups) for (const r of lv.rooms) { x0 = Math.min(x0, r.x); x1 = Math.max(x1, r.x + r.w); yF = Math.min(yF, r.y); }
+    const zb = levels.length > 1 ? zOf(1) - SLAB - 0.6 : PLINTH;
+    const top = zOf(levels.length - 1) + H + (sheetTop ? 0.3 : 1.2);
+    const u0 = x0 - 0.6, u1 = x1 + 0.6, t = 1.5, rad = Math.min(3, (u1 - u0) / 5, (top - zb) / 5);
+    const rr = (sh: THREE.Shape | THREE.Path, a0: number, v0: number, a1: number, v1: number, r: number) => {
+      sh.moveTo(a0 + r, v0); sh.lineTo(a1 - r, v0); sh.quadraticCurveTo(a1, v0, a1, v0 + r); sh.lineTo(a1, v1 - r);
+      sh.quadraticCurveTo(a1, v1, a1 - r, v1); sh.lineTo(a0 + r, v1); sh.quadraticCurveTo(a0, v1, a0, v1 - r);
+      sh.lineTo(a0, v0 + r); sh.quadraticCurveTo(a0, v0, a0 + r, v0);
+    };
+    const sh = new THREE.Shape(); rr(sh, u0, zb, u1, top, rad);
+    const hole = new THREE.Path(); rr(hole, u0 + t, zb + t, u1 - t, top - t, Math.max(0.3, rad - t)); sh.holes.push(hole);
+    const depth = Math.max(3.2, ov + 1.2);
+    const geo = new THREE.ExtrudeGeometry(sh, { depth, bevelEnabled: false, curveSegments: 16 });
+    const m = new THREE.Mesh(geo, std("#f8f6f1", { roughness: 0.35 }, "none"));
+    m.position.set(b.x, 0, -(b.y + yF - 1.2) - depth);
+    m.castShadow = true; m.receiveShadow = true; m.name = "frame band"; root.add(m);
+    if (lit) {  // warm LED line on the inside edge of the frame
+      const led = M("led", () => new THREE.MeshBasicMaterial({ color: "#ffd9a0" }));
+      box(u0 + t, yF - 1.22, top - t - 0.08, u1 - t, yF - 1.15, top - t, led, root, "led");
+    }
+  }
+
+  /** flower bed inside the front compound wall + garden spike lights */
+  function luxGarden(P: { w: number; d: number }, gx: number, gateW: number) {
+    const soil = std("#4a3b2c", { roughness: 1 }, "none");
+    const leaf = std("#3f7d3a", { roughness: 0.9 }, "none");
+    const cols = ["#d9468f", "#f59e0b", "#e11d48", "#f472b6", "#facc15", "#ffffff"];
+    const g = new THREE.Group(); g.name = "garden"; root.add(g);
+    const bed = (xa: number, xb: number) => {
+      if (xb - xa < 2) return;
+      const geo = new THREE.BoxGeometry(xb - xa, 0.5, 2.2); const me = new THREE.Mesh(geo, soil);
+      me.position.set((xa + xb) / 2, 0.25, -1.9); me.receiveShadow = true; g.add(me);
+      let k = 0;
+      for (let x = xa + 0.6; x < xb - 0.4; x += 0.9, k++) {
+        const bush = new THREE.Mesh(new THREE.IcosahedronGeometry(0.55 + (k % 3) * 0.12, 0), leaf);
+        bush.position.set(x, 0.85, -1.6 - (k % 2) * 0.6); bush.castShadow = true; g.add(bush);
+        for (let f = 0; f < 3; f++) {
+          const fl = new THREE.Mesh(new THREE.IcosahedronGeometry(0.16, 0), std(cols[(k + f) % cols.length], { roughness: 0.7 }, "none"));
+          fl.position.set(x + (f - 1) * 0.3, 1.25 + (f % 2) * 0.15, -1.6 - (k % 2) * 0.6 + (f - 1) * 0.15); g.add(fl);
+        }
+        if (k % 3 === 0) {  // spike light
+          const post = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.1, 6), std("#1d2024", {}, "none"));
+          post.position.set(x + 0.45, 0.8, -1.0); g.add(post);
+          const head = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.22, 0.22), glow); head.position.set(x + 0.45, 1.4, -1.0); g.add(head);
+        }
+      }
+    };
+    bed(1.0, gx - 1.6); bed(gx + gateW + 1.6, P.w - 1.0);
+  }
+
   function skinFor(li: number, front: boolean, lv: Lv, w: Lv["walls"][number]) {
     const room = lv.rooms.find((r) => r.id === (w.a || w.b));
     const extP = lk("ext_wall"), cladP = lk("cladding");
     const plain = () => (extP ? LM(extP) : std(fin.ext));
     const feature = (dflt: () => THREE.Material) => () => (cladP ? LM(cladP) : dflt());
-    if (style === "modern") {
+    if (LUX) {  // smooth putty everywhere, a stone strip where the stair / toilets meet the front
+      if (front && room && (room.type === "stair" || room.type === "toilet" || room.type === "common_toilet" || room.type === "utility")) return feature(() => stoneM());
+      return plain;
+    }
+    if (MOD) {
       if (front && li === 0 && room && room.type !== "parking") return feature(() => stoneM());
       if (front && li > 0 && room && (room.type === "bedroom" || room.type === "stair")) return feature(() => woodM("#8c5a33"));
       return plain;
@@ -395,19 +560,20 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
     wbox(horiz, e - f, e, c0, fd0, fd1, zs, zt, frameM, g);
     wbox(horiz, s, e, c0, fd0, fd1, zs, zs + f, frameM, g);
     wbox(horiz, s, e, c0, fd0, fd1, zt - f, zt, frameM, g);
-    const nV = vent ? 0 : Math.max(1, Math.round((e - s) / (style === "modern" ? 1.6 : 2.2)));
+    const nV = vent ? 0 : Math.max(1, Math.round((e - s) / (MOD ? 1.6 : 2.2)));
     for (let k = 1; k <= nV; k++) {
       const m = s + (k * (e - s)) / (nV + 1);
       wbox(horiz, m - 0.05, m + 0.05, c0, fd0, fd1, zs, zt, frameM, g);
     }
-    if (!vent && (style === "modern" || style === "contemporary")) wbox(horiz, s, e, c0, fd0, fd1, zs + (zt - zs) * 0.68, zs + (zt - zs) * 0.68 + 0.1, frameM, g);
+    if (!vent && (MOD || style === "contemporary")) wbox(horiz, s, e, c0, fd0, fd1, zs + (zt - zs) * 0.68, zs + (zt - zs) * 0.68 + 0.1, frameM, g);
     if (vent) for (let k = 1; k < 3; k++) wbox(horiz, s, e, c0, fd0, fd1, zs + (k * (zt - zs)) / 3 - 0.04, zs + (k * (zt - zs)) / 3 + 0.04, frameM, g);
     // sill
     if (outside && out) wbox(horiz, s - 0.25, e + 0.25, c0, out * th, out * (th + 0.3), zs - 0.15, zs, std("#d6d0c4", { roughness: 0.5 }), g);
     if (!outside || !out || cut) return;
     const o2 = out * (th + 0.06);
-    if (style === "modern" && !vent) {  // projecting box surround
-      const bm = li === 0 && front ? std("#2a2c30", { roughness: 0.5 }, "none") : woodM("#7a4e2b");
+    if (LUX && !vent) luxWindow(horiz, s, e, c0, out, o2, zs, zt, li, front, g);
+    if (MOD && !vent) {  // projecting box surround
+      const bm = LUX || (li === 0 && front) ? std("#2a2c30", { roughness: 0.5 }, "none") : woodM("#7a4e2b");
       wbox(horiz, s - 0.45, e + 0.45, c0, o2, o2 + out * 1.1, zt, zt + 0.35, bm, g);
       wbox(horiz, s - 0.45, s - 0.1, c0, o2, o2 + out * 1.1, zs - 0.15, zt, bm, g);
       wbox(horiz, e + 0.1, e + 0.45, c0, o2, o2 + out * 1.1, zs - 0.15, zt, bm, g);
@@ -476,14 +642,24 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
   }
 
   function railing(horiz: boolean, s: number, e: number, c0: number, z: number, g: THREE.Object3D, lv: Lv, w: Lv["walls"][number]) {
-    if (style === "modern" || style === "contemporary") {
+    if (LUX) {  // frameless glass, slim steel top rail, planter box with flowers on the outside
+      const ht = 3.4, steel = std("#c9ced3", { roughness: 0.25, metalness: 0.85 }, "none");
+      wbox(horiz, s, e, c0, -0.03, 0.03, z + 0.2, z + ht - 0.1, railGlass, g, "glass rail");
+      wbox(horiz, s, e, c0, -0.07, 0.07, z + ht - 0.1, z + ht, steel, g);
+      for (const m of [s + 0.08, e - 0.08]) wbox(horiz, m - 0.06, m + 0.06, c0, -0.06, 0.06, z, z + ht, steel, g);
+      wbox(horiz, s, e, c0, -0.2, 0.2, z, z + 0.2, std(fin.ext), g);
+      const out = !w.b ? 1 : -1;  // planter on the side with no room (a = smaller x/y side)
+      if (e - s > 3) planter(horiz, s + 0.6, Math.min(e - 0.6, s + Math.max(3, (e - s) * 0.45)), c0, out, z, g);
+      return;
+    }
+    if (MOD || style === "contemporary") {
       const ht = 3.4;
       wbox(horiz, s, e, c0, -0.03, 0.03, z + 0.15, z + ht - 0.15, railGlass, g, "glass rail");
-      wbox(horiz, s, e, c0, -0.12, 0.12, z + ht - 0.15, z + ht, style === "modern" ? woodM("#8c5a33") : std("#3a3f46", {}, "none"), g);
+      wbox(horiz, s, e, c0, -0.12, 0.12, z + ht - 0.15, z + ht, MOD ? woodM("#8c5a33") : std("#3a3f46", {}, "none"), g);
       const n = Math.max(1, Math.round((e - s) / 4));
       for (let k = 0; k <= n; k++) {
         const m = s + (k * (e - s)) / n;
-        wbox(horiz, m - 0.1, m + 0.1, c0, -0.1, 0.1, z, z + ht, style === "modern" ? woodM("#8c5a33") : std("#3a3f46", {}, "none"), g);
+        wbox(horiz, m - 0.1, m + 0.1, c0, -0.1, 0.1, z, z + ht, MOD ? woodM("#8c5a33") : std("#3a3f46", {}, "none"), g);
       }
       wbox(horiz, s, e, c0, -0.2, 0.2, z, z + 0.15, std(fin.ext), g);
       return;
@@ -507,7 +683,7 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
   function carryFrame(lv: Lv, carry: Room[], z: number, g: THREE.Object3D) {
     const above = levels.length - 1 - levels.indexOf(lv);
     const cs = above >= 2 ? 1.0 : 0.75;
-    const colM = style === "modern" ? stoneM() : std("#e6e1d8");
+    const colM = MOD ? stoneM() : std("#e6e1d8");
     const beamM = std(style === "contemporary" ? "#d9d6d0" : "#efece6");
     const pts: [number, number][] = [];
     const add = (x: number, y: number) => { if (!pts.some(([a, c]) => Math.abs(a - x) < 3 && Math.abs(c - y) < 3)) pts.push([x, y]); };
@@ -564,14 +740,14 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
     const under = pick("ceiling", () => std("#f4f2ee"));
     for (const r of slabG.rects()) box(r.x, r.y, zTop - SLAB, r.x + r.w, r.y + r.d, zTop, [under, under, topM, under, under, under], g, "slab");
     // overhang ring with fascia (+ wood soffit and downlights for modern)
-    const thick = style === "modern" ? (isRoof ? 0.85 : 0.6) : style === "contemporary" ? 0.55 : SLAB;
+    const thick = MOD ? (isRoof ? 0.85 : 0.6) : style === "contemporary" ? 0.55 : SLAB;
     const ring = grid.dilate(isRoof ? ov : Math.min(ov, 1.0)).minus(grid);
-    const fasc = std(style === "contemporary" ? "#55595f" : style === "modern" ? "#f2efe9" : fin.ext);
-    const soff = style === "modern" ? woodM("#a06b3e") : under;
+    const fasc = std(style === "contemporary" ? "#55595f" : MOD ? "#f2efe9" : fin.ext);
+    const soff = MOD ? woodM("#a06b3e") : under;
     for (const r of ring.rects()) {
       box(r.x, r.y, zTop - thick, r.x + r.w, r.y + r.d, zTop, [fasc, fasc, topM, soff, fasc, fasc], g, "overhang");
     }
-    if (style === "modern" && lit) {  // downlights in the soffit
+    if (MOD && (lit || LUX)) {  // downlights in the soffit (luxury: always visible)
       let n = 0;
       for (const r of ring.rects()) {
         const long = Math.max(r.w, r.d);
@@ -581,7 +757,7 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
           const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.04, 12), glow);
           disc.position.set(b.x + px, zTop - thick - 0.02, -(b.y + py)); g.add(disc);
           n++;
-          if (n <= 3 && py < extent(lv.rooms).y0) {
+          if (lit && n <= 3 && py < extent(lv.rooms).y0) {
             const sp = new THREE.SpotLight("#ffd59a", 40, 18, Math.PI / 5, 0.6, 1.5);
             sp.position.set(b.x + px, zTop - thick - 0.1, -(b.y + py));
             sp.target.position.set(b.x + px, zTop - thick - 8, -(b.y + py + 0.6));
@@ -599,8 +775,8 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
     const grid = new Grid(covered, 2);
     covered.forEach((r) => grid.fill(r));
     const pm = std(fin.ext);
-    const copeM = std(style === "modern" ? "#2a2c30" : style === "contemporary" ? "#55595f" : "#a1a1aa", {}, "none");
-    const ph = style === "modern" ? 3.3 : PARAPET;
+    const copeM = std(MOD ? "#2a2c30" : style === "contemporary" ? "#55595f" : "#a1a1aa", {}, "none");
+    const ph = MOD ? 3.3 : PARAPET;
     for (const ed of grid.edges()) {
       const inS = ed.out === -1 ? 0.25 : -0.25;  // parapet stands just inside the edge
       wbox(ed.h, ed.s, ed.e, ed.c, 0, inS, zt, zt + ph, pm, g, "parapet");
@@ -608,9 +784,9 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
     }
     const st = lv.rooms.find((r) => r.type === "stair");
     if (st && levels.length > 1) {  // head room
-      const hm = style === "modern" ? stoneM() : style === "contemporary" ? tileM() : std(fin.ext);
+      const hm = MOD ? stoneM() : style === "contemporary" ? tileM() : std(fin.ext);
       box(st.x, st.y, zt, st.x + st.w, st.y + st.d, zt + HEADROOM, hm, g, "head room");
-      if (!sheetMumty) box(st.x - 0.9, st.y - 0.9, zt + HEADROOM, st.x + st.w + 0.9, st.y + st.d + 0.9, zt + HEADROOM + 0.6, [fascOf(), fascOf(), std(fin.roof), style === "modern" ? woodM("#a06b3e") : std("#f4f2ee"), fascOf(), fascOf()], g);
+      if (!sheetMumty) box(st.x - 0.9, st.y - 0.9, zt + HEADROOM, st.x + st.w + 0.9, st.y + st.d + 0.9, zt + HEADROOM + 0.6, [fascOf(), fascOf(), std(fin.roof), MOD ? woodM("#a06b3e") : std("#f4f2ee"), fascOf(), fascOf()], g);
       // door to the terrace
       const dw = Math.min(3, st.w - 1);
       box(st.x + (st.w - dw) / 2, st.y + st.d, zt, st.x + (st.w + dw) / 2, st.y + st.d + 0.05, zt + 7, woodM(fin.door), g, "door");
@@ -624,7 +800,7 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
       for (let x = px; x <= px + pw + 0.01; x += 1.2) box(x - 0.1, py - 0.6, zt + 8.5, x + 0.1, py + pd + 0.6, zt + 9.1, pm2, g, "pergola");
     }
   }
-  function fascOf() { return std(style === "contemporary" ? "#55595f" : style === "modern" ? "#f2efe9" : fin.ext); }
+  function fascOf() { return std(style === "contemporary" ? "#55595f" : MOD ? "#f2efe9" : fin.ext); }
 
   function hipRoof(lv: Lv, zt: number, g: THREE.Object3D) {
     const covered = lv.rooms.filter((r) => !NO_SLAB.has(r.type));
@@ -763,11 +939,11 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
       return;
     }
     // modern / contemporary / basic: flat canopy slab, pillars in front
-    const cm = style === "modern" ? woodM("#a06b3e") : std("#f4f2ee");
+    const cm = MOD ? woodM("#a06b3e") : std("#f4f2ee");
     const top = std(fin.roof), fas = fascOf();
     box(x0 - 0.5, yF - depth, ch, x1 + 0.5, yF, ch + 0.55, [fas, fas, top, cm, fas, fas], root, "canopy");
     if (style !== "basic") {
-      const pm = style === "modern" ? stoneM() : tileM();
+      const pm = MOD ? stoneM() : tileM();
       for (const px of [x0 - 0.2, x1 - 0.9]) box(px, yF - depth + 0.1, ground === 0 ? 0 : PLINTH, px + 1.1, yF - depth + 1.2, ch, pm, root, "pillar");
     }
     if (lit) {
@@ -1017,9 +1193,9 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
     // compound wall + gate
     const gateW = park ? Math.min(Math.max(10, park.w), P.w * 0.5) : Math.min(12, P.w * 0.4);
     let gx = park ? Math.min(Math.max(bx0 + park.x + park.w / 2 - gateW / 2, 1.5), P.w - gateW - 1.5) : P.w / 2 - gateW / 2;
-    const wallH = style === "modern" ? 5 : 4.5;
+    const wallH = MOD ? 5 : 4.5;
     const cwPick = lk("compound");
-    const cw = style === "traditional" ? std("#fbf3e0") : style === "contemporary" ? std("#f5f5f3") : style === "modern" ? std("#2a2c30", { roughness: 0.6 }, "none") : std("#e7e1d6");
+    const cw = style === "traditional" ? std("#fbf3e0") : style === "contemporary" ? std("#f5f5f3") : LUX ? std("#f1ebe1") : MOD ? std("#2a2c30", { roughness: 0.6 }, "none") : std("#e7e1d6");
     const cwPlain = cwPick ? LM(cwPick) : null;
     const seg = (x0: number, z0: number, x1: number, z1: number, front: boolean) => {
       const len = Math.hypot(x1 - x0, z1 - z0);
@@ -1029,7 +1205,7 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
         const geo = new THREE.BoxGeometry(w, h, d); T.worldUV(geo, w, h, d); add(geo, m, cx, cy, cz, true);
       };
       const cx = (x0 + x1) / 2, cz = -(z0 + z1) / 2;
-      if (style === "modern" && front) {  // stone base + black slats + stone pillars
+      if (MOD && !LUX && front) {  // stone base + black slats + stone pillars
         mk(along ? len : 0.8, 1.2, along ? 0.8 : len, cwPlain || stoneM(), cx, 0.6, cz);
         for (let k = 0; k < 5; k++) mk(along ? len : 0.12, 0.35, along ? 0.12 : len, cw, cx, 1.6 + k * 0.7, cz);
         const n = Math.max(1, Math.round(len / 10));
@@ -1039,7 +1215,7 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
           if (lit) { const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.3, 0.5), glow); lamp.position.set(px, wallH + 0.55, pz); root.add(lamp); }
         }
       } else {
-        mk(along ? len : 0.75, wallH, along ? 0.75 : len, cwPlain || (style === "modern" ? std("#e9e4db") : cw), cx, wallH / 2, cz);
+        mk(along ? len : 0.75, wallH, along ? 0.75 : len, cwPlain || (MOD ? std("#e9e4db") : cw), cx, wallH / 2, cz);
         const cap = style === "traditional" ? std("#b9473a", {}, "none") : style === "contemporary" ? std("#55595f", {}, "none") : std("#c9c3b8");
         mk(along ? len + 0.2 : 1.0, 0.25, along ? 1.0 : len + 0.2, cap, cx, wallH + 0.12, cz);
         if (style === "contemporary" && front) mk(along ? len : 0.8, 1.2, along ? 0.8 : len, tileM(), cx, 0.6, cz);
@@ -1049,7 +1225,7 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
       const [fx0, fx1] = [Math.min(poly[0][0], poly[1][0]), Math.max(poly[0][0], poly[1][0])];
       gx = Math.min(Math.max(gx, fx0 + 1.5), fx1 - gateW - 1.5);
       seg(fx0, 0, gx, 0, true); seg(gx + gateW, 0, fx1, 0, true);
-      const cwM = cwPlain || (style === "modern" ? std("#e9e4db") : cw);
+      const cwM = cwPlain || (MOD ? std("#e9e4db") : cw);
       const cap = style === "traditional" ? std("#b9473a", {}, "none") : style === "contemporary" ? std("#55595f", {}, "none") : std("#c9c3b8");
       for (let i = 1; i < poly.length; i++) {
         const [x0, y0] = poly[i], [x1, y1] = poly[(i + 1) % poly.length];
@@ -1066,7 +1242,7 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
       seg(0, P.d, P.w, P.d, false); seg(0, 0, 0, P.d, false); seg(P.w, 0, P.w, P.d, false);
     }
     // gate pillars + gate
-    const gpm = style === "modern" ? stoneM() : style === "traditional" ? std("#fbf3e0") : style === "contemporary" ? tileM() : std("#d6d0c4");
+    const gpm = LUX ? std("#f4efe6") : MOD ? stoneM() : style === "traditional" ? std("#fbf3e0") : style === "contemporary" ? tileM() : std("#d6d0c4");
     for (const px of [gx - 0.75, gx + gateW + 0.75]) {
       const geo = new THREE.BoxGeometry(1.5, wallH + 1, 1.5); T.worldUV(geo, 1.5, wallH + 1, 1.5); add(geo, gpm, px, (wallH + 1) / 2, 0, true);
       if (style === "traditional") add(new THREE.ConeGeometry(1.1, 1.0, 4), std("#b9473a", {}, "none"), px, wallH + 1.5, 0, true).rotation.y = Math.PI / 4;
@@ -1093,6 +1269,7 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
         door: mdx !== null && mdy !== null ? { x: mdx, y: mdy } : null },
         (k) => std(PLANT_MATS[k][0], PLANT_MATS[k][1], "none"));
     }
+    if (LUX) luxGarden(P, gx, gateW);
     if (style !== "basic") {
     if (lit && md) {
         const mx = bx0 + (md.x1 + md.x2) / 2;

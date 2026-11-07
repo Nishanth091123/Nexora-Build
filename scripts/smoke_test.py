@@ -97,7 +97,7 @@ except httpx.ConnectError:
         sys.exit("[ERROR] Backend did not start in 2 minutes.")
 check("health", r.status_code == 200 and r.json().get("status") == "ok", r.text)
 _v = tuple(int(x) for x in (r.json().get("version", "0.0").split("-")[0].split(".") + ["0", "0"])[:3] if x.isdigit())
-check("backend is the 1.19 version (not an old one still running)", _v >= (1, 19, 0), r.text)
+check("backend is the 1.20 version (not an old one still running)", _v >= (1, 20, 0), r.text)
 
 login = input("Owner username [nishanth_s]: ").strip() or "nishanth_s"
 pw = getpass.getpass("Owner password (hidden): ")
@@ -883,6 +883,26 @@ r, j = chat6({"conversation_id": conv6, "text": "", "form": {"tool": "docs", "la
                                                             "args": {"query": "which steel grade"}}})
 check("Document Q&A finds the answer", any(s.get("kind") == "doc" for s in j.get("assistant_message", {}).get("sources", [])),
       r.text[:300])
+# ---------------- 1.20: AI Render (free Cloudflare Workers AI / Gemini quota)
+r = c.get("/api/ai-render/status")
+rs20 = r.json() if r.status_code == 200 else {}
+check("1.20 AI Render set-up readable", r.status_code == 200 and "cloudflare" in rs20, r.text[:200])
+if not rs20.get("cloudflare"):
+    print("       (AI Render: CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_AI_TOKEN not in .env – add them to use AI Render)")
+elif FULL:
+    import base64 as _b64, struct as _st, zlib as _z
+    def _png(w, h):  # plain sky-blue / grey test picture
+        raw = b"".join(b"\x00" + (b"\x87\xce\xeb" if y < h // 2 else b"\x99\x99\x99") * w for y in range(h))
+        ch = lambda t, d: _st.pack(">I", len(d)) + t + d + _st.pack(">I", _z.crc32(t + d) & 0xffffffff)
+        return b"\x89PNG\r\n\x1a\n" + ch(b"IHDR", _st.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + ch(b"IDAT", _z.compress(raw)) + ch(b"IEND", b"")
+    r = c.post(f"/api/projects/{pid}/ai-render", json={"image": _b64.b64encode(_png(512, 512)).decode(), "kind": "exterior",
+                                                        "style": "modern", "light": "day", "strength": 0.6}, timeout=180)
+    if r.status_code == 429:
+        print("[WARN] AI Render: free daily allowance used up right now – not counted as a failure.")
+    else:
+        check("1.20 AI Render made a picture (Cloudflare free)", r.status_code == 200 and len(r.json().get("image_b64", "")) > 1000, r.text[:300])
+else:
+    print("       (AI Render live test skipped – quick mode. For it run:  scripts\\update.bat --full)")
 if st6.get("any") and not FULL:
     print("       (live AI provider test skipped – quick mode. For it run:  scripts\\update.bat --full)")
 if st6.get("any") and FULL:
@@ -937,4 +957,4 @@ if fail:
     print("Failed:", ", ".join(fail), "\nSend this output to Claude.")
     sys.exit(1)
 else:
-    print("NEXORA 1.19 API: ALL GOOD")
+    print("NEXORA 1.20 API: ALL GOOD")

@@ -79,7 +79,7 @@ def clean_plan(plan: dict) -> dict:
     fin = plan.get("finishes") or {}
     clean = {k: v for k, v in fin.items() if k in ("ext", "int", "floor", "door", "frame", "roof", "plinth")
              and isinstance(v, str) and _re.fullmatch(r"#[0-9a-fA-F]{6}", v)} if isinstance(fin, dict) else {}
-    if isinstance(fin, dict) and fin.get("style") in ("basic", "modern", "contemporary", "traditional"):
+    if isinstance(fin, dict) and fin.get("style") in ("basic", "modern", "contemporary", "traditional", "luxury"):
         clean["style"] = fin["style"]  # 1.13: 3D elevation style
     # 1.15 material library picks: {slot: "b:<built-in id>" | "c:<your item id>"} and per room {"floor:room id": {wall, floor}}
     ref = _re.compile(r"(b|c|m):[A-Za-z0-9_:-]{1,40}")  # 1.18 m: = Material Library shade / tile

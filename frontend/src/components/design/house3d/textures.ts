@@ -213,3 +213,34 @@ export function swatchUrl(t: THREE.Texture | null, color: string): string {
   else { g.fillStyle = color; g.fillRect(0, 0, 64, 64); }
   return c.toDataURL();
 }
+
+/** 1.20 realistic look: the same picture used as a bump map – stone joints, wood grain, paver joints get real relief */
+const bumps = new Map<THREE.Texture, THREE.Texture>();
+export function bumpOf(t: THREE.Texture): THREE.Texture {
+  const hit = bumps.get(t);
+  if (hit) return hit;
+  const b = new THREE.CanvasTexture(t.image as HTMLCanvasElement);
+  b.wrapS = b.wrapT = THREE.RepeatWrapping; b.anisotropy = 8; b.colorSpace = THREE.NoColorSpace;
+  bumps.set(t, b);
+  return b;
+}
+
+/** 1.20 CNC jaali screen (white pattern, see-through gaps) – 1 texture = 2 ft */
+export const jaali = () => make("jaali", 256, (g) => {
+  g.clearRect(0, 0, 256, 256);
+  g.fillStyle = "#ffffff"; g.fillRect(0, 0, 256, 256);
+  g.globalCompositeOperation = "destination-out";
+  const cell = 64;
+  for (let cy = 0; cy < 256; cy += cell) for (let cx = 0; cx < 256; cx += cell) {
+    const x = cx + cell / 2, y = cy + cell / 2;
+    for (let k = 0; k < 4; k++) {  // four petals
+      const a = (k * Math.PI) / 2;
+      g.beginPath(); g.ellipse(x + Math.cos(a) * 14, y + Math.sin(a) * 14, 11, 5, a, 0, Math.PI * 2); g.fill();
+    }
+    g.beginPath(); g.arc(x, y, 4, 0, Math.PI * 2); g.fill();
+    for (const [dx, dy] of [[0, 0], [cell, 0], [0, cell], [cell, cell]]) {  // corner stars
+      g.beginPath(); g.arc(cx + dx, cy + dy, 7, 0, Math.PI * 2); g.fill();
+    }
+  }
+  g.globalCompositeOperation = "source-over";
+}, false);
