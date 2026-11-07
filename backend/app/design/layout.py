@@ -739,8 +739,17 @@ def generate(req: dict, _probe: bool = False) -> dict:
     while i < len(levels):
         lv = levels[i]
         try:
-            rooms, info = build_level(lv, bw, bd, comp, multi, template)
+            if lv.get("units"):  # 1.19 several houses on this floor
+                from .units import build_units_level
+                rooms, info = build_units_level(lv, bw, bd, comp, template, i)
+            else:
+                rooms, info = build_level(lv, bw, bd, comp, multi, template)
         except LayoutError as e:
+            if lv.get("units"):
+                err = LayoutError(e.questions)
+                if not _probe:
+                    err.suggestions = suggest_alternatives(req)
+                raise err
             fix = fallback(levels, i, notes)
             if fix:
                 continue  # retry this level with the adjusted rooms
@@ -753,7 +762,9 @@ def generate(req: dict, _probe: bool = False) -> dict:
             raise err
         if i == 0 and multi:
             template = info
-        out_levels.append({"name": lv["name"], "stilt": bool(lv.get("stilt")), "rooms": rooms})
+        out_levels.append({"name": lv["name"], "stilt": bool(lv.get("stilt")), "rooms": rooms,
+                           **({"units": [{"label": u["label"], "bhk": u["bhk"], "use": u.get("use", "")} for u in lv["units"]]}
+                              if lv.get("units") else {})})
         i += 1
     plan = {
         "version": 1, "units": "ft",

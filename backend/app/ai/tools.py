@@ -253,6 +253,19 @@ def tool_plan(db: Session, user: User, p: Project | None, perms: dict | None, te
                 fallback="Before I draw the plan I need a few details:\n" + "\n".join(f"• {q}" for q in qs))
         reqs = parsed["requirements"]
         partial = parsed["partial"]
+        if reqs.get("floor_specs"):  # 1.19 floor-by-floor request → confirm the floor table before drawing
+            lines = [parser.floor_line(lv) for lv in reqs["levels"]]
+            qs = ["Please check what I understood floor by floor:"] + lines
+            return ToolResult(
+                "plan", questions=qs,
+                facts="Floor-wise request understood: " + " | ".join(lines) + ". Waiting for the user to confirm before drawing.",
+                cards=[{"type": "questions", "tool": "plan", "questions": qs, "understood": parsed["understood"],
+                        "options": [{"label": "Looks right – draw it", "requirements": reqs,
+                                     "notes": ["Each house gets its own main door from the common staircase / lobby."]}],
+                        "fields": []}],
+                pending={"tool": "plan", "text": combined, "partial": partial, "original": original},
+                fallback="Before drawing, please confirm the rooms per floor:\n" + "\n".join(f"• {x}" for x in lines)
+                         + "\nIf anything is wrong, just type the correction.")
     try:
         plan = generate(reqs)
     except LayoutError as e:

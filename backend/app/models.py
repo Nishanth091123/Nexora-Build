@@ -84,6 +84,7 @@ class Project(Base):
     workflow: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # 1.8: {stage: {"done": bool, "date": "..."}}
     active_design_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # 1.18: the drawing every module uses
     brand_choices: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # 1.18: {category: variant id} for this project
+    site_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)  # 1.19: marking levels, services, variations, handover
     created_by: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)

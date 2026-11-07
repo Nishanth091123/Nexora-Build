@@ -15,6 +15,7 @@ export type Project = {
   structure_type: string; spec_level: string; start_date: string | null; end_date: string | null;
   status: string; health: string; progress: number; cover_image: string; notes: string;
   created_at: string; updated_at: string; permissions?: Record<string, boolean>;
+  latitude?: number | null; longitude?: number | null;
 };
 
 type Ctx = {

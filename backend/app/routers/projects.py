@@ -24,7 +24,7 @@ FACINGS = {"", "east", "west", "north", "south", "north-east", "north-west", "so
 
 
 def project_out(p: Project, perms: dict | None = None) -> dict:
-    d = {c.name: getattr(p, c.name) for c in Project.__table__.columns}
+    d = {c.name: getattr(p, c.name) for c in Project.__table__.columns if c.name != "site_data"}  # 1.19: served by its own routes
     for k in ("start_date", "end_date", "created_at", "updated_at"):
         d[k] = d[k].isoformat() if d[k] else None
     d["cover_image"] = p.cover_image or COVER_BY_TYPE.get(p.project_type, COVER_BY_TYPE["other"])

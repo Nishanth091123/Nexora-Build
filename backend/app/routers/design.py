@@ -65,17 +65,19 @@ def build_req(project_id: int, body: ReqIn, user: User = Depends(get_current_use
     """Structured form → requirements (rooms per floor), after the user answered the questions."""
     require_any(db, user, project_id, ("design",))
     d = dict(body.answers)
+    fw = bool(d.get("floor_specs"))  # 1.19 floor-by-floor request: floors / bedrooms come from the floor table
     missing = [label for k, label in [("plot_w_ft", "Plot frontage (ft)"), ("plot_d_ft", "Plot depth (ft)"),
                                       ("facing", "Facing"), ("road_width_m", "Road width"), ("floors", "Floors")]
-               if not d.get(k)]
-    if d.get("bedrooms") in (None, ""):
+               if not d.get(k) and not (fw and k == "floors")]
+    if d.get("bedrooms") in (None, "") and not fw:
         missing.append("Bedrooms")
     if missing:
         raise HTTPException(422, {"message": "Please confirm these details", "questions": missing})
     for k in ("plot_w_ft", "plot_d_ft", "road_width_m"):
         d[k] = float(d[k])
     for k in ("floors", "bedrooms"):
-        d[k] = int(d[k])
+        if d.get(k) not in (None, ""):
+            d[k] = int(d[k])
     if d.get("toilets") not in (None, ""):
         d["toilets"] = int(d["toilets"])
     else:

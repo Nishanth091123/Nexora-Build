@@ -512,10 +512,21 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
     const pts: [number, number][] = [];
     const add = (x: number, y: number) => { if (!pts.some(([a, c]) => Math.abs(a - x) < 3 && Math.abs(c - y) < 3)) pts.push([x, y]); };
     const edges: [number, number, number, number][] = [];
+    // 1.19: the road-side entrance of parking / stilt / portico stays clear – columns only at the two ends of the
+    // open run, one beam spans the opening (no column in the middle of the car's path)
+    const ex = extent(lv.rooms);
+    const fr = carry.filter((r) => Math.abs(r.y - ex.y0) < 0.05).sort((a, c) => a.x - c.x);
+    const runs: [number, number][] = [];
+    for (const r of fr) {
+      const last = runs[runs.length - 1];
+      if (last && r.x <= last[1] + 0.05) last[1] = Math.max(last[1], r.x + r.w); else runs.push([r.x, r.x + r.w]);
+    }
+    const inEntrance = (x: number, y: number) => Math.abs(y - ex.y0) < 0.05 && runs.some(([a, c]) => x > a + 0.5 && x < c - 0.5);
+    const add2 = (x: number, y: number) => { if (!inEntrance(x, y)) add(x, y); };
     for (const r of carry) {
       const cx = [r.x, r.x + r.w], cy = [r.y, r.y + r.d];
       const nx = Math.max(1, Math.ceil(r.w / 12)), ny = Math.max(1, Math.ceil(r.d / 12));
-      for (let i = 0; i <= nx; i++) for (const y of cy) add(r.x + (r.w * i) / nx, y);
+      for (let i = 0; i <= nx; i++) for (const y of cy) add2(r.x + (r.w * i) / nx, y);
       for (let j = 1; j < ny; j++) for (const x of cx) add(x, r.y + (r.d * j) / ny);
       edges.push([r.x, r.y, r.x + r.w, r.y], [r.x, r.y + r.d, r.x + r.w, r.y + r.d], [r.x, r.y, r.x, r.y + r.d], [r.x + r.w, r.y, r.x + r.w, r.y + r.d]);
     }
@@ -532,7 +543,8 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
       if (seen.has(k)) continue; seen.add(k);
       const horiz = Math.abs(y1 - y2) < 1e-6;
       const c = horiz ? Math.min(Math.max(y1, e.y0 + cs / 2), e.y1 - cs / 2) : Math.min(Math.max(x1, e.x0 + cs / 2), e.x1 - cs / 2);
-      if (horiz) box(Math.max(x1, e.x0), c - cs / 2, z + H - SLAB - bd, Math.min(x2, e.x1), c + cs / 2, z + H - SLAB, beamM, g, "beam");
+      const deep = horiz && Math.abs(y1 - e.y0) < 0.05 && runs.some(([a, c2]) => x1 >= a - 0.05 && x2 <= c2 + 0.05 && c2 - a > 14) ? 0.75 : 0;
+      if (horiz) box(Math.max(x1, e.x0), c - cs / 2, z + H - SLAB - bd - deep, Math.min(x2, e.x1), c + cs / 2, z + H - SLAB, beamM, g, "beam");
       else box(c - cs / 2, Math.max(y1, e.y0), z + H - SLAB - bd, c + cs / 2, Math.min(y2, e.y1), z + H - SLAB, beamM, g, "beam");
     }
   }

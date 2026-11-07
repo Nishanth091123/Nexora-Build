@@ -113,7 +113,8 @@ def area_details(plan: dict) -> dict:
         s = lv["summary"]
         rows.append({"floor": lv["name"], "builtup_sqft": s["builtup_sqft"], "carpet_sqft": s["carpet_sqft"],
                      "balcony_sqft": s.get("balcony_sqft", 0), "terrace_sqft": s.get("terrace_sqft", 0),
-                     "use": "Parking" if lv.get("stilt") else "Residential"})
+                     "use": "Parking" if lv.get("stilt") else "Residential",
+                     **({"units": unit_areas(lv)} if any(r.get("unit") for r in lv["rooms"]) else {})})
     total = sum(r["builtup_sqft"] for r in rows)
     ground = rows[0]["builtup_sqft"] if rows else 0
     sb = plan.get("setbacks") or {}
@@ -129,6 +130,23 @@ def area_details(plan: dict) -> dict:
         "note": "FSI = total built-up / plot area; coverage = ground floor built-up / plot area. "
                 "Check the permitted values for the local body (DTCP / CMDA / Corporation / Panchayat).",
     }
+
+
+def unit_areas(lv: dict) -> list[dict]:
+    """1.19 Unit-wise area statement: carpet = rooms of the house; built-up adds its share of walls (×1.12)
+    and the common stair / lobby is shared by the houses in proportion to carpet."""
+    labs = sorted({r["unit"] for r in lv["rooms"] if r.get("unit")})
+    common = sum(r["w"] * r["d"] for r in lv["rooms"] if not r.get("unit") and r["type"] in ("stair", "passage"))
+    carpets = {u: sum(r["w"] * r["d"] for r in lv["rooms"] if r.get("unit") == u and r["type"] not in ("terrace",)) for u in labs}
+    tot = sum(carpets.values()) or 1
+    out = []
+    for u in labs:
+        r0 = next(r for r in lv["rooms"] if r.get("unit") == u)
+        c = carpets[u]
+        out.append({"label": u, "name": r0.get("unit_name") or f"House {u}", "carpet_sqft": round(c, 1),
+                    "builtup_sqft": round(c * 1.12, 1), "common_share_sqft": round(common * c / tot, 1),
+                    "rooms": [r["name"] for r in lv["rooms"] if r.get("unit") == u]})
+    return out
 
 
 def _sheet_rows(plan: dict) -> list[dict]:
@@ -494,6 +512,8 @@ def floor_plan(plan: dict, li: int) -> Dwg:
             cx = r["x"] + r["w"] * 0.72
         d.text(cx, cy + 0.15, r["name"].upper(), fs, layer="ROOMTEXT", bold=True, mask=True)
         d.text(cx, cy - fs - 0.05, f"{ft_in(r['w'])} X {ft_in(r['d'])}", fs * 0.85, layer="ROOMTEXT", mask=True)
+        if r.get("unit") and r["type"] == "hall":  # 1.19: which house this is
+            d.text(cx, cy + fs + 0.45, (r.get("unit_name") or f"House {r['unit']}").upper(), fs * 0.8, layer="MARK", bold=True, mask=True)
     # chain dimensions (room by room) + overall, on the top and the left
     xs_all = [r["x"] for r in lv["rooms"]] + [r["x"] + r["w"] for r in lv["rooms"]]
     ys_all = [r["y"] for r in lv["rooms"]] + [r["y"] + r["d"] for r in lv["rooms"]]
@@ -1059,8 +1079,12 @@ def sheet_set_pdf(plan: dict, project: dict, meta: dict, style: str = "paper") -
     c.drawString(M + 8 * mm, H - M - 28 * mm, f"Proposed residential building · {len(plan['levels'])} floor(s) · "
                                                f"plot {plan['plot']['w']:g}' x {plan['plot']['d']:g}'")
     y = table(M + 8 * mm, H - M - 38 * mm, ["Sheet", "Drawing"], sheet_list, [25 * mm, 90 * mm])
-    rows = [[r["floor"], f"{r['builtup_sqft']:,.0f}", f"{r['builtup_sqft'] * FT_M ** 2:,.1f}", f"{r['carpet_sqft']:,.0f}", r["use"]]
-            for r in area["rows"]]
+    rows = []
+    for r in area["rows"]:
+        rows.append([r["floor"], f"{r['builtup_sqft']:,.0f}", f"{r['builtup_sqft'] * FT_M ** 2:,.1f}", f"{r['carpet_sqft']:,.0f}", r["use"]])
+        for u in r.get("units") or []:  # 1.19 unit-wise
+            rows.append([f"  {u['name'].split(' – ')[0]}", f"{u['builtup_sqft']:,.0f}", f"{u['builtup_sqft'] * FT_M ** 2:,.1f}",
+                         f"{u['carpet_sqft']:,.0f}", (u["name"].split(" – ")[1] if " – " in u["name"] else "")[:16]])
     rows.append(["Total", f"{area['total_builtup_sqft']:,.0f}", f"{area['total_builtup_m2']:,.1f}",
                  f"{sum(r['carpet_sqft'] for r in area['rows']):,.0f}", ""])
     c.setFont("Helvetica-Bold", 11)

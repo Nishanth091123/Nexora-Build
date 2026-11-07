@@ -312,7 +312,10 @@ def approval_pdf(plan: dict, project: dict, info: dict, meta: dict, style: str =
     c.setFont("Helvetica-Bold", 8.5)
     c.drawString(tx + 3 * mm, y - 4.5 * mm, "AREA STATEMENT")
     rows = [["Plot area", f"{area['plot_sqft']:,.0f}", f"{area['plot_m2']:,.2f}"]]
-    rows += [[f"{r['floor']} (built-up)", f"{r['builtup_sqft']:,.0f}", f"{r['builtup_sqft'] * FT_M ** 2:,.2f}"] for r in area["rows"]]
+    for r in area["rows"]:
+        rows.append([f"{r['floor']} (built-up)", f"{r['builtup_sqft']:,.0f}", f"{r['builtup_sqft'] * FT_M ** 2:,.2f}"])
+        rows += [[f"   {u['name']} (carpet)", f"{u['carpet_sqft']:,.0f}", f"{u['carpet_sqft'] * FT_M ** 2:,.2f}"]
+                 for u in r.get("units") or []]  # 1.19 unit-wise
     rows += [["Total built-up", f"{area['total_builtup_sqft']:,.0f}", f"{area['total_builtup_m2']:,.2f}"],
              ["FSI / coverage", f"{area['fsi']}", f"{area['coverage_pct']}%"]]
     rows += [[f"Sheet roof – {rs['level']}", f"{rs['covered_sqft']:,.0f}", f"{rs['covered_sqft'] * FT_M ** 2:,.2f}"]

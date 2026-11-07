@@ -37,6 +37,14 @@ const EXAMPLES = [
 const LEVEL_KEYS: [string, string, "n" | "b"][] = [["bedrooms", "Bedrooms", "n"], ["attached_toilets", "Attached toilets", "n"], ["common_toilets", "Common toilets", "n"],
   ["hall", "Hall", "b"], ["lounge", "Lounge", "b"], ["kitchen", "Kitchen", "b"], ["dining", "Dining", "b"], ["pooja", "Pooja", "b"], ["parking_car", "Car", "b"], ["parking_bike", "Bike", "b"]];
 
+// 1.19 several houses on one floor – same toilet rule as the backend parser (editable in the table)
+const UNIT_TOILETS: Record<number, [number, number]> = { 1: [0, 1], 2: [1, 1], 3: [2, 1], 4: [3, 1] };
+const mkUnit = (label: string, bhk: number, use: string) => ({
+  label, use, bhk, bedrooms: bhk, attached_toilets: (UNIT_TOILETS[bhk] || [bhk - 1, 1])[0], common_toilets: (UNIT_TOILETS[bhk] || [bhk - 1, 1])[1],
+  kitchen: true, hall: true, dining: bhk >= 2, pooja: false,
+});
+const relabel = (us: any[]) => us.map((u, i) => ({ ...u, label: "ABCDEF"[i] }));
+
 const defaultForm = { plot_w_ft: "", plot_d_ft: "", facing: "", road_width_m: "", floors: "", stilt: false, bedrooms: "", toilets: "",
   parking_car: false, parking_bike: false, pooja: false, dining: true, attached: true, corner: false, same_each_floor: false, area_type: "other", floor_height_ft: 10 };
 
@@ -58,6 +66,7 @@ export default function DesignPage() {
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [form, setForm] = useState<any>(defaultForm);
   const [req, setReq] = useState<any>(null);
+  const [confirmFloors, setConfirmFloors] = useState(false); // 1.19: floor-wise request → confirm the table before drawing
   const [plan, setPlan] = useState<Plan | null>(null);
   const [aiPlan, setAiPlan] = useState<Plan | null>(null);
   const [level, setLevel] = useState(0);
@@ -115,7 +124,7 @@ export default function DesignPage() {
 
   useEffect(() => {
     if (!pid || !allowed) return;
-    setPlan(null); setSaved(null); setReq(null); setQuick(null); setCmp(null); setQuestions([]); setSuggestions([]);
+    setPlan(null); setSaved(null); setReq(null); setConfirmFloors(false); setQuick(null); setCmp(null); setQuestions([]); setSuggestions([]);
     setForm({ ...defaultForm, plot_w_ft: currentProject?.plot_width && currentProject.unit === "ft" ? currentProject.plot_width : "",
       plot_d_ft: currentProject?.plot_length && currentProject.unit === "ft" ? currentProject.plot_length : "" });
     const want = Number(params.get("design")) || 0;
@@ -175,7 +184,8 @@ export default function DesignPage() {
       const r = await api<any>(`/api/projects/${pid}/design/parse`, { body: { text } });
       setUnderstood(r.understood); setQuestions(r.questions); setSuggestions([]);
       setForm((f: any) => ({ ...f, ...Object.fromEntries(Object.entries(r.partial).filter(([k]) => !k.startsWith("_"))) }));
-      if (r.requirements) { setReq(r.requirements); await generate(r.requirements); }
+      if (r.requirements?.floor_specs) { setReq(r.requirements); setConfirmFloors(true); toast("Check the rooms / houses per floor below, then press Generate"); }
+      else if (r.requirements) { setReq(r.requirements); await generate(r.requirements); }
       else toast("Please answer the questions below", "err");
     } catch (e: any) { toast(e.message, "err"); } finally { setBusy(""); }
   };
@@ -456,16 +466,49 @@ export default function DesignPage() {
     </Card>
   );
 
+  const setUnits = (i: number, us: any[] | null) => {
+    const r = clone(req);
+    if (us && us.length) r.levels[i].units = relabel(us); else delete r.levels[i].units;
+    setReq(r);
+  };
   const reqTable = req && (
-    <Card title="Rooms per floor (edit & regenerate)" icon={<Layers size={20} />}
-      action={<button className="btn-primary btn-sm" onClick={() => generate(req)} disabled={busy === "gen"}><RotateCcw size={14} />Regenerate</button>}>
+    <Card title={confirmFloors ? "Confirm rooms / houses per floor" : "Rooms per floor (edit & regenerate)"} icon={<Layers size={20} />}
+      action={<button className="btn-primary btn-sm" onClick={() => { setConfirmFloors(false); generate(req); }} disabled={busy === "gen"}>
+        {confirmFloors ? <><Wand2 size={14} />Looks right – Generate</> : <><RotateCcw size={14} />Regenerate</>}</button>}>
+      {confirmFloors && <p className="mb-2 rounded-lg bg-brand-50 p-2 text-sm text-brand-800">This is what I understood floor by floor. Change anything (houses, BHK, owner / rental) and press <b>Looks right – Generate</b>.</p>}
       <div className="overflow-x-auto">
         <table className="w-full min-w-[640px]">
           <thead><tr><th className="table-th">Floor</th>{LEVEL_KEYS.map(([, l]) => <th key={l} className="table-th text-center">{l}</th>)}</tr></thead>
           <tbody>
-            {req.levels.map((lv: any, i: number) => (
+            {req.levels.map((lv: any, i: number) => lv.units?.length ? (
               <tr key={i}>
-                <td className="table-td font-semibold">{lv.name}{lv.stilt && <span className="ml-1 text-xs text-slate-500">(stilt)</span>}</td>
+                <td className="table-td font-semibold">{lv.name}<div className="text-xs font-normal text-slate-500">{lv.units.length} separate house(s)</div></td>
+                <td className="table-td" colSpan={LEVEL_KEYS.length}>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {lv.units.map((u: any, j: number) => (
+                      <div key={j} className="flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-1 text-sm">
+                        <b>House {u.label}</b>
+                        <select className="input w-20 px-1 py-0.5" value={u.bhk}
+                          onChange={(e) => { const us = clone(lv.units); us[j] = { ...mkUnit(u.label, Number(e.target.value), u.use), pooja: u.pooja }; setUnits(i, us); }}>
+                          {[1, 2, 3, 4].map((b) => <option key={b} value={b}>{b} BHK</option>)}
+                        </select>
+                        <select className="input w-24 px-1 py-0.5" value={u.use || ""}
+                          onChange={(e) => { const us = clone(lv.units); us[j].use = e.target.value; setUnits(i, us); }}>
+                          <option value="">—</option><option value="owner">Owner</option><option value="rental">Rental</option>
+                        </select>
+                        <button className="text-xs text-red-600" title="Remove this house" onClick={() => setUnits(i, lv.units.filter((_: any, x: number) => x !== j))}>✕</button>
+                      </div>
+                    ))}
+                    {lv.units.length < 4 && <button className="btn-outline btn-sm" onClick={() => setUnits(i, [...lv.units, mkUnit("", 1, "rental")])}>+ House</button>}
+                  </div>
+                  <div className="mt-1 text-xs text-slate-500">Each house gets its own main door from the common staircase / lobby; no door between houses.</div>
+                </td>
+              </tr>
+            ) : (
+              <tr key={i}>
+                <td className="table-td font-semibold">{lv.name}{lv.stilt && <span className="ml-1 text-xs text-slate-500">(stilt)</span>}
+                  {!lv.stilt && i > 0 && <button className="mt-1 block text-xs font-normal text-brand-700 underline"
+                    onClick={() => setUnits(i, [mkUnit("A", 1, "rental"), mkUnit("B", 1, "rental")])}>Split into houses</button>}</td>
                 {LEVEL_KEYS.map(([k, , kind]) => (
                   <td key={k} className="table-td text-center">
                     {lv.stilt && k !== "parking_car" && k !== "parking_bike" ? "—" : kind === "n"
@@ -512,6 +555,7 @@ export default function DesignPage() {
               {understood.length > 0 && <div className="mt-3 flex flex-wrap gap-1.5">{understood.map((u) => <Badge key={u} color="blue">{u}</Badge>)}</div>}
             </Card>
 
+            {confirmFloors && reqTable}
             {(questions.length > 0 || suggestions.length > 0) && (
               <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
                 <div className="mb-1 flex items-center gap-2 font-bold"><TriangleAlert size={16} />Please confirm</div>
@@ -577,7 +621,7 @@ export default function DesignPage() {
                 ))}
               </div>
             </Card>
-            {reqTable}
+            {!confirmFloors && reqTable}
           </div>
 
           <div className="min-w-0 space-y-4">

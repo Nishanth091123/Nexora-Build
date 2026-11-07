@@ -39,6 +39,8 @@ def wall_kind(a: dict | None, b: dict | None) -> str | None:
     if a is b:
         return None
     ta, tb = a["type"], b["type"]
+    if a.get("unit") != b.get("unit"):
+        return "int230"  # 1.19: a 9" wall always separates two houses (and a house from the common lobby / stair)
     if ta in OPEN_TYPES and tb in OPEN_TYPES:
         return None
     if ta in OPEN_TYPES or tb in OPEN_TYPES:
@@ -284,8 +286,25 @@ def level_openings(lv: dict, level_index: int, building_d: float) -> tuple[list[
                     return True
         return False
 
+    # 1.19: several houses on this floor → each gets its own main door from the stair / common lobby
+    unit_labels = sorted({r["unit"] for r in rooms if r.get("unit")})
+    for lab in unit_labels:
+        hall = next((r for r in rooms if r.get("unit") == lab and r["type"] in ("hall", "lounge")), None)
+        if not hall:
+            continue
+        common = [w for w in ws if hall["id"] in (w["a"], w["b"]) and seg_len(w) >= 3.5 and
+                  by_id.get(w["b"] if w["a"] == hall["id"] else w["a"], {}).get("type") in ("stair", "passage")
+                  and not by_id.get(w["b"] if w["a"] == hall["id"] else w["a"], {}).get("unit")]
+        lobby = [w for w in common if by_id.get(w["b"] if w["a"] == hall["id"] else w["a"], {}).get("type") == "passage"]
+        if lobby and door_on_wall(hall["id"], "main_door", 3.5, 7, lobby):  # lobby first, the stair flight only if no lobby
+            continue
+        if level_index == 0 and not common:
+            common = [w for w in ws if w["kind"] == "ext" and hall["id"] in (w["a"], w["b"]) and w["y1"] == w["y2"]
+                      and abs(w["y1"] - min(rr["y"] for rr in rooms)) < 0.01]
+        if not door_on_wall(hall["id"], "main_door", 3.5, 7, common):
+            warnings.append(f"{lv['name']}: {hall.get('unit_name') or 'house ' + lab} has no wall on the common lobby for its main door.")
     # main door on the front (road side) wall
-    if level_index == 0 and not lv.get("stilt"):
+    if level_index == 0 and not lv.get("stilt") and not unit_labels:
         for r in rooms:
             if r["type"] not in ("hall", "lounge"):
                 continue
@@ -315,7 +334,8 @@ def level_openings(lv: dict, level_index: int, building_d: float) -> tuple[list[
         for r in sorted((by_id[i] for i in missing), key=lambda q: (ORDER.get(q["type"], 3), q["id"])):
             allowed = ACCESS.get(r["type"], COMMON)
             for t in allowed:
-                cands = [w for x in rooms if x["id"] in seen and x["type"] == t for w in _wall_between(ws, r["id"], x["id"])
+                cands = [w for x in rooms if x["id"] in seen and x["type"] == t and x.get("unit") == r.get("unit")
+                         for w in _wall_between(ws, r["id"], x["id"])
                          if w["kind"] and w["kind"] != "parapet" and seg_len(w) >= 3.0]
                 kind, width = KIND.get(r["type"], ("door", 3.0))
                 if r["type"] in ("terrace", "balcony", "sitout") and t in ("bedroom", "lounge", "hall", "dining", "passage", "stair"):

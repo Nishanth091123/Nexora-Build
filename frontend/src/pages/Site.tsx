@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
-  AlertTriangle, Camera, CheckSquare, ClipboardList, FileText, HardHat, LayoutDashboard, Package, Plus, ShieldAlert, Truck, Users,
+  AlertTriangle, Camera, CheckSquare, ClipboardList, FileText, HardHat, LayoutDashboard, Package, Plus, Ruler, ShieldAlert, Truck, Users,
 } from "lucide-react";
+import SiteTools from "../components/site/SiteTools";
 import Page from "../components/Page";
 import OverviewTab from "../components/site/OverviewTab";
 import { ActivityModal, DailyWorkTab, ManpowerTab, MaterialsTab, PhotosTab, QualityTab, ReportsTab, SafetyTab } from "../components/site/Tabs";
@@ -12,7 +13,7 @@ import { api } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { useI18n } from "../lib/i18n";
 
-type Tab = "overview" | "daily" | "photos" | "quality" | "material" | "manpower" | "safety" | "reports";
+type Tab = "overview" | "daily" | "photos" | "quality" | "material" | "manpower" | "safety" | "reports" | "tools";
 
 export default function SitePage() {
   const { t } = useI18n();
@@ -21,9 +22,9 @@ export default function SitePage() {
   const allowed = !!currentProject?.permissions?.site;
   // the tab is kept in the address (?tab=photos) so a reload – e.g. after the phone camera app – returns to it
   const [params, setParams] = useSearchParams();
-  const TABS: Tab[] = ["overview", "daily", "photos", "quality", "material", "manpower", "safety", "reports"];
+  const TABS: Tab[] = ["overview", "daily", "photos", "quality", "material", "manpower", "safety", "reports", "tools"];
   const tab: Tab = TABS.includes(params.get("tab") as Tab) ? (params.get("tab") as Tab) : "overview";
-  const setTab = (t: Tab) => setParams((p) => { const n = new URLSearchParams(p); if (t === "overview") n.delete("tab"); else n.set("tab", t); return n; }, { replace: true });
+  const setTab = (t: Tab) => setParams((p: URLSearchParams) => { const n = new URLSearchParams(p); if (t === "overview") n.delete("tab"); else n.set("tab", t); return n; }, { replace: true });
   const [day, setDay] = useState(today());
   const [ov, setOv] = useState<Overview | null>(null);
   const [menu, setMenu] = useState(false);
@@ -47,6 +48,7 @@ export default function SitePage() {
     { id: "photos" as Tab, label: "Site Photos", icon: <Camera size={18} /> }, { id: "quality" as Tab, label: "Quality Check", icon: <CheckSquare size={18} /> },
     { id: "material" as Tab, label: "Material Tracking", icon: <Truck size={18} /> }, { id: "manpower" as Tab, label: "Manpower", icon: <Users size={18} /> },
     { id: "safety" as Tab, label: "Safety", icon: <ShieldAlert size={18} /> }, { id: "reports" as Tab, label: "Reports", icon: <FileText size={18} /> },
+    { id: "tools" as Tab, label: "Marking & Handover", icon: <Ruler size={18} /> },
   ];
   const header = (
     <input type="date" className="input hidden w-auto py-2 sm:block" value={day} max={today()} onChange={(e) => e.target.value && setDay(e.target.value)} title="Site date" />
@@ -55,7 +57,7 @@ export default function SitePage() {
     ["Activity / work done", HardHat, () => setActOpen(true)], ["Site photos", Camera, () => setTab("photos")],
     ["Material received / used", Package, () => setTab("material")], ["Attendance", Users, () => setTab("manpower")],
     ["Quality check", CheckSquare, () => setTab("quality")], ["Issue / delay / safety", AlertTriangle, () => setTab("safety")],
-    ["Daily report (DPR)", ClipboardList, () => setTab("daily")],
+    ["Daily report (DPR)", ClipboardList, () => setTab("daily")], ["Site marking guide", Ruler, () => setTab("tools")],
   ];
   return (
     <Page title={t("Site Management")} subtitle="Track progress, manage site activities, quality and materials" actions={header}>
@@ -83,6 +85,7 @@ export default function SitePage() {
       {tab === "manpower" && pid && <ManpowerTab pid={pid} day={day} canWrite={allowed} onChanged={changed} />}
       {tab === "safety" && pid && <SafetyTab pid={pid} day={day} canWrite={allowed} onChanged={changed} />}
       {tab === "reports" && pid && <ReportsTab pid={pid} day={day} code={currentProject.code} />}
+      {tab === "tools" && pid && <SiteTools pid={pid} code={currentProject.code} canWrite={allowed} />}
 
       {pid && <ActivityModal open={actOpen} onClose={() => setActOpen(false)} pid={pid} day={day} onSaved={changed} />}
     </Page>

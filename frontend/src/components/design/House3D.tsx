@@ -13,6 +13,7 @@ import { GLTFExporter } from "three/examples/jsm/exporters/GLTFExporter.js";
 import { RoomEnvironment } from "three/examples/jsm/environments/RoomEnvironment.js";
 import { api, fileObjectUrl } from "../../lib/api";
 import { useAuth } from "../../lib/auth";
+import { shadeAdvice, sunPosition, sunVector } from "../../lib/sun";
 import MaterialPanel from "./MaterialPanel";
 import PlantsPanel, { plantSummary } from "./PlantsPanel";
 import { sheetLines } from "./RoofSheetsPanel";
@@ -89,7 +90,16 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
   const fin: Finishes = { ...DEFAULT_FINISH, ...(finishes || {}) };
   const style: Style = (fin.style as Style) || "modern";
   // 1.15 material library: your own items (with their photos) + built-ins → what each part of the house looks like
-  const user = useAuth()?.user;
+  const auth = useAuth();
+  const user = auth?.user;
+  // 1.19 sun path: real sun position for a date / time at the site (project location, else central Tamil Nadu)
+  const [sunOn, setSunOn] = useState(false);
+  const [sunDate, setSunDate] = useState(() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`; });
+  const [sunHour, setSunHour] = useState(10);
+  const siteLat = auth?.currentProject?.latitude ?? null, siteLon = auth?.currentProject?.longitude ?? null;
+  const lat = siteLat ?? 11.1, lon = siteLon ?? 78.6;
+  const sunPos = useMemo(() => sunPosition(new Date(sunDate + "T00:00:00"), sunHour, lat, lon), [sunDate, sunHour, lat, lon]);
+  const shades = useMemo(() => (sunOn ? shadeAdvice(plan.compass, lat, lon) : []), [sunOn, plan.compass, lat, lon]);
   const [custom, setCustom] = useState<Item[]>([]);
   const photos = useRef(new Map<string, THREE.Texture>());
   const [photoVer, setPhotoVer] = useState(0);
@@ -343,7 +353,15 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
     const fogCol = light === "night" ? "#0b1324" : light === "dusk" ? "#3a4a70" : "#cfe6f7";
     c.scene.fog = new THREE.Fog(fogCol, 260, 900);
     const walking = mode === "walk";
-    if (light === "day") {
+    if (light === "day" && sunOn) {  // 1.19 real sun for the chosen date & time
+      const [vx, vy, vz] = sunVector(sunPos, plan.compass);
+      const up = sunPos.el > 0;
+      c.hemi.color.set("#ffffff"); c.hemi.groundColor.set("#8a8a7a"); c.hemi.intensity = walking ? 1.2 : up ? 0.6 : 0.3;
+      c.sun.color.set(sunPos.el < 12 ? "#ffcf9a" : "#fff4e0"); c.sun.intensity = up ? 2.6 : 0.05;
+      c.renderer.toneMappingExposure = 1.0; c.scene.environmentIntensity = up ? 0.5 : 0.2;
+      const r = 200;
+      c.sun.position.set(centre.x + vx * r, Math.max(2, centre.y + vz * r), centre.z - vy * r);
+    } else if (light === "day") {
       c.hemi.color.set("#ffffff"); c.hemi.groundColor.set("#8a8a7a"); c.hemi.intensity = walking ? 1.35 : 0.75;
       c.sun.color.set("#fff4e0"); c.sun.intensity = 2.5; c.renderer.toneMappingExposure = 1.0; c.scene.environmentIntensity = 0.55;
       c.sun.position.set(centre.x + 70, 110, centre.z + 80);
@@ -361,7 +379,7 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
     sc.left = -span; sc.right = span; sc.top = span; sc.bottom = -span; sc.near = 1; sc.far = 600;
     sc.updateProjectionMatrix();
     c.renderer.shadowMap.needsUpdate = true;
-  }, [light, centre, plan.plot, mode]);
+  }, [light, centre, plan.plot, mode, sunOn, sunPos, plan.compass]);
 
   useEffect(() => { const c = ctx.current; if (c) c.camera.userData.spin = rotate; }, [rotate]);
   useEffect(() => { applyClip(); }, [cut]);
@@ -653,6 +671,24 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
           ))}
         </div>
       </div>
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-white px-2 py-1.5 text-sm">
+        <label className="inline-flex items-center gap-1.5 font-semibold text-navy-ink"><input type="checkbox" className="h-4 w-4 accent-brand-600" checked={sunOn}
+          onChange={(e) => { setSunOn(e.target.checked); if (e.target.checked) setLight("day"); }} /><Sun size={14} />Sun path & shadows</label>
+        {sunOn && <>
+          <input type="date" className="rounded-md border border-line px-2 py-1" value={sunDate} onChange={(e) => e.target.value && setSunDate(e.target.value)} />
+          <input type="range" min={6} max={18.5} step={0.25} value={sunHour} onChange={(e) => setSunHour(Number(e.target.value))} className="w-40 accent-brand-600" />
+          <span className="font-mono text-xs">{String(Math.floor(sunHour)).padStart(2, "0")}:{String(Math.round((sunHour % 1) * 60)).padStart(2, "0")}</span>
+          <span className="text-xs text-slate-600">Sun {sunPos.el > 0 ? `${Math.round(sunPos.el)}° high, from ${Math.round(sunPos.az)}°` : "below the horizon"}</span>
+          {siteLat == null && <span className="text-xs text-amber-700">Site location not set – using central Tamil Nadu (set it in Projects for exact sun).</span>}
+        </>}
+      </div>
+      {sunOn && shades.length > 0 && (
+        <div className="overflow-x-auto rounded-lg border border-line bg-white p-2">
+          <div className="mb-1 text-xs font-semibold text-navy-ink">Sunshade (chajja) suggestion – hot months (March–June), for 1.2 m tall windows</div>
+          <table className="w-full text-xs"><thead><tr><th className="table-th">Face</th><th className="table-th">Faces</th><th className="table-th">Sun hours / day</th><th className="table-th">Chajja</th><th className="table-th">Advice</th></tr></thead>
+            <tbody>{shades.map((f) => <tr key={f.face}><td className="table-td">{f.face}</td><td className="table-td">{f.facing}</td><td className="table-td">{f.sunHours}</td><td className="table-td">{f.depth_m ? `${Math.round(f.depth_m * 1000)} mm` : "–"}</td><td className="table-td">{f.advice}</td></tr>)}</tbody></table>
+        </div>
+      )}
       {mode === "interior" && (
         <div className="flex flex-wrap items-center gap-1.5 rounded-lg bg-brand-50 p-2 text-sm">
           <span className="mr-1 text-xs font-semibold text-navy-ink">Interior – floor:</span>

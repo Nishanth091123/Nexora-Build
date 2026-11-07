@@ -97,7 +97,7 @@ except httpx.ConnectError:
         sys.exit("[ERROR] Backend did not start in 2 minutes.")
 check("health", r.status_code == 200 and r.json().get("status") == "ok", r.text)
 _v = tuple(int(x) for x in (r.json().get("version", "0.0").split("-")[0].split(".") + ["0", "0"])[:3] if x.isdigit())
-check("backend is the 1.18 version (not an old one still running)", _v >= (1, 18, 0), r.text)
+check("backend is the 1.19 version (not an old one still running)", _v >= (1, 19, 0), r.text)
 
 login = input("Owner username [nishanth_s]: ").strip() or "nishanth_s"
 pw = getpass.getpass("Owner password (hidden): ")
@@ -405,6 +405,57 @@ if plan:
     mp = r.json() if r.status_code == 200 else {}
     check("1.18 manual setback used (auto kept for the check)", mp.get("setbacks", {}).get("ft", {}).get("front") == 6
           and "front" in mp.get("setbacks", {}).get("manual", []), r.text[:200])
+    # ---------------- 1.19: floor-by-floor request, several houses on one floor ----------------
+    fw_text = ("30x55 plot south facing 30 ft road. Ground floor car parking plus staircase inside and 2BHK. "
+               "First floor one 1BHK for rental and 2BHK owner stay")
+    r = c.post(f"/api/projects/{pid}/design/parse", json={"text": fw_text})
+    fr = (r.json().get("requirements") or {}) if r.status_code == 200 else {}
+    fl = fr.get("levels") or [{}, {}]
+    check("1.19 floor-wise request understood (FF: 1BHK rental + 2BHK owner)", bool(fr.get("floor_specs")) and len(fl) == 2
+          and [(u["bhk"], u["use"]) for u in fl[1].get("units", [])] == [(1, "rental"), (2, "owner")] and fl[0].get("parking_car"), r.text[:300])
+    r = c.post(f"/api/projects/{pid}/design/generate", json={"requirements": fr})
+    up = r.json() if r.status_code == 200 else {}
+    ff = (up.get("levels") or [{}, {}])[1] if len(up.get("levels") or []) > 1 else {}
+    mains = [o["room"] for o in ff.get("openings", []) if o["type"] == "main_door"]
+    check("1.19 two separate houses on the first floor, each with its own main door", r.status_code == 200 and len(mains) == 2
+          and len({x.get("unit") for x in ff.get("rooms", []) if x.get("unit")}) == 2, r.text[:300])
+    r = c.post(f"/api/projects/{pid}/design/generate", json={"requirements": dict(fr, levels=[fr["levels"][0], dict(fr["levels"][1], units=[
+        {"label": L, "use": "rental", "bhk": 2, "bedrooms": 2, "attached_toilets": 1, "common_toilets": 1, "kitchen": True, "hall": True, "dining": True, "pooja": False}
+        for L in "ABCD"])])} if fr.get("levels") else {"requirements": {}})
+    check("1.19 too many houses → says why and gives options (never squeezes)", r.status_code == 422 and "Options" in r.text, r.text[:200])
+    # ---------------- 1.19: site marking, water services, change requests, handover ----------------
+    r = c.get(f"/api/projects/{pid}/site-marking")
+    mk = (r.json().get("guide") or {}) if r.status_code == 200 else {}
+    check("1.19 site marking guide from the drawing (asks ground level, never guesses)", r.status_code == 200 and len(mk.get("grid", {}).get("x", [])) >= 2
+          and any("ground level" in q.lower() for q in mk.get("questions", [])), r.text[:300])
+    r = c.put(f"/api/projects/{pid}/site-data/levels", json={"values": {"egl_mm": 150, "sewer_mm": -1500}})
+    r = c.get(f"/api/projects/{pid}/site-marking")
+    mk = (r.json().get("guide") or {}) if r.status_code == 200 else {}
+    check("1.19 level table, stair, drainage worked out", any("finished floor" in x["item"] for x in mk.get("levels", []))
+          and all(x["from_bm"] != "?" for x in mk.get("levels", [])) and (mk.get("drainage") or {}).get("chambers"), r.text[:300])
+    r = c.get(f"/api/projects/{pid}/site-marking.pdf")
+    check("1.19 site marking guide PDF", r.status_code == 200 and r.content[:4] == b"%PDF", r.text[:200] if r.status_code != 200 else "")
+    r = c.get(f"/api/projects/{pid}/services")
+    sv = r.json() if r.status_code == 200 else {}
+    check("1.19 RWH / sump / tank / septic sized (asks soil & sewer)", sv.get("sump", {}).get("litres", 0) > 0 and sv.get("rwh", {}).get("wells", 0) >= 1
+          and len(sv.get("questions", [])) >= 2, r.text[:300])
+    r = c.post(f"/api/projects/{pid}/services/approval", json={"status": "approved", "by": ""})
+    check("1.19 services approval needs the client's name", r.status_code == 400, r.text[:200])
+    r = c.get(f"/api/projects/{pid}/services.pdf")
+    check("1.19 water services PDF", r.status_code == 200 and r.content[:4] == b"%PDF", r.text[:200] if r.status_code != 200 else "")
+    r = c.post(f"/api/projects/{pid}/variations/impact", json={"from_design_id": d1, "to_design_id": d2, "lines": [{"desc": "Extra granite", "qty": 2, "code": "granite"}]})
+    vi = r.json() if r.status_code == 200 else {}
+    check("1.19 change request: cost & time impact worked out", r.status_code == 200 and len(vi.get("lines", [])) == 2 and "days" in vi, r.text[:300])
+    r = c.post(f"/api/projects/{pid}/variations", json={"title": "SMOKE change", "lines": [{"desc": "Extra granite", "qty": 2, "code": "granite"}]})
+    vno = r.json().get("no") if r.status_code == 200 else None
+    check("1.19 change request saved (pending)", r.status_code == 200 and r.json().get("status") == "pending", r.text[:200])
+    if vno:
+        r = c.post(f"/api/projects/{pid}/variations/{vno}/decision", json={"status": "approved", "by": "Smoke client"})
+        check("1.19 change request approved by the client", r.status_code == 200 and r.json().get("status") == "approved", r.text[:200])
+        r = c.get(f"/api/projects/{pid}/variations/{vno}/pdf")
+        check("1.19 variation sheet PDF", r.status_code == 200 and r.content[:4] == b"%PDF", r.text[:200] if r.status_code != 200 else "")
+    r = c.get(f"/api/projects/{pid}/handover.pdf", timeout=180)
+    check("1.19 handover pack PDF (with drawings)", r.status_code == 200 and r.content[:4] == b"%PDF" and len(r.content) > 20000, r.text[:200] if r.status_code != 200 else "")
     r = c.get(f"/api/designs/{d2}/pdf")
     check("plan PDF export", r.status_code == 200 and r.content[:4] == b"%PDF", r.text[:200] if r.status_code != 200 else "")
     r = c.get(f"/api/designs/{d2}/dxf")
@@ -763,6 +814,11 @@ r = c.get(f"/api/bbs/{bb.get('id')}/pdf")
 check("BBS PDF with drawings", r.status_code == 200 and r.content[:4] == b"%PDF", r.text[:200] if r.status_code != 200 else "")
 r = c.get(f"/api/bbs/{bb.get('id')}/excel")
 check("BBS Excel", r.status_code == 200 and r.content[:2] == b"PK", r.text[:200] if r.status_code != 200 else "")
+r = c.post(f"/api/projects/{pid}/steel-cutting", json={"bbs_id": bb.get("id")})
+cu = r.json() if r.status_code == 200 else {}
+check("1.19 steel cutting plan from the BBS (12 m bars, saving shown)", cu.get("total_bars", 0) > 0 and cu.get("total_bars", 0) <= cu.get("total_bars_naive", 0), r.text[:200])
+r = c.post(f"/api/projects/{pid}/steel-cutting/pdf", json={"bbs_id": bb.get("id")})
+check("1.19 steel cutting plan PDF", r.status_code == 200 and r.content[:4] == b"%PDF", r.text[:200] if r.status_code != 200 else "")
 r = c.get(f"/api/projects/{pid}/permit")
 pm6 = r.json() if r.status_code == 200 else {}
 check("plan approval checklist", len(pm6.get("items", [])) >= 10, r.text[:200])
@@ -881,4 +937,4 @@ if fail:
     print("Failed:", ", ".join(fail), "\nSend this output to Claude.")
     sys.exit(1)
 else:
-    print("NEXORA 1.18 API: ALL GOOD")
+    print("NEXORA 1.19 API: ALL GOOD")

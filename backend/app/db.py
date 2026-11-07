@@ -129,6 +129,10 @@ ADDITIVE_MIGRATIONS: dict[str, list[str]] = {
         "ALTER TABLE projects ADD COLUMN IF NOT EXISTS active_design_id INTEGER",
         "ALTER TABLE projects ADD COLUMN IF NOT EXISTS brand_choices JSON",
     ],
+    # 1.19: site marking inputs, water services, change requests (variations), handover details – one JSON per project
+    "0014_v119_site_data": [
+        "ALTER TABLE projects ADD COLUMN IF NOT EXISTS site_data JSON",
+    ],
 }
 
 

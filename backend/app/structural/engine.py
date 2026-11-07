@@ -108,7 +108,39 @@ def _segments(plan: dict):
                 hs.append((min(w["x1"], w["x2"]), max(w["x1"], w["x2"]), w["y1"]))
             else:
                 vs.append((min(w["y1"], w["y2"]), max(w["y1"], w["y2"]), w["x1"]))
-    return hs, vs
+    return _merge(hs), _merge(vs)
+
+
+def _merge(segs):
+    """Join collinear touching segments (1.19: the beam over a clear parking entrance spans several rooms above)."""
+    out = []
+    for a, b, c in sorted(segs, key=lambda t: (round(t[2], 2), t[0])):
+        if out and abs(out[-1][2] - c) < 0.01 and a <= out[-1][1] + 0.01:
+            out[-1] = (out[-1][0], max(out[-1][1], b), out[-1][2])
+        else:
+            out.append((a, b, c))
+    return out
+
+
+OPEN_GROUND = ("parking", "parking_car", "parking_bike", "stilt_open", "portico")
+
+
+def entrance_runs(plan: dict) -> list[tuple[float, float, float]]:
+    """1.19 Road-side openings of the ground / stilt floor: (x start, x end, y of the front line) in ft."""
+    if not plan.get("levels"):
+        return []
+    rooms = plan["levels"][0]["rooms"]
+    if not rooms:
+        return []
+    y0 = min(r["y"] for r in rooms)
+    fr = sorted((r for r in rooms if r["type"] in OPEN_GROUND and abs(r["y"] - y0) < 0.05), key=lambda r: r["x"])
+    runs: list[list[float]] = []
+    for r in fr:
+        if runs and r["x"] <= runs[-1][1] + 0.05:
+            runs[-1][1] = max(runs[-1][1], r["x"] + r["w"])
+        else:
+            runs.append([r["x"], r["x"] + r["w"]])
+    return [(a, b, y0) for a, b in runs]
 
 
 def column_points(plan: dict, max_span_ft: float = 4.5 / FT, merge_ft: float = 3.5) -> list[tuple[float, float]]:
@@ -135,7 +167,17 @@ def column_points(plan: dict, max_span_ft: float = 4.5 / FT, merge_ft: float = 3
                 if r["x"] + 0.6 < p[0] < r["x"] + r["w"] - 0.6 and r["y"] + 0.6 < p[1] < r["y"] + r["d"] - 0.6:
                     return True
         return False
-    out = [p for p in out if not inside_room(p)]
+    # 1.19: no column in the road-side entrance of the parking / stilt / portico – columns only at the two ends
+    # of the open run, the beam spans the opening
+    ents = entrance_runs(plan)
+
+    def in_entrance(p):
+        return any(abs(p[1] - y) < 0.6 and a + 0.6 < p[0] < b - 0.6 for a, b, y in ents)
+    out = [p for p in out if not inside_room(p) and not in_entrance(p)]
+    for a, b, y in ents:  # the two ends of every opening always get a column
+        for x in (a, b):
+            if all(math.hypot(x - q[0], y - q[1]) > 1.0 for q in out):
+                out.append((round(x, 2), round(y, 2)))
     # snap nearly-equal x (and y) values to one grid line (within 1.2 ft) so the grid reads cleanly
     for axis in (0, 1):
         vals = sorted({p[axis] for p in out})
@@ -159,7 +201,7 @@ def column_points(plan: dict, max_span_ft: float = 4.5 / FT, merge_ft: float = 3
         for x0, x1, y in hs:
             on = sorted(p[0] for p in out if abs(p[1] - y) < 0.6 and x0 - 0.6 <= p[0] <= x1 + 0.6)
             for a, b in zip(on, on[1:]):
-                if b - a > max_span_ft and not inside_room(((a + b) / 2, y)):
+                if b - a > max_span_ft and not inside_room(((a + b) / 2, y)) and not in_entrance(((a + b) / 2, y)):
                     out.append((round((a + b) / 2, 2), y))
                     changed = True
                     break
@@ -195,6 +237,15 @@ def design(plan: dict, raw: dict) -> dict:
     n = len(plan["levels"])
     warnings, notes = [], []
     cols = column_points(plan)
+    for a, b, _y in entrance_runs(plan):  # 1.19 clear parking entrance
+        span_m = (b - a) * FT
+        notes.append(f"Parking / stilt entrance kept clear: {span_m:.1f} m opening with columns only at the two ends; "
+                     f"the front beam spans the full opening.")
+        if span_m > 6.0:
+            warnings.append(f"Parking entrance span {span_m:.1f} m is long for a 230 mm beam – use a deeper beam "
+                            f"(≈ span/10 = {span_m * 100:.0f} mm) or a transfer beam; structural engineer to check.")
+        elif span_m > 4.5:
+            warnings.append(f"Parking entrance span {span_m:.1f} m (no middle column): front beam is deeper than the others – check the beam schedule.")
     if len(cols) < 4:
         raise NeedInfo(["Too few walls to place columns – open a complete design (walls on every floor)."])
     beams = beam_spans(plan, cols)
@@ -286,18 +337,24 @@ def design(plan: dict, raw: dict) -> dict:
                     wslab = max(wslab, s["load_kn_m2"])
             roof = li == n - 1
             wall = inp["wall_density"] * 0.23 * (1.0 if roof else max(0.0, H - 0.45))  # parapet 1 m on roof
-            b = 230
-            D = max(300, ceil_to(L * 1000 / 12, 25))
             single = bm["n_on_line"] <= 2
-            while True:
-                d = D - 25 - 8 - 8
-                w = wslab * trib + wall + 25 * b * D / 1e6
-                wu = 1.5 * w
-                mu = wu * L * L / (8 if single else 10)
-                if mu * 1e6 <= 0.133 * fck * b * d * d or D >= 600:
+            for b in (230, 300, 380):  # 1.19: long clear spans (parking entrance) widen the beam before giving up
+                D = max(300, ceil_to(L * 1000 / 12, 25))
+                while True:
+                    d = D - 25 - 8 - 8
+                    w = wslab * trib + wall + 25 * b * D / 1e6
+                    wu = 1.5 * w
+                    mu = wu * L * L / (8 if single else 10)
+                    if mu * 1e6 <= 0.133 * fck * b * d * d or D >= 750:
+                        break
+                    D += 25
+                if mu * 1e6 <= 0.133 * fck * b * d * d:
                     break
-                D += 25
             ast = max(ast_req(mu, b, d, fck, fy), 0.85 * b * d / fy)
+            if not math.isfinite(ast):
+                ast = 0.04 * b * d
+                warnings.append(f"{lv['name']} beam {L:.1f} m: too long for a normal beam – add a column or a transfer beam; "
+                                f"structural engineer to design.")
             nb, db = pick_bars(ast, (12, 16, 20), 2, 4)
             top_ast = max(0.5 * ast, 2 * BAR_AREA[12]) if not single else 2 * BAR_AREA[12]
             nt, dt = pick_bars(top_ast, (12, 16), 2, 4)
