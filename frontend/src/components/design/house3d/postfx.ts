@@ -62,3 +62,32 @@ export function stampLabel(dataUrl: string, text: string): Promise<string> {
     im.src = dataUrl;
   });
 }
+
+/** 1.21 a room label to stamp on a picture: position and letter height as fractions of the picture */
+export type Stamp = { fx: number; fy: number; name: string; size: string; fs: number; rot: boolean };
+
+/** room names + sizes written on a plan picture (after an AI polish – the AI never writes the words) */
+export function stampPlanLabels(dataUrl: string, stamps: Stamp[]): Promise<string> {
+  return new Promise((res) => {
+    const im = new Image();
+    im.onload = () => {
+      const c = document.createElement("canvas"); c.width = im.width; c.height = im.height;
+      const g = c.getContext("2d")!; g.drawImage(im, 0, 0);
+      g.textAlign = "center"; g.textBaseline = "middle"; g.lineJoin = "round";
+      for (const s of stamps) {
+        const px = Math.max(7, s.fs * im.height);
+        g.save(); g.translate(s.fx * im.width, s.fy * im.height); if (s.rot) g.rotate(-Math.PI / 2);
+        const put = (t: string, y: number, size: number, w: number, fill: string) => {
+          g.font = `${w} ${size}px Arial, Helvetica, sans-serif`;
+          g.lineWidth = size * 0.3; g.strokeStyle = "rgba(255,255,255,0.95)"; g.strokeText(t, 0, y);
+          g.fillStyle = fill; g.fillText(t, 0, y);
+        };
+        put(s.name, -px * 0.45, px, 800, "#1b1f24"); put(s.size, px * 0.55, px * 0.8, 700, "#27303a");
+        g.restore();
+      }
+      res(c.toDataURL("image/png"));
+    };
+    im.onerror = () => res(dataUrl);
+    im.src = dataUrl;
+  });
+}

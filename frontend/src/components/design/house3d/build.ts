@@ -11,6 +11,7 @@ import { Grid, type R } from "./raster";
 import * as T from "./textures";
 import type { Look, Slot } from "./catalog";
 import { addPlants, plantsOf, PLANT_MATS, type Plants } from "./plants";
+import { furnitureFor, furnPalette, localSize, localToWorld, roomLabels } from "./furniture";
 
 export const PLINTH = 1.5, SLAB = 0.42, PARAPET = 3, HEADROOM = 8;
 const SILL: Record<string, number> = { window: 3, vent: 5.5 };
@@ -42,6 +43,8 @@ export type BuildOpts = {
   shine?: boolean;
   /** 1.15 material library: what you picked for a part of the house (and per room); null = style default */
   look?: (slot: Slot, roomId?: string) => Look | null;
+  /** 1.21 top cutaway ("Plan view 3D"): walls cut at cutH ft with a dark cap, glowing window strips, room names lying on the floor */
+  cutH?: number; planTop?: boolean; labels?: boolean; metric?: boolean;
 };
 export type Built = { root: THREE.Group; lights: THREE.Light[] };
 
@@ -142,7 +145,8 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
   levels[0].rooms.forEach((r) => g0.fill(r));
   const plinthGrid = g0.dilate(0.4);
   const plinthM = pick("plinth", () => (MOD ? stoneM() : std(fin.plinth)));
-  for (const r of plinthGrid.rects()) box(r.x, r.y, 0, r.x + r.w, r.y + r.d, PLINTH, plinthM, root, "plinth");
+  if (!(o.planTop && o.only != null && o.only > 0)) for (const r of plinthGrid.rects()) box(r.x, r.y, 0, r.x + r.w, r.y + r.d, PLINTH, plinthM, root, "plinth");
+  const FP = furnPalette(style);
 
   let mainDoor: { op: Lv["openings"][number]; out: number } | null = null;
 
@@ -153,7 +157,9 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
     const z = zOf(li);
     const topShown = li === nShow - 1 || o.only != null;
     const cutInterior = o.mode === "interior" && topShown;
-    const wallTop = cutInterior ? z + 4.5 : z + H - SLAB;
+    const wallTop = cutInterior ? z + (o.cutH ?? 4.5) : z + H - SLAB;
+    const capM = o.planTop && cutInterior ? std(FP.wall, { roughness: 0.6 }, "none") : null;
+    const stripM = capM ? M("planWin", () => new THREE.MeshStandardMaterial({ color: "#19c2e8", emissive: new THREE.Color("#12b5dc"), emissiveIntensity: 0.9, roughness: 0.2 })) : null;
 
     // ---------- floors (on top of the slab – never in the same plane)
     for (const r of lv.rooms) {
@@ -184,6 +190,7 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
       const piece = (s: number, e: number, zb: number, zt: number) => {
         if (e - s < 0.02 || zt - zb < 0.02) return;
         wbox(horiz, s, e, c0, -th, th, zb, zt, intM, g);
+        if (capM && zt >= wallTop - 1e-6) wbox(horiz, s - (s <= s0 + 1e-6 ? 0.02 : 0), e + (e >= s1 - 1e-6 ? 0.02 : 0), c0, -th - 0.03, th + 0.03, zt, zt + 0.07, capM, g, "wall cap");
         if (skin) {
           const se = s <= s0 + 1e-6 ? s - 0.06 : s, ee = e >= s1 - 1e-6 ? e + 0.06 : e;
           wbox(horiz, se, ee, c0, out * th, out * (th + 0.06), zb, zt, skin(), g);
@@ -212,6 +219,7 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
         piece(cur, s2, z, wallTop);
         if (sill > 0) piece(s2, e3, z, z + Math.min(sill, wallTop - z));
         if (z + head < wallTop) piece(s2, e3, z + head, wallTop);
+        if (isWin && stripM && z + sill < wallTop) wbox(horiz, s2, e3, c0, -0.16, 0.16, wallTop - 0.04, wallTop + 0.09, stripM, g, "window strip");
         if (isWin && z + sill < wallTop) windowAt(horiz, s2, e3, c0, th, out, z + sill, Math.min(z + head, wallTop), op.type === "vent", w.kind === "ext" || out !== 0, li, front, g, cutInterior);
         else if (DOORS.has(op.type)) {
           doorAt(horiz, s2, e3, c0, th, z, z + Math.min(head, wallTop - z), op.type, g);
@@ -227,12 +235,12 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
     if (carry.length && (li < levels.length - 1 || lv.rooms.some((q) => q.type === "stilt_open"))) carryFrame(lv, carry, z, g);
     for (const r of lv.rooms.filter((q) => q.type === "parking")) {
       if (li === 0 && r.y <= extent(lv.rooms).y0 + 0.01 && o.surround) ramp(r, g);
-      if (o.furniture) car(r, z, g);
     }
 
     // ---------- stairs
     for (const r of lv.rooms.filter((q) => q.type === "stair" && Math.max(q.d, q.w) >= 7 && Math.min(q.d, q.w) >= 3)) stairs(r, z, g);
-    if (o.furniture) { furnish(lv.rooms, z, g); details(lv, z, g, cutInterior); }
+    if (o.furniture) { furnish(lv, z, g, cutInterior); details(lv, z, g, cutInterior); }
+    if (o.planTop && o.labels && cutInterior) planLabels(li, wallTop + 0.5, g);
 
     // ---------- slab + overhang over this floor
     const slabOn = !cutInterior && (li < nShow - 1 || o.roof);
@@ -890,19 +898,6 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
     m.receiveShadow = true; g.add(m);
   }
 
-  function car(r: Room, z: number, g: THREE.Object3D) {
-    if (r.w < 9 || r.d < 14) return;
-    const cx = r.x + r.w / 2, cy = r.y + r.d / 2;
-    const body = std("#9b1c1c", { roughness: 0.25, metalness: 0.6 }, "none");
-    box(cx - 2.9, cy - 6.8, z + 1.0, cx + 2.9, cy + 6.8, z + 3.0, body, g, "car");
-    box(cx - 2.5, cy - 3.2, z + 3.0, cx + 2.5, cy + 3.6, z + 4.5, std("#1d2430", { roughness: 0.1, metalness: 0.4 }, "none"), g, "car cabin");
-    for (const [wx, wy] of [[-2.7, -4.4], [2.7, -4.4], [-2.7, 4.4], [2.7, 4.4]] as [number, number][]) {
-      const w = new THREE.Mesh(new THREE.CylinderGeometry(1.05, 1.05, 0.7, 18), std("#111111", { roughness: 0.9 }, "none"));
-      w.rotation.z = Math.PI / 2; w.position.set(b.x + cx + wx, z + 1.05, -(b.y + cy + wy)); w.castShadow = true; g.add(w);
-    }
-    if (lit) for (const wx of [-1.9, 1.9]) box(cx + wx - 0.5, cy - 6.85, z + 2.2, cx + wx + 0.5, cy - 6.8, z + 2.6, glow, g);
-  }
-
   function entrance(op: Lv["openings"][number], out: number) {
     const lv = levels[0];
     const horiz = Math.abs(op.y1 - op.y2) < 1e-6;
@@ -954,91 +949,163 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
     }
   }
 
-  function furnish(rooms: Room[], z: number, g: THREE.Object3D) {
-    // 1.17: more real furniture – bed with legs, pillows and side tables, sofa with cushions, dining chairs, kitchen
-    // with upper cabinets, hob and sink, toilet with cistern, mirror and shower
+  /** 1.21: furniture from the furniture engine (the same list the 2D rendered plan draws) – every piece stands where
+   *  the plan allows it: clear of door swings, tall pieces away from windows, smaller pieces in smaller rooms. */
+  function furnish(lv: Lv, z: number, g: THREE.Object3D, cut: boolean) {
     const fab = (c: string) => std(c, { roughness: 0.95 });
-    const white = std("#f8fafc", { roughness: 0.25 }, "none");
-    const metal = std("#9ca3af", { roughness: 0.3, metalness: 0.7 }, "none");
-    for (const r of rooms) {
-      const { x, y, w, d, type } = r;
-      if (type === "bedroom" && w >= 8 && d >= 8) {
-        const bw = Math.min(5, w - 3), bl = Math.min(6.5, d - 2.5), bx = x + (w - bw) / 2, by = y + d - bl - 0.6;
-        const frame = woodM("#6b4a2e");
-        for (const [lx, ly] of [[0, 0], [bw - 0.25, 0], [0, bl - 0.25], [bw - 0.25, bl - 0.25]]) box(bx + lx, by + ly, z, bx + lx + 0.25, by + ly + 0.25, z + 0.6, frame, g);
-        box(bx, by, z + 0.6, bx + bw, by + bl, z + 1.15, frame, g, "bed");
-        box(bx + 0.08, by + 0.08, z + 1.15, bx + bw - 0.08, by + bl - 0.08, z + 1.85, fab("#f4efe6"), g, "mattress");
-        box(bx - 0.05, by + bl - 0.35, z, bx + bw + 0.05, by + bl, z + 3.6, woodM("#5a3a20"), g, "headboard");
-        box(bx + 0.25, by + bl - 1.55, z + 1.85, bx + bw / 2 - 0.12, by + bl - 0.55, z + 2.25, fab("#ffffff"), g, "pillow");
-        box(bx + bw / 2 + 0.12, by + bl - 1.55, z + 1.85, bx + bw - 0.25, by + bl - 0.55, z + 2.25, fab("#ffffff"), g, "pillow");
-        box(bx + 0.05, by + 0.05, z + 1.85, bx + bw - 0.05, by + bl * 0.55, z + 1.95, fab("#6d7fa3"), g, "blanket");
-        box(bx + 0.05, by + 0.05, z + 1.2, bx + 0.12, by + bl * 0.55, z + 1.95, fab("#6d7fa3"), g);  // blanket hanging over the sides
-        box(bx + bw - 0.12, by + 0.05, z + 1.2, bx + bw - 0.05, by + bl * 0.55, z + 1.95, fab("#6d7fa3"), g);
-        for (const sx of [bx - 1.7, bx + bw + 0.2]) {  // side tables with lamps
-          if (sx < x + 0.4 || sx + 1.5 > x + w - 0.4) continue;
-          box(sx, by + bl - 1.5, z, sx + 1.5, by + bl - 0.1, z + 1.8, woodM("#7a5536"), g, "side table");
-          box(sx + 0.55, by + bl - 0.95, z + 1.8, sx + 0.95, by + bl - 0.55, z + 2.5, std("#d6c7a8", { roughness: 0.6 }, "none"), g, "lamp");
+    const col = (c: string, p: Partial<THREE.MeshStandardMaterialParameters> = {}) => std(c, { roughness: 0.5, ...p }, "none");
+    const white = col(FP.white, { roughness: 0.25 }), metal = col(FP.steel, { roughness: 0.3, metalness: 0.7 });
+    const dark = col("#0b0b0d", { roughness: 0.15 }), topCut = z + (o.cutH ?? 4.5) - 0.1;
+    for (const it of furnitureFor(lv)) {
+      const [W, D] = localSize(it);
+      const lb = (u0: number, v0: number, z0: number, u1: number, v1: number, z1: number, m: THREE.Material, name = it.kind) => {
+        const [xa, ya] = localToWorld(it, u0, v0), [xb, yb] = localToWorld(it, u1, v1);
+        return box(Math.min(xa, xb), Math.min(ya, yb), z + z0, Math.max(xa, xb), Math.max(ya, yb), z + z1, m, g, name);
+      };
+      const at = (u: number, v: number, h: number) => { const [x, y] = localToWorld(it, u, v); return new THREE.Vector3(b.x + x, z + h, -(b.y + y)); };
+      const cyl = (u: number, v: number, h0: number, h1: number, r0: number, r1: number, m: THREE.Material, axisU = false) => {
+        const c = new THREE.Mesh(new THREE.CylinderGeometry(r1, r0, h1 - h0, 16), m);
+        c.position.copy(at(u, v, (h0 + h1) / 2)); c.castShadow = true; c.receiveShadow = true;
+        if (axisU) { if (it.back === "s" || it.back === "n") c.rotation.z = Math.PI / 2; else c.rotation.x = Math.PI / 2; }
+        g.add(c); return c;
+      };
+      const leaves = (u: number, v: number, h: number, r: number) => {
+        for (let k = 0; k < 4; k++) {
+          const leaf = new THREE.Mesh(new THREE.IcosahedronGeometry(r * (0.75 + (k % 2) * 0.25), 1), std(k % 2 ? FP.leaf2 : FP.leaf, { roughness: 0.9, flatShading: true }, "none"));
+          leaf.position.copy(at(u, v, h + k * r * 0.55)).add(new THREE.Vector3(Math.cos(k * 1.6) * r * 0.4, 0, Math.sin(k * 1.6) * r * 0.4));
+          leaf.castShadow = true; g.add(leaf);
         }
-        if (w >= 10) {
-          box(x + 0.45, y + 0.6, z, x + 2.4, y + 5.0, z + 7, woodM("#8c6a4a"), g, "wardrobe");
-          box(x + 2.4, y + 2.78, z + 0.3, x + 2.42, y + 2.82, z + 6.7, woodM("#4a3220"), g);  // shutter line
-          for (const hy of [2.55, 3.05]) box(x + 2.4, y + hy, z + 3.4, x + 2.48, y + hy + 0.05, z + 4.2, metal, g);  // handles
+      };
+      const legs = (u0: number, v0: number, u1: number, v1: number, h: number, m: THREE.Material, t = 0.16) => {
+        for (const [lu, lv2] of [[u0, v0], [u1 - t, v0], [u0, v1 - t], [u1 - t, v1 - t]]) lb(lu, lv2, 0, lu + t, lv2 + t, h, m, "leg");
+      };
+      const chair = (cu: number, cv: number, backV: 1 | -1, m: THREE.Material, s = 0.65) => {
+        lb(cu - s, cv - s, 1.45, cu + s, cv + s, 1.6, m, "chair");
+        lb(cu - s, backV > 0 ? cv + s - 0.15 : cv - s, 1.6, cu + s, backV > 0 ? cv + s : cv - s + 0.15, 3.2, m, "chair back");
+        legs(cu - s, cv - s, cu + s, cv + s, 1.45, m, 0.12);
+      };
+      switch (it.kind) {
+        case "bed": {
+          const frame = woodM(FP.woodDark), single = it.v === "single";
+          lb(-0.04, 0, 0, W + 0.04, 0.35, 3.6, woodM(FP.woodDark), "headboard");
+          lb(0, 0.35, 0.45, W, D, 1.15, frame, "bed");
+          legs(0, 0.35, W, D, 0.45, frame, 0.25);
+          lb(0.08, 0.4, 1.15, W - 0.08, D - 0.08, 1.85, fab(FP.linen), "mattress");
+          if (single) lb(0.3, 0.6, 1.85, W - 0.3, 1.65, 2.25, fab("#ffffff"), "pillow");
+          else { lb(0.25, 0.6, 1.85, W / 2 - 0.12, 1.65, 2.25, fab("#ffffff"), "pillow"); lb(W / 2 + 0.12, 0.6, 1.85, W - 0.25, 1.65, 2.25, fab("#ffffff"), "pillow"); }
+          lb(0.04, 2.5, 1.85, W - 0.04, D - 0.04, 1.97, fab(FP.blanket), "blanket");
+          lb(0.04, 2.5, 1.2, 0.1, D - 0.04, 1.97, fab(FP.blanket)); lb(W - 0.1, 2.5, 1.2, W - 0.04, D - 0.04, 1.97, fab(FP.blanket));
+          break;
         }
-      } else if ((type === "hall" || type === "lounge") && w >= 8 && d >= 8) {
-        const sofaM = fab("#5d6b85"), cush = fab("#6f7e9b"), sl = Math.min(7.5, d - 2.5);
-        box(x + 0.6, y + 1, z, x + 3.2, y + 1 + sl, z + 1.2, sofaM, g, "sofa");
-        box(x + 0.6, y + 1, z + 1.2, x + 1.2, y + 1 + sl, z + 2.9, sofaM, g, "sofa back");
-        box(x + 0.6, y + 0.6, z, x + 3.2, y + 1, z + 2.0, sofaM, g, "arm"); box(x + 0.6, y + 1 + sl, z, x + 3.2, y + 1.4 + sl, z + 2.0, sofaM, g, "arm");
-        const nC = Math.max(2, Math.round(sl / 2.4));
-        for (let i = 0; i < nC; i++) {
-          const c0 = y + 1.05 + (i * sl) / nC, c1 = y + 1 + ((i + 1) * sl) / nC - 0.05;
-          box(x + 1.25, c0, z + 1.2, x + 3.15, c1, z + 1.55, cush, g, "seat cushion");
-          box(x + 1.2, c0 + 0.1, z + 1.55, x + 1.55, c1 - 0.1, z + 2.7, cush, g, "back cushion");
+        case "side_table": lb(0, 0, 0, W, D, 1.8, woodM(FP.wood)); lb(W / 2 - 0.2, D / 2 - 0.2, 1.8, W / 2 + 0.2, D / 2 + 0.2, 2.5, col("#d6c7a8", { roughness: 0.6 }), "lamp"); break;
+        case "wardrobe": case "shelf": {
+          const n = Math.max(1, it.n || 1), h = it.kind === "shelf" ? 6 : 7, m = woodM(it.kind === "shelf" ? FP.woodLight : FP.wood);
+          lb(0, 0, 0, W, D, h, m);
+          for (let k = 1; k < n; k++) lb((k * W) / n - 0.012, D, 0.3, (k * W) / n + 0.012, D + 0.02, h - 0.3, woodM(FP.woodDark), "shutter line");
+          if (it.kind === "wardrobe") for (let k = 0; k < n; k++) lb(((k + 0.5) * W) / n + (k % 2 ? -0.5 : 0.45), D, 3.4, ((k + 0.5) * W) / n + (k % 2 ? -0.45 : 0.5), D + 0.08, 4.2, metal, "handle");
+          break;
         }
-        box(x + 4.0, y + d / 2 - 1.1, z + 1.15, x + 6.6, y + d / 2 + 1.1, z + 1.3, woodM("#5a3a20"), g, "table");
-        for (const [px, py] of [[4.1, -1.0], [6.35, -1.0], [4.1, 0.85], [6.35, 0.85]] as [number, number][]) box(x + px, y + d / 2 + py, z, x + px + 0.15, y + d / 2 + py + 0.15, z + 1.15, woodM("#4a3220"), g);
-        box(x + w - 1.45, y + d / 2 - 2.6, z, x + w - 0.55, y + d / 2 + 2.6, z + 1.9, woodM("#3b2a1c"), g, "tv unit");
-        box(x + w - 1.0, y + d / 2 - 2.0, z + 3.1, x + w - 0.9, y + d / 2 + 2.0, z + 5.5, std("#0b0b0d", { roughness: 0.15 }, "none"), g, "tv");
-        box(x + 3.6, y + d / 2 - 2.6, z + 0.04, x + 7.2, y + d / 2 + 2.6, z + 0.07, fab("#b9a27f"), g, "rug");
-        if (w >= 10) {  // indoor plant in the corner (terracotta pot + leafy top)
-          const pot = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.32, 1.1, 14), std("#b5623a", { roughness: 0.9 }, "none"));
-          pot.position.set(b.x + x + w - 1.2, z + 0.55, -(b.y + y + 1.0)); pot.castShadow = true; g.add(pot);
-          for (let k = 0; k < 4; k++) {
-            const leaf = new THREE.Mesh(new THREE.IcosahedronGeometry(0.42 + (k % 2) * 0.12, 1), std(k % 2 ? "#3f6e2f" : "#4e8a3a", { roughness: 0.9, flatShading: true }, "none"));
-            leaf.position.set(b.x + x + w - 1.2 + Math.cos(k * 1.6) * 0.25, z + 1.5 + k * 0.35, -(b.y + y + 1.0) + Math.sin(k * 1.6) * 0.25);
-            leaf.castShadow = true; g.add(leaf);
+        case "desk": {
+          const m = woodM(FP.woodLight);
+          lb(0, 0, 2.38, W, 1.8, 2.5, m); legs(0.05, 0.05, W - 0.05, 1.75, 2.38, m, 0.14);
+          lb(W / 2 - 0.6, 0.45, 2.5, W / 2 + 0.6, 1.25, 2.56, col("#2b2f36"), "laptop"); lb(W / 2 - 0.6, 0.4, 2.56, W / 2 + 0.6, 0.46, 3.3, col("#8fb8d8", { roughness: 0.2 }), "screen");
+          chair(W / 2, 2.6, 1, fab(FP.sofa));
+          break;
+        }
+        case "sofa": case "armchair": {
+          const n = it.kind === "armchair" ? 1 : it.n || 3, arm = it.kind === "armchair" ? 0.45 : 0.6, sw = (W - 2 * arm) / n;
+          const sm = fab(FP.sofa), cm = fab(FP.cushion);
+          lb(0, 0, 0, W, D, 1.2, sm, "sofa"); lb(0, 0, 1.2, W, 0.7, 2.9, sm, "sofa back");
+          lb(0, 0, 1.2, arm, D, 2.0, sm, "arm"); lb(W - arm, 0, 1.2, W, D, 2.0, sm, "arm");
+          for (let k = 0; k < n; k++) {
+            lb(arm + k * sw + 0.04, 0.75, 1.2, arm + (k + 1) * sw - 0.04, D - 0.04, 1.55, cm, "seat cushion");
+            lb(arm + k * sw + 0.1, 0.7, 1.55, arm + (k + 1) * sw - 0.1, 1.08, 2.7, cm, "back cushion");
           }
+          if (n >= 2) { lb(arm + 0.1, 1.1, 1.55, arm + 1.0, 1.4, 2.35, fab(FP.accent), "pillow"); lb(W - arm - 1.0, 1.1, 1.55, W - arm - 0.1, 1.4, 2.35, fab(FP.accent2), "pillow"); }
+          break;
         }
-      } else if (type === "dining" && w >= 7 && d >= 7) {
-        const tw = Math.min(5, w - 3), td = 2.8, tx = x + w / 2 - tw / 2, ty = y + d / 2 - td / 2;
-        box(tx, ty, z + 2.35, tx + tw, ty + td, z + 2.5, woodM("#6b4a2e"), g, "dining");
-        for (const [px, py] of [[0.1, 0.1], [tw - 0.3, 0.1], [0.1, td - 0.3], [tw - 0.3, td - 0.3]] as [number, number][]) box(tx + px, ty + py, z, tx + px + 0.2, ty + py + 0.2, z + 2.35, woodM("#5a3a20"), g);
-        const nCh = tw >= 4.5 ? 3 : 2;
-        for (let i = 0; i < nCh; i++) for (const side of [-1, 1]) {  // chairs: seat + back + legs
-          const cx = tx + ((i + 0.5) * tw) / nCh, cy = side < 0 ? ty - 0.9 : ty + td + 0.9;
-          box(cx - 0.65, cy - 0.65, z + 1.45, cx + 0.65, cy + 0.65, z + 1.6, woodM("#7a5536"), g, "chair");
-          const by2 = side < 0 ? cy - 0.65 : cy + 0.5;
-          box(cx - 0.65, by2, z + 1.6, cx + 0.65, by2 + 0.15, z + 3.2, woodM("#7a5536"), g, "chair back");
-          for (const [lx, ly] of [[-0.6, -0.6], [0.48, -0.6], [-0.6, 0.48], [0.48, 0.48]] as [number, number][]) box(cx + lx, cy + ly, z, cx + lx + 0.12, cy + ly + 0.12, z + 1.45, woodM("#5a3a20"), g);
+        case "coffee_table": lb(0, 0, 1.15, W, D, 1.3, woodM(FP.woodDark), "table"); legs(0.08, 0.08, W - 0.08, D - 0.08, 1.15, woodM(FP.woodDark)); cyl(W / 2, D / 2, 1.3, 1.6, 0.16, 0.22, col(FP.pot)); leaves(W / 2, D / 2, 1.75, 0.22); break;
+        case "rug": lb(0, 0, 0.04, W, D, 0.07, fab(FP.rug)); break;
+        case "tv_unit": lb(0, 0, 0, W, D, 1.9, woodM(FP.woodDark), "tv unit"); lb(W * 0.14, 0.28, 3.0, W * 0.86, 0.38, cut ? Math.min(5.5, topCut - z) : 5.5, dark, "tv"); break;
+        case "sideboard": lb(0, 0, 0, W, D, 2.8, woodM(FP.woodDark)); cyl(W * 0.7, D / 2, 2.8, 3.4, 0.18, 0.26, col("#e9dcc3")); break;
+        case "plant": case "planter": cyl(W / 2, D / 2, 0, 1.1, 0.32, 0.46, col(FP.pot, { roughness: 0.9 })); leaves(W / 2, D / 2, 1.5, Math.min(W, D) * 0.3); break;
+        case "dining": {
+          const n = it.n || 4, td = n === 2 ? 2.6 : 3, ty = (D - td) / 2, per = Math.max(1, n / 2), m = woodM(FP.wood), cmat = woodM(FP.woodLight);
+          lb(0, ty, 2.35, W, ty + td, 2.5, m, "dining"); legs(0.1, ty + 0.1, W - 0.1, ty + td - 0.1, 2.35, woodM(FP.woodDark), 0.2);
+          for (let k = 0; k < per; k++) { const cu = ((k + 0.5) * W) / per; chair(cu, ty - 0.4, -1, cmat, Math.min(0.65, W / per / 2 - 0.1)); chair(cu, ty + td + 0.4, 1, cmat, Math.min(0.65, W / per / 2 - 0.1)); }
+          break;
         }
-      } else if (type === "kitchen") {
-        const km = std("#3f4652", { roughness: 0.5 }, "none"), top = pick("counter", () => std("#1f2328", { roughness: 0.25 }, "none"));
-        const upper = std("#e7e2d8", { roughness: 0.5 }, "none");
-        box(x + 0.3, y + 0.3, z, x + 2.3, y + d - 0.3, z + 2.7, km, g, "counter");
-        box(x + 0.3, y + 0.3, z + 2.7, x + 2.3, y + d - 0.3, z + 2.85, top, g);
-        box(x + 0.3, y + d - 2.3, z, x + Math.max(2.4, w - 0.3), y + d - 0.3, z + 2.7, km, g, "counter");
-        box(x + 0.3, y + d - 2.3, z + 2.7, x + Math.max(2.4, w - 0.3), y + d - 0.3, z + 2.85, top, g);
-        box(x + 0.3, y + 0.3, z + 5.0, x + 1.3, y + d - 0.3, z + 7.0, upper, g, "upper cabinet");  // loft cabinets
-        box(x + 0.6, y + d * 0.35, z + 2.85, x + 1.9, y + d * 0.35 + 2.0, z + 2.95, std("#111111", { roughness: 0.2 }, "none"), g, "hob");
-        box(x + 0.7, y + d * 0.35 + 0.2, z + 2.95, x + 1.1, y + d * 0.35 + 0.6, z + 3.0, metal, g); box(x + 0.7, y + d * 0.35 + 1.3, z + 2.95, x + 1.1, y + d * 0.35 + 1.7, z + 3.0, metal, g);
-        if (w >= 6) box(x + w * 0.55, y + d - 1.9, z + 2.7, x + w * 0.55 + 2, y + d - 0.6, z + 2.86, metal, g, "sink");
-      } else if ((type === "toilet" || type === "common_toilet") && w >= 3.5 && d >= 4) {
-        box(x + w - 2, y + d - 2.6, z, x + w - 0.6, y + d - 0.9, z + 1.35, white, g, "wc");
-        box(x + w - 2, y + d - 0.9, z, x + w - 0.6, y + d - 0.4, z + 2.6, white, g, "cistern");
-        box(x + 0.4, y + d - 1.6, z + 2.4, x + 2, y + d - 0.4, z + 2.9, white, g, "basin");
-        box(x + 0.5, y + d - 0.42, z + 3.6, x + 1.9, y + d - 0.38, z + 5.6, std("#dbeafe", { roughness: 0.05, metalness: 0.9 }, "none"), g, "mirror");
-        box(x + 0.6, y + 0.5, z + 6.2, x + 1.2, y + 1.1, z + 6.3, metal, g, "shower");
+        case "counter": {
+          lb(0, 0, 0, W, D - 0.1, 2.7, col(FP.cabinet), "counter");
+          lb(0, 0, 2.7, W, D, 2.85, pick("counter", () => col(FP.counter, { roughness: 0.25 })), "counter top");
+          if (!cut) lb(0, 0, 5.0, W, 1.0, 7.0, col("#e7e2d8"), "upper cabinet");
+          break;
+        }
+        case "sink": lb(0.1, 0.32, 2.85, W - 0.1, D - 0.3, 2.9, metal, "sink"); lb(W / 2 - 0.05, 0.14, 2.85, W / 2 + 0.05, 0.24, 3.5, metal, "tap"); lb(W / 2 - 0.05, 0.14, 3.42, W / 2 + 0.05, 0.6, 3.5, metal, "tap"); break;
+        case "hob": lb(0.1, 0.3, 2.85, W - 0.1, D - 0.3, 2.92, dark, "hob");
+          for (const [fu, fv] of [[0.32, 0.36], [0.68, 0.36], [0.32, 0.66], [0.68, 0.66]]) cyl(W * fu, D * fv, 2.92, 2.98, 0.22, 0.22, metal);
+          break;
+        case "fridge": lb(0, 0, 0, W, D, 5.8, col("#d5d9de", { metalness: 0.4, roughness: 0.35 }), "fridge"); lb(W * 0.12, D, 2.6, W * 0.12 + 0.08, D + 0.1, 4.6, metal, "handle"); break;
+        case "wc": lb(W * 0.1, 0, 0, W * 0.9, 0.62, 2.6, white, "cistern"); lb(W * 0.14, 0.62, 0, W * 0.86, Math.min(D, 2.3), 1.35, white, "wc"); break;
+        case "basin": lb(0, 0, 2.4, W, D, 2.9, white, "basin"); lb(W / 2 - 0.3, 0.2, 0, W / 2 + 0.3, D - 0.4, 2.4, white, "pedestal");
+          if (!cut) lb(0.1, 0, 3.6, W - 0.1, 0.04, 5.6, col("#dbeafe", { roughness: 0.05, metalness: 0.9 }), "mirror");
+          break;
+        case "shower": {
+          const h = cut ? (o.cutH ?? 4.5) - 0.15 : 6.2;
+          lb(0, 0, 0.04, W, D, 0.09, col("#eef4f8", { roughness: 0.3 }), "shower tray");
+          lb(W - 0.05, 0, 0.09, W, D, h, railGlass, "shower glass"); lb(0, D - 0.05, 0.09, W, D, h, railGlass, "shower glass");
+          if (!cut) lb(0.3, 0.3, 6.2, 0.9, 0.9, 6.3, metal, "shower");
+          break;
+        }
+        case "mandapam": lb(0, 0, 0, W, D, 2.2, woodM(FP.woodDark), "pooja"); lb(0.15, 0.1, 2.2, W - 0.15, D - 0.35, cut ? 3.6 : 4.8, col("#e9c46a", { roughness: 0.35, metalness: 0.3 }), "shrine");
+          for (const f of [0.22, 0.78]) lb(W * f - 0.12, D - 0.3, 2.2, W * f + 0.12, D - 0.06, 2.75, glow, "lamp");
+          break;
+        case "washer": lb(0, 0, 0, W, D, 2.9, white, "washing machine"); cyl(W / 2, D / 2, 2.9, 2.96, 0.7, 0.7, col("#cfd8e0", { roughness: 0.2 })); break;
+        case "wash_sink": lb(0, 0, 0, W, D - 0.1, 2.7, col(FP.cabinet)); lb(0, 0, 2.7, W, D, 2.85, metal, "sink"); break;
+        case "sitset": { const m = woodM(FP.woodLight); chair(1.0, D / 2, -1, m, 0.8); chair(W - 1.0, D / 2, -1, m, 0.8); cyl(W / 2, D / 2, 0, 1.9, 0.12, 0.12, m); cyl(W / 2, D / 2, 1.9, 2.0, 0.7, 0.7, m); break; }
+        case "chair": chair(W / 2, D / 2, -1, woodM(FP.woodLight), Math.min(W, D) * 0.4); break;
+        case "car": {
+          const body = col(FP.car, { roughness: 0.22, metalness: 0.55 }), tyre = col("#111111", { roughness: 0.9 });
+          lb(0.25, 0.2, 1.0, W - 0.25, D - 0.2, 3.0, body, "car");
+          lb(0.55, D * 0.2, 3.0, W - 0.55, D * 0.68, 4.45, col("#1d2430", { roughness: 0.1, metalness: 0.4 }), "car cabin");
+          lb(0.75, D * 0.26, 4.45, W - 0.75, D * 0.6, 4.5, body, "car roof");
+          for (const [fu, fv] of [[0.3, 0.2], [W - 0.3, 0.2], [0.3, 0.78], [W - 0.3, 0.78]]) cyl(fu, D * fv, -0.35, 0.35, 1.05, 1.05, tyre, true).position.y = z + 1.05;
+          lb(W * 0.16, D - 0.2, 2.2, W * 0.16 + 0.9, D - 0.14, 2.6, lit ? glow : col("#fff6d5"), "headlight"); lb(W * 0.84 - 0.9, D - 0.2, 2.2, W * 0.84, D - 0.14, 2.6, lit ? glow : col("#fff6d5"), "headlight");
+          lb(W * 0.16, 0.14, 2.3, W * 0.16 + 0.8, 0.2, 2.6, col("#c0392b"), "tail light"); lb(W * 0.84 - 0.8, 0.14, 2.3, W * 0.84, 0.2, 2.6, col("#c0392b"), "tail light");
+          break;
+        }
+        case "bike": {
+          const tyre = col("#111111", { roughness: 0.9 });
+          for (const fv of [1.0, D - 1.0]) cyl(W / 2, fv, -0.14, 0.14, 0.95, 0.95, tyre, true).position.y = z + 0.95;
+          lb(W / 2 - 0.3, 1.2, 1.3, W / 2 + 0.3, D - 1.4, 2.6, col("#b23a2e", { roughness: 0.3, metalness: 0.4 }), "bike");
+          lb(W / 2 - 0.28, 1.4, 2.6, W / 2 + 0.28, 3.4, 2.85, col("#1f2328"), "seat");
+          lb(W / 2 - 0.9, D - 2.0, 3.3, W / 2 + 0.9, D - 1.86, 3.42, col("#3f4652", { metalness: 0.6 }), "handle");
+          break;
+        }
+        default: lb(0, 0, 0, W, D, 2, woodM(FP.woodLight));
       }
+    }
+  }
+
+  /** 1.21 Plan view: room name + size lying flat above the cut walls (always readable from the top) */
+  function planLabels(li: number, y: number, g: THREE.Object3D) {
+    for (const l of roomLabels(plan, li, !!o.metric)) {
+      const Wp = Math.max(l.name.length * 0.8, l.size.length * 0.56) * l.fs + 0.8, Hp = l.fs * 2.5;
+      const cv = document.createElement("canvas"); cv.width = 1024; cv.height = Math.max(64, Math.round((1024 * Hp) / Wp));
+      const c2 = cv.getContext("2d")!, px = (l.fs / Wp) * 1024;
+      c2.textAlign = "center"; c2.textBaseline = "middle"; c2.lineJoin = "round";
+      const put = (txt: string, yy: number, size: number, weight: number, fill: string) => {
+        c2.font = `${weight} ${size}px Arial, Helvetica, sans-serif`;
+        c2.lineWidth = size * 0.28; c2.strokeStyle = "rgba(255,255,255,0.96)"; c2.strokeText(txt, 512, yy);
+        c2.fillStyle = fill; c2.fillText(txt, 512, yy);
+      };
+      put(l.name, cv.height * 0.33, px, 800, "#1b1f24"); put(l.size, cv.height * 0.72, px * 0.8, 700, "#27303a");
+      const tx = new THREE.CanvasTexture(cv); tx.colorSpace = THREE.SRGBColorSpace; tx.anisotropy = 8;
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(Wp, Hp), new THREE.MeshBasicMaterial({ map: tx, transparent: true, depthTest: false, depthWrite: false, toneMapped: false }));
+      m.rotation.set(-Math.PI / 2, 0, l.rot ? Math.PI / 2 : 0);
+      m.position.set(b.x + l.x, y, -(b.y + l.y));
+      m.renderOrder = 20; m.userData.keep = true; m.userData.label = true; m.name = "plan label";
+      g.add(m);
     }
   }
 
@@ -1388,10 +1455,9 @@ export function walkSegments(plan: Plan, li: number): Seg[] {
     covered.forEach((r) => gr.fill(r));
     for (const ed of gr.edges()) out.push({ h: ed.h, c: ed.c + (ed.h ? b.y : b.x), s: ed.s + (ed.h ? b.x : b.y), e: ed.e + (ed.h ? b.x : b.y), t: 0.1 });
   }
-  if (li === 0) for (const r of lv.rooms.filter((q) => q.type === "parking" && q.w >= 9 && q.d >= 14)) {  // the parked car
-    const cx = b.x + r.x + r.w / 2, cy = b.y + r.y + r.d / 2;
-    out.push({ h: true, c: cy - 6.8, s: cx - 2.9, e: cx + 2.9, t: 0.05 }, { h: true, c: cy + 6.8, s: cx - 2.9, e: cx + 2.9, t: 0.05 },
-      { h: false, c: cx - 2.9, s: cy - 6.8, e: cy + 6.8, t: 0.05 }, { h: false, c: cx + 2.9, s: cy - 6.8, e: cy + 6.8, t: 0.05 });
+  for (const it of furnitureFor(lv).filter((q) => q.kind === "car")) {  // parked cars stop you (1.21: where the furniture engine put them)
+    const x0 = b.x + it.x + 0.2, x1 = b.x + it.x + it.w - 0.2, y0 = b.y + it.y + 0.2, y1 = b.y + it.y + it.d - 0.2;
+    out.push({ h: true, c: y0, s: x0, e: x1, t: 0.05 }, { h: true, c: y1, s: x0, e: x1, t: 0.05 }, { h: false, c: x0, s: y0, e: y1, t: 0.05 }, { h: false, c: x1, s: y0, e: y1, t: 0.05 });
   }
   const P = plan.plot;  // compound wall (gate gap is not needed – stay inside the plot)
   out.push({ h: true, c: 0.3, s: 0, e: P.w, t: 0.1 }, { h: true, c: P.d - 0.3, s: 0, e: P.w, t: 0.1 },

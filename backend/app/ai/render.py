@@ -41,6 +41,13 @@ LIGHT_WORDS = {"day": "bright daylight, clear blue sky, soft shadows",
                "night": "night scene, warm wall lights and downlights glowing, deep blue sky"}
 
 
+# 1.21 furnished plan seen from the top: the drawing is the truth – the AI may only improve how it looks
+PLAN_EDIT = ("This is a furnished house floor plan seen exactly from above. Make it look like a photorealistic top-view "
+             "3D floor plan render. Keep every wall, door, window, room size, staircase, car and piece of furniture "
+             "exactly where it is, same top-down camera, same proportions. Only improve the materials, floor finishes, "
+             "soft shadows and plants. Do not add any text, letters, numbers or labels. ")
+
+
 class RenderError(Exception):
     def __init__(self, msg: str, status: int = 400):
         super().__init__(msg)
@@ -53,6 +60,15 @@ def configured() -> dict:
 
 
 def prompt_for(kind: str, style: str, light: str, extra: str) -> str:
+    if kind == "plan":  # 1.21 furnished floor plan seen from the top – walls, doors and furniture must stay where they are
+        words = ["photorealistic top-down view of a furnished Indian house floor plan, architectural 3D floor plan render seen "
+                 "exactly from above, keep every wall, door, window, room and piece of furniture in the same place and size, "
+                 "realistic floor tiles and wood, soft shadows beside the walls, realistic sofa, beds, dining table, kitchen "
+                 "counter, bathroom fittings, car and plants, no text, no letters, no numbers",
+                 "even soft daylight, sharp focus, realistic textures, professional architectural visualisation, 8k"]
+        if extra.strip():
+            words.insert(1, extra.strip()[:300])
+        return ", ".join(words)
     if kind == "interior":
         base = ("photorealistic interior render of an Indian home, realistic materials, vitrified tile floor, painted "
                 "walls, false ceiling with warm cove lights, natural light from windows, wooden furniture, plants")
@@ -86,7 +102,7 @@ def _cf_error(r) -> tuple[int, str]:
         return 0, r.text[:200]
 
 
-def _cloudflare(img: bytes, prompt: str, strength: float, seed: int | None) -> tuple[bytes, str]:
+def _cloudflare(img: bytes, prompt: str, strength: float, seed: int | None, kind: str = "exterior") -> tuple[bytes, str]:
     acc, tok = config.env("CLOUDFLARE_ACCOUNT_ID"), config.env("CLOUDFLARE_AI_TOKEN")
     small, w, h = _fit(img, 504)
     k = 1024 / max(w, h)
@@ -97,6 +113,8 @@ def _cloudflare(img: bytes, prompt: str, strength: float, seed: int | None) -> t
                "and the same camera angle. Only make the materials, lighting, sky and garden look real. " if keep >= 0.5 else
                "Keep the same building shape, floors and camera angle; you may refine materials, details and landscaping. ")
             + prompt)
+    if kind == "plan":
+        edit = PLAN_EDIT + prompt
     last = ""
     with httpx.Client(timeout=httpx.Timeout(150.0, connect=15.0)) as c:
         for model in CF_MODELS:
@@ -135,12 +153,14 @@ def _cloudflare(img: bytes, prompt: str, strength: float, seed: int | None) -> t
     raise RenderError(f"Cloudflare AI could not make the render ({last}).", 502)
 
 
-def _gemini(img: bytes, prompt: str) -> tuple[bytes, str]:
+def _gemini(img: bytes, prompt: str, kind: str = "exterior") -> tuple[bytes, str]:
     key = config.env("GEMINI_API_KEY")
     models = [m for m in [config.env("GEMINI_IMAGE_MODEL"), "gemini-2.5-flash-image", "gemini-2.0-flash-preview-image-generation"] if m]
     instr = ("Turn this 3D model picture into a photorealistic architectural render. Keep exactly the same building "
              "shape, number of floors, windows, doors and camera angle; only make materials, light, sky and garden "
              "realistic. " + prompt)
+    if kind == "plan":
+        instr = PLAN_EDIT + prompt
     last = ""
     with httpx.Client(timeout=httpx.Timeout(120.0, connect=15.0)) as c:
         for m in models:
@@ -171,7 +191,7 @@ def render(img: bytes, kind: str, style: str, light: str, extra: str, strength: 
     errors = []
     if cfg["cloudflare"]:
         try:
-            out, model = _cloudflare(img, prompt, strength, seed)
+            out, model = _cloudflare(img, prompt, strength, seed, kind)
             return {"image_b64": base64.b64encode(out).decode(), "provider": "Cloudflare Workers AI (free)", "model": model, "prompt": prompt}
         except RenderError as e:
             errors.append(str(e))
@@ -181,7 +201,7 @@ def render(img: bytes, kind: str, style: str, light: str, extra: str, strength: 
             errors.append(f"Cloudflare not reachable: {e}")
     if cfg["gemini"] and not (cfg["cloudflare"] and errors and "used up" in errors[0]):
         try:
-            out, model = _gemini(img, prompt)
+            out, model = _gemini(img, prompt, kind)
             return {"image_b64": base64.b64encode(out).decode(), "provider": "Google Gemini (free quota)", "model": model, "prompt": prompt}
         except RenderError as e:
             if not cfg["cloudflare"]:

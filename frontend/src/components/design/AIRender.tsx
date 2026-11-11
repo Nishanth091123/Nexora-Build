@@ -5,16 +5,18 @@ import { useState } from "react";
 import { Download, Sparkles, X } from "lucide-react";
 import { api } from "../../lib/api";
 import { toast } from "../ui";
-import { stampLabel } from "./house3d/postfx";
+import { stampLabel, stampPlanLabels, type Stamp } from "./house3d/postfx";
 
 type Res = { url: string; provider: string; model: string };
 const LABEL = "AI concept render – not to scale";
 
-export default function AIRender({ pid, base, kind, style, light, onClose }: {
-  pid: number; base: string; kind: "exterior" | "interior"; style: string; light: string; onClose: () => void;
+export default function AIRender({ pid, base, kind, style, light, stamps, onClose }: {
+  pid: number; base: string; kind: "exterior" | "interior" | "plan"; style: string; light: string;
+  /** 1.21 plan polish: room names + sizes from the drawing, written on the result (the AI gets a picture without words) */
+  stamps?: Stamp[] | null; onClose: () => void;
 }) {
   const [extra, setExtra] = useState("");
-  const [keep, setKeep] = useState(55);  // % how much of my design to keep
+  const [keep, setKeep] = useState(kind === "plan" ? 80 : 55);  // % how much of my design to keep (a plan must keep its walls)
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [res, setRes] = useState<Res[]>([]);
@@ -24,7 +26,9 @@ export default function AIRender({ pid, base, kind, style, light, onClose }: {
     try {
       const strength = Math.round((0.85 - (keep / 100) * 0.6) * 100) / 100;  // keep 100% → 0.25, keep 0% → 0.85
       const r = await api<any>(`/api/projects/${pid}/ai-render`, { body: { image: base, kind, style, light, extra, strength } });
-      const url = await stampLabel(`data:image/png;base64,${r.image_b64}`, LABEL);
+      let url = `data:image/png;base64,${r.image_b64}`;
+      if (stamps?.length) url = await stampPlanLabels(url, stamps);
+      url = await stampLabel(url, LABEL);
       setRes((x) => [{ url, provider: r.provider, model: r.model }, ...x].slice(0, 4));
     } catch (e: any) { setErr(e.message || String(e)); }
     setBusy(false);
@@ -35,20 +39,21 @@ export default function AIRender({ pid, base, kind, style, light, onClose }: {
       <div className="mt-6 w-full max-w-5xl rounded-2xl bg-white p-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
         <div className="mb-3 flex items-center gap-2">
           <Sparkles size={18} className="text-brand-600" />
-          <h3 className="text-lg font-bold text-navy-ink">AI Render – photo-like concept</h3>
+          <h3 className="text-lg font-bold text-navy-ink">{kind === "plan" ? "AI polish – photo-like plan" : "AI Render – photo-like concept"}</h3>
           <button className="ml-auto text-slate-500" onClick={onClose} title="Close"><X size={20} /></button>
         </div>
         <p className="mb-3 text-sm text-slate-600">
-          Made from this 3D view, so the floors, windows and outline stay as in your drawing. Free AI (Cloudflare Workers AI daily
+          {kind === "plan" ? "Made from your plan picture. The AI only improves materials, light and shadows – room names and sizes are written afterwards from your drawing, so they are always right. If a wall or door moves, slide towards “Exactly my design”. Free AI"
+            : "Made from this 3D view, so the floors, windows and outline stay as in your drawing. Free AI"} (Cloudflare Workers AI daily
           allowance). The picture is a <b>concept</b> for the client – always marked “{LABEL}”.
         </p>
         <div className="grid gap-3 md:grid-cols-[1fr_1.2fr]">
           <div>
-            <div className="mb-1 text-xs font-semibold text-slate-500">Your 3D view (base)</div>
-            <img src={base} alt="3D view" className="w-full rounded-lg border border-line" />
+            <div className="mb-1 text-xs font-semibold text-slate-500">{kind === "plan" ? "Your plan (base)" : "Your 3D view (base)"}</div>
+            <img src={base} alt="3D view" className={`rounded-lg border border-line ${kind === "plan" ? "mx-auto max-h-[46vh] w-auto" : "w-full"}`} />
             <label className="mt-3 block text-sm font-semibold text-navy-ink">Add to the look (optional)</label>
             <input className="input mt-1" value={extra} onChange={(e) => setExtra(e.target.value)} maxLength={300}
-              placeholder={kind === "interior" ? "e.g. teak wood TV unit, beige sofa, marble floor" : "e.g. grey granite steps, pink bougainvillea, rainy evening"} />
+              placeholder={kind === "plan" ? "e.g. marble floor in the hall, wooden floor in bedrooms" : kind === "interior" ? "e.g. teak wood TV unit, beige sofa, marble floor" : "e.g. grey granite steps, pink bougainvillea, rainy evening"} />
             <label className="mt-3 block text-sm font-semibold text-navy-ink">Keep my design ↔ More creative</label>
             <input type="range" min={0} max={100} value={keep} onChange={(e) => setKeep(Number(e.target.value))} className="w-full accent-brand-600" />
             <div className="flex justify-between text-xs text-slate-500"><span>More creative</span><span>Keep {keep}%</span><span>Exactly my design</span></div>
@@ -61,7 +66,7 @@ export default function AIRender({ pid, base, kind, style, light, onClose }: {
               <div key={i} className="mb-3">
                 {cmp && i === 0 ? (
                   <div className="grid grid-cols-2 gap-1"><img src={base} alt="3D" className="rounded-lg border border-line" /><img src={r.url} alt="AI render" className="rounded-lg border border-line" /></div>
-                ) : <img src={r.url} alt="AI render" className="w-full rounded-lg border border-line" />}
+                ) : <img src={r.url} alt="AI render" className={`rounded-lg border border-line ${kind === "plan" ? "mx-auto max-h-[70vh] w-auto" : "w-full"}`} />}
                 <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
                   <span>{r.provider} · {r.model.split("/").pop()}</span>
                   {i === 0 && <button className="btn-ghost btn-sm" onClick={() => setCmp(!cmp)}>{cmp ? "Big picture" : "Compare with 3D"}</button>}

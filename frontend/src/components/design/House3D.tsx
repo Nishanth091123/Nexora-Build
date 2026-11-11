@@ -16,13 +16,16 @@ import { useAuth } from "../../lib/auth";
 import { shadeAdvice, sunPosition, sunVector } from "../../lib/sun";
 import MaterialPanel from "./MaterialPanel";
 import AIRender from "./AIRender";
-import { renderRealistic } from "./house3d/postfx";
+import RenderedPlan, { planImage, type FloorLook } from "./RenderedPlan";
+import { planFrame, roomLabels } from "./house3d/furniture";
+import { imagePdf, saveBlob } from "../../lib/imagePdf";
+import { renderRealistic, type Stamp } from "./house3d/postfx";
 import PlantsPanel, { plantSummary } from "./PlantsPanel";
 import { sheetLines } from "./RoofSheetsPanel";
-import { BUILTIN, lookOf, procTex, type Item, type Look, type Slot } from "./house3d/catalog";
+import { BUILTIN, lookOf, procTex, type Item, type Look, type Slot } from "./house3d/catalog";  // procTex: also for the 2D plan's floor pictures
 import {
   ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Camera, ChevronsDown, ChevronsUp, Download, Film, Footprints, Images,
-  Layers3, LogOut, Moon, RotateCcw, Sparkles, Sun, Sunset,
+  LayoutGrid, Layers3, LogOut, Moon, RotateCcw, Sparkles, Sun, Sunset,
 } from "lucide-react";
 import { toast } from "../ui";
 import type { Plan } from "../../lib/plan";
@@ -61,6 +64,8 @@ const STYLES: [Style, string, string][] = [
   ["basic", "Basic", "Simple plaster finish (earlier look)"],
 ];
 type View = "front" | "rear" | "left" | "right" | "top" | "iso";
+/** 1.21 "Plan view": one floor seen from the top – furnished 2D drawing or 3D cutaway */
+type VMode = Mode | "plan";
 type Ctx = {
   renderer: THREE.WebGLRenderer; scene: THREE.Scene; camera: THREE.PerspectiveCamera; controls: OrbitControls;
   model: THREE.Object3D | null; sun: THREE.DirectionalLight; hemi: THREE.HemisphereLight; raf: number; roomLights: THREE.Light[];
@@ -71,7 +76,12 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
 }) {
   const host = useRef<HTMLDivElement>(null);
   const ctx = useRef<Ctx | null>(null);
-  const [mode, setMode] = useState<Mode>("exterior");
+  const [mode, setMode] = useState<VMode>("exterior");
+  const [planDim, setPlanDim] = useState<"2d" | "3d">("2d");
+  const [planLabels, setPlanLabels] = useState(true);
+  const [metric, setMetric] = useState(false);
+  const [aiStamps, setAiStamps] = useState<Stamp[] | null>(null);
+  const svg2d = useRef<SVGSVGElement>(null);
   const [upTo, setUpTo] = useState(plan.levels.length);
   const [only, setOnly] = useState<number | null>(null);
   const [inFloor, setInFloor] = useState(0);  // 1.15: Interior view shows ONE floor at a time
@@ -153,7 +163,7 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
   };
   const looks = useRef(new Map<string, Look>());
   useEffect(() => { looks.current.clear(); }, [photoVer]);
-  const lookFor = (slot: Slot, roomId?: string): Look | null => {
+  const refFor = (slot: Slot, roomId?: string): string | undefined => {
     let ref: string | undefined;
     const rp = roomId ? fin.rooms?.[roomId] : undefined;
     if (rp) {
@@ -161,12 +171,32 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
       if (slot === "int_wall" && rp.wall) ref = rp.wall;
       if (slot === "wet_wall" && rp.wall && byRef.get(rp.wall)?.cat === "wall_tile") ref = rp.wall;
     }
-    ref = ref || fin.mat?.[slot];
+    return ref || fin.mat?.[slot];
+  };
+  const lookFor = (slot: Slot, roomId?: string): Look | null => {
+    const ref = refFor(slot, roomId);
     if (!ref) return null;
     const it = byRef.get(ref);
     if (!it) return null;
     if (!looks.current.has(ref)) { const l = lookOf(it, photos.current); if (l) looks.current.set(ref, l); }
     return looks.current.get(ref) || null;
+  };
+  // 1.21 rendered plan (2D): the floor finish picked for a room, as a small picture that can be tiled in the drawing
+  const floorPics = useRef(new Map<string, string>());
+  useEffect(() => { floorPics.current.clear(); }, [photoVer]);
+  const floorLook2d = (roomKey: string, wet: boolean): FloorLook | null => {
+    const ref = refFor(wet ? "wet_floor" : "floor", roomKey);
+    const it = ref ? byRef.get(ref) : undefined;
+    if (!ref || !it) return null;
+    if (!floorPics.current.has(ref)) {
+      const tx = (it.custom ? photos.current.get(ref) : null) || procTex(it);
+      let url = "";
+      try {
+        if (tx?.image) { const c = document.createElement("canvas"); c.width = c.height = 128; c.getContext("2d")!.drawImage(tx.image as CanvasImageSource, 0, 0, 128, 128); url = c.toDataURL("image/jpeg", 0.85); }
+      } catch { url = ""; }
+      floorPics.current.set(ref, url);
+    }
+    return { color: it.color, image: floorPics.current.get(ref) || null, tile: it.tile || 2 };
   };
   const finKey = JSON.stringify(fin);
   const keys = useRef<Record<string, boolean>>({});
@@ -313,7 +343,7 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
     m.traverse((o: any) => {
       o.geometry?.dispose?.();
       const ms = Array.isArray(o.material) ? o.material : o.material ? [o.material] : [];
-      ms.forEach((x: THREE.Material) => x.dispose());  // textures are shared and kept
+      ms.forEach((x: any) => { if (o.userData?.label) x.map?.dispose(); x.dispose(); });  // textures are shared and kept (room-name labels own theirs)
     });
   }
 
@@ -322,6 +352,7 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
   const walkingNow = mode === "walk";
   const buildKey = JSON.stringify(walkingNow
     ? { m: "exterior", u: plan.levels.length, o: null, f: true, r: true }
+    : mode === "plan" ? { m: mode, o: inFloor, lb: planLabels, mt: metric }
     : mode === "interior" ? { m: mode, u: plan.levels.length, o: inFloor, f: furniture, r: false }
     : { m: mode, u: upTo, o: only, f: furniture, r: roof });
   function setDoors(root: THREE.Object3D, open: boolean) {
@@ -332,13 +363,14 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
     const c = ctx.current; if (!c) return;
     if (c.model) { c.scene.remove(c.model); disposeModel(c.model); c.model = null; }
     if (mode === "structure" && !structure) return;
-    const walking = mode === "walk";
+    const walking = mode === "walk", top = mode === "plan", one = mode === "interior" || top;
     const { root } = build(plan, fin, {
-      upTo: walking || mode === "interior" ? plan.levels.length : upTo, only: walking ? null : mode === "interior" ? inFloor : only,
-      mode: walking ? "exterior" : mode, furniture: walking || furniture,
-      surround: surround && mode !== "structure", roof: walking || (mode !== "interior" && roof), edges, structure, style, light, look: lookFor, shine: quality === "high",
+      upTo: walking || one ? plan.levels.length : upTo, only: walking ? null : one ? inFloor : only,
+      mode: walking ? "exterior" : top ? "interior" : mode, furniture: walking || top || furniture,
+      surround: top ? inFloor === 0 : surround && mode !== "structure", roof: walking || (!one && roof), edges, structure, style, light, look: lookFor, shine: quality === "high",
+      ...(top ? { cutH: 4, planTop: true, labels: planLabels, metric } : {}),
     });
-    setDoors(root, walking);
+    setDoors(root, walking || top);
     if (wire) root.traverse((o: any) => { const ms = Array.isArray(o.material) ? o.material : o.material ? [o.material] : []; ms.forEach((m: any) => { m.wireframe = true; }); });
     c.scene.add(root); c.model = root;
     applyClip();
@@ -346,7 +378,7 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
     walk.current.segs.clear();
   }, [planKey, finKey, buildKey, surround, wire, edges, structure, style, light, photoVer, custom.length, quality === "high"]);  // eslint-disable-line react-hooks/exhaustive-deps
   // entering / leaving the walkthrough only opens / closes the doors – no rebuild (no waiting)
-  useEffect(() => { const c = ctx.current; if (c?.model) setDoors(c.model, mode === "walk"); }, [mode]);
+  useEffect(() => { const c = ctx.current; if (c?.model) setDoors(c.model, mode === "walk" || mode === "plan"); }, [mode]);
 
   // ------------------------------------------------------------------ sky & light
   useEffect(() => {
@@ -378,6 +410,11 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
       c.sun.color.set("#9db4ff"); c.sun.intensity = 0.3; c.renderer.toneMappingExposure = 1.05; c.scene.environmentIntensity = 0.1;
       c.sun.position.set(centre.x + 40, 120, centre.z - 60);
     }
+    if (mode === "plan") {  // paper under the plan, no haze from far above; softer light from the top-left so nothing burns out white
+      c.scene.background = new THREE.Color("#f6f4ef"); c.scene.fog = null;
+      c.renderer.toneMappingExposure = light === "day" ? 0.7 : 0.95;
+      if (light === "day" && !sunOn) { c.hemi.intensity = 0.6; c.sun.intensity = 1.7; c.scene.environmentIntensity = 0.35; c.sun.position.set(centre.x - 75, 125, centre.z - 60); }
+    }
     c.sun.target.position.copy(centre);
     const sc = c.sun.shadow.camera;
     sc.left = -span; sc.right = span; sc.top = span; sc.bottom = -span; sc.near = 1; sc.far = 600;
@@ -390,9 +427,9 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
   // camera: only when the view mode or the plan's shape changes
   useEffect(() => {
     if (mode === "walk") startWalk();
-    else { const c = ctx.current; if (c) { c.camera.userData.walk = false; c.controls.enabled = true; clearRoomLights(); } if (mode === "interior") floorView(inFloor); else view("iso"); }
+    else { const c = ctx.current; if (c) { c.camera.userData.walk = false; c.controls.enabled = true; clearRoomLights(); } if (mode === "plan") planCam(inFloor); else if (mode === "interior") floorView(inFloor); else view("iso"); }
   }, [mode, planKey]);  // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (mode === "interior") floorView(inFloor); }, [inFloor]);  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (mode === "plan") planCam(inFloor); else if (mode === "interior") floorView(inFloor); }, [inFloor, planDim]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   function applyClip() {
     const c = ctx.current; if (!c || !c.model) return;
@@ -442,6 +479,92 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
     c.camera.fov = 45; c.camera.near = 1; c.camera.far = 2500; c.camera.updateProjectionMatrix();
     c.controls.update();
   }
+
+  /** 1.21 Plan view (3D): straight down on ONE floor, road at the bottom, narrow lens so it reads like a drawing */
+  function planCam(li: number) {
+    const c = ctx.current; if (!c) return;
+    const p = planRef.current, f = planFrame(p, li);
+    const z = PLINTH + li * (p.floor_height_ft || 10);
+    const cx = (f.x0 + f.x1) / 2, cy = (f.y0 + f.y1) / 2;
+    const asp = Math.max(0.2, c.camera.aspect), fov = 20;
+    const half = Math.max((f.y1 - f.y0) / 2, (f.x1 - f.x0) / 2 / asp);
+    const dist = (half / Math.tan((fov * Math.PI) / 360)) * 1.04;
+    c.camera.userData.walk = false; c.controls.enabled = true; c.controls.maxPolarAngle = Math.PI * 0.495;
+    c.camera.fov = fov; c.camera.near = 1; c.camera.far = 2500; c.camera.updateProjectionMatrix();
+    c.camera.position.set(cx, z + dist, -cy + dist * 0.0015);
+    c.controls.target.set(cx, z, -cy);
+    c.controls.update();
+  }
+  /** the Plan view (3D) as a picture: exactly from the top, sized to the plan. Returns where each room label sits. */
+  async function planShot(long: number, withLabels: boolean, type: "image/png" | "image/jpeg" = "image/png") {
+    const c = ctx.current; if (!c) return null;
+    const p = planRef.current, f = planFrame(p, inFloor);
+    const z = PLINTH + inFloor * (p.floor_height_ft || 10);
+    const fw = f.x1 - f.x0, fh = f.y1 - f.y0;
+    const W = Math.round((fw >= fh ? long : (long * fw) / fh) / 8) * 8, Hh = Math.round((fw >= fh ? (long * fh) / fw : long) / 8) * 8;
+    const r = c.renderer, size = r.getSize(new THREE.Vector2()), pr = r.getPixelRatio();
+    const wasShadow = r.shadowMap.enabled, ms = c.sun.shadow.mapSize.x;
+    const fov = 12, dist = fh / 2 / Math.tan((fov * Math.PI) / 360);
+    const cam = new THREE.PerspectiveCamera(fov, W / Hh, 5, dist + 400);
+    cam.up.set(0, 0, -1); cam.position.set((f.x0 + f.x1) / 2, z + dist, -(f.y0 + f.y1) / 2); cam.lookAt((f.x0 + f.x1) / 2, z, -(f.y0 + f.y1) / 2);
+    cam.updateMatrixWorld(true);
+    const lbl: THREE.Object3D[] = [];
+    c.model?.traverse((o) => { if (o.userData?.label) lbl.push(o); });
+    try {
+      if (!withLabels) lbl.forEach((o) => { o.visible = false; });
+      r.shadowMap.enabled = true; r.shadowMap.type = THREE.PCFSoftShadowMap; c.sun.castShadow = true;
+      c.sun.shadow.mapSize.set(4096, 4096); c.sun.shadow.map?.dispose(); (c.sun.shadow as any).map = null; r.shadowMap.needsUpdate = true;
+      r.setPixelRatio(1); r.setSize(W, Hh, false);
+      await renderRealistic(r, c.scene, cam, W, Hh);
+      const url = r.domElement.toDataURL(type, 0.93);
+      const stamps: Stamp[] = roomLabels(p, inFloor, metric).map((l) => {
+        const v = new THREE.Vector3(p.building.x + l.x, z, -(p.building.y + l.y)).project(cam);
+        return { fx: (v.x + 1) / 2, fy: (1 - v.y) / 2, name: l.name, size: l.size, fs: l.fs / fh, rot: l.rot };
+      });
+      return { url, w: W, h: Hh, stamps };
+    } finally {
+      lbl.forEach((o) => { o.visible = true; });
+      c.sun.shadow.mapSize.set(ms, ms); c.sun.shadow.map?.dispose(); (c.sun.shadow as any).map = null;
+      r.shadowMap.enabled = wasShadow; c.sun.castShadow = wasShadow; r.shadowMap.needsUpdate = true;
+      r.setPixelRatio(pr); r.setSize(size.x, size.y, false);
+    }
+  }
+  const planName = () => `Nexora_Plan_${(plan.levels[inFloor]?.name || "Floor").replace(/\s+/g, "_")}_${planDim.toUpperCase()}`;
+  /** Plan view downloads: PNG (4K) / PDF (A3) of the 2D drawing or the 3D cutaway */
+  const planDownload = async (kind: "png" | "pdf") => {
+    setBusy(true);
+    try {
+      const jpeg = kind === "pdf";
+      const pic = planDim === "2d"
+        ? (svg2d.current ? await planImage(svg2d.current, jpeg ? 5000 : 3840, jpeg ? "image/jpeg" : "image/png") : null)
+        : await planShot(jpeg ? 4400 : 3840, true, jpeg ? "image/jpeg" : "image/png");
+      if (!pic) return;
+      if (jpeg) saveBlob(imagePdf(pic.url, pic.w, pic.h, "A3", `${plan.levels[inFloor]?.name || "Floor"} plan`), `${planName()}_A3.pdf`);
+      else save(pic.url, `${planName()}_4K.png`);
+      toast(jpeg ? "Plan PDF (A3) saved" : "Plan picture (4K) saved");
+    } catch (e: any) { toast(e.message || "Could not make the picture", "err"); }
+    setBusy(false);
+  };
+  /** AI polish: the plan picture WITHOUT words goes to the AI; the room names + sizes are stamped afterwards from the drawing */
+  const planAi = async () => {
+    if (!pid) return toast("Save the project first", "err");
+    setBusy(true);
+    try {
+      if (planDim === "2d") {
+        if (!svg2d.current) return;
+        const pic = await planImage(svg2d.current, 768, "image/png", true);
+        const vb = (svg2d.current.getAttribute("viewBox") || "0 0 1 1").split(/[\s,]+/).map(Number);
+        const b0 = plan.building;
+        setAiStamps(roomLabels(plan, inFloor, metric).map((l) => ({ fx: (b0.x + l.x - vb[0]) / vb[2], fy: (-(b0.y + l.y) - vb[1]) / vb[3], name: l.name, size: l.size, fs: l.fs / vb[3], rot: l.rot })));
+        setAiBase(pic.url);
+      } else {
+        const pic = await planShot(768, false);
+        if (!pic) return;
+        setAiStamps(pic.stamps); setAiBase(pic.url);
+      }
+    } catch (e: any) { toast(e.message || "Could not make the picture", "err"); }
+    finally { setBusy(false); }
+  };
 
   // ------------------------------------------------------------------ walkthrough
   function segsFor(li: number) {
@@ -589,7 +712,7 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
     try {
       r.setPixelRatio(1); r.setSize(W, Hh, false); cam.aspect = W / Hh; cam.updateProjectionMatrix();
       await renderRealistic(r, c.scene, cam, W, Hh);
-      setAiBase(r.domElement.toDataURL("image/png"));
+      setAiStamps(null); setAiBase(r.domElement.toDataURL("image/png"));
     } finally {
       cam.aspect = aspect; cam.updateProjectionMatrix(); r.setPixelRatio(pr); r.setSize(size.x, size.y, false);
     }
@@ -663,8 +786,9 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
   };
 
   const pickStyle = (s: Style) => onFinishes?.({ ...fin, ...STYLE_FINISH[s], style: s });
-  const modes: [Mode, string, any][] = [["exterior", "Exterior", Layers3], ["interior", "Interior", Layers3], ["walk", "Walkthrough", Footprints],
+  const modes: [VMode, string, any][] = [["exterior", "Exterior", Layers3], ["interior", "Interior", Layers3], ["plan", "Plan view (furnished)", LayoutGrid], ["walk", "Walkthrough", Footprints],
     ["exploded", "Exploded", Layers3], ["structure", "Structure (RCC)", Layers3]];
+  const plan2d = mode === "plan" && planDim === "2d";
   const lvName = plan.levels[walkInfo.level]?.name || "";
   return (
     <div className="space-y-3">
@@ -718,7 +842,36 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
           <span className="text-[11px] text-slate-500">Only this floor is shown, walls cut at 4½ ft so you can see the rooms and furniture.</span>
         </div>
       )}
-      <div className="relative overflow-hidden rounded-lg border border-line bg-slate-900">
+      {mode === "plan" && (
+        <div className="flex flex-wrap items-center gap-2 rounded-lg bg-brand-50 p-2 text-sm">
+          <span className="text-xs font-semibold text-navy-ink">Floor:</span>
+          {plan.levels.map((l, i) => (
+            <button key={i} onClick={() => setInFloor(i)} className={`rounded-md px-3 py-1 text-xs font-semibold ${inFloor === i ? "bg-brand-600 text-white" : "bg-white text-navy-ink"}`}>{l.name}</button>
+          ))}
+          <div className="inline-flex overflow-hidden rounded-lg border border-line text-xs">
+            {([["2d", "2D rendered plan"], ["3d", "3D top cutaway"]] as ["2d" | "3d", string][]).map(([k, l]) => (
+              <button key={k} onClick={() => setPlanDim(k)} className={`px-3 py-1.5 font-semibold ${planDim === k ? "bg-navy-ink text-white" : "bg-white text-navy-ink"}`}>{l}</button>
+            ))}
+          </div>
+          <label className="inline-flex items-center gap-1.5 text-xs font-semibold text-navy-ink"><input type="checkbox" className="h-4 w-4 accent-brand-600" checked={planLabels} onChange={(e) => setPlanLabels(e.target.checked)} />Room names & sizes</label>
+          <select className="rounded-lg border border-line bg-white px-2 py-1 text-xs" value={metric ? "m" : "ft"} onChange={(e) => setMetric(e.target.value === "m")} title="Size labels">
+            <option value="ft">Feet-inch (10'-0" X 12'-0")</option><option value="m">Metre (3.05 × 3.66 m)</option>
+          </select>
+          <span className="flex-1" />
+          <button className="btn-primary btn-sm" disabled={busy} onClick={() => planDownload("png")}><Download size={14} />PNG (4K)</button>
+          <button className="btn-outline btn-sm" disabled={busy} onClick={() => planDownload("pdf")}><Download size={14} />PDF (A3)</button>
+          <button className="btn-outline btn-sm" disabled={busy} onClick={planAi} title="Optional: free AI makes the picture more photo-like. Room names and sizes are added afterwards from your drawing, so they stay correct."><Sparkles size={14} />AI polish</button>
+          <p className="w-full text-[11px] text-slate-600">Furniture, car, staircase and plants are placed from this floor's plan (room sizes, doors, windows) and follow the elevation style and finishes chosen above
+            ({STYLES.find((q) => q[0] === style)?.[1]}). Change the plan or the style – this view changes with it.</p>
+        </div>
+      )}
+      {plan2d && (
+        <div className="overflow-hidden rounded-lg border border-line bg-[#f6f4ef]" style={{ height: "min(82vh, 900px)", minHeight: 520 }}>
+          <RenderedPlan plan={plan} level={inFloor} style={style} floorLook={floorLook2d} plants={fin.plants} floorColor={fin.floor} terraceColor={fin.roof}
+            metric={metric} labels={planLabels} svgRef={svg2d} />
+        </div>
+      )}
+      <div className={`relative overflow-hidden rounded-lg border border-line bg-slate-900 ${plan2d ? "hidden" : ""}`}>
         <div ref={host} className="h-[560px] w-full touch-none select-none" />
         {mode === "walk" ? (
           <>
@@ -758,7 +911,7 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
         {(["iso", "front", "left", "right", "rear", "top"] as const).map((v) => (
           <button key={v} className="btn-outline btn-sm" disabled={mode === "walk"} onClick={() => view(v)}>{{ iso: "3D", front: "Front", left: "Left side", right: "Right side", rear: "Rear", top: "Top" }[v]}</button>
         ))}
-        <button className="btn-ghost btn-sm" disabled={mode === "walk"} onClick={() => view("iso")}><RotateCcw size={14} />Reset</button>
+        <button className="btn-ghost btn-sm" disabled={mode === "walk"} onClick={() => (mode === "plan" ? planCam(inFloor) : view("iso"))}><RotateCcw size={14} />Reset</button>
       </div>
       <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-line bg-slate-50 p-2 text-sm">
         <span className="mr-1 text-xs font-semibold text-slate-500"><Download size={13} className="mr-1 inline" />Download</span>
@@ -831,7 +984,8 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
           onFinishes?.({ ...fin, rooms });
         }}
         shot={() => { const c = ctx.current; if (!c || mode === "walk") return null; c.renderer.render(c.scene, c.camera); return c.renderer.domElement.toDataURL("image/png"); }} />
-      {aiBase && pid && <AIRender pid={pid} base={aiBase} kind={mode === "interior" || mode === "walk" ? "interior" : "exterior"} style={style} light={light} onClose={() => setAiBase(null)} />}
+      {aiBase && pid && <AIRender pid={pid} base={aiBase} kind={mode === "plan" ? "plan" : mode === "interior" || mode === "walk" ? "interior" : "exterior"} style={style} light={light}
+        stamps={mode === "plan" && planLabels ? aiStamps : null} onClose={() => { setAiBase(null); setAiStamps(null); }} />}
     </div>
   );
 }

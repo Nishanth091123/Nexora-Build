@@ -97,7 +97,7 @@ except httpx.ConnectError:
         sys.exit("[ERROR] Backend did not start in 2 minutes.")
 check("health", r.status_code == 200 and r.json().get("status") == "ok", r.text)
 _v = tuple(int(x) for x in (r.json().get("version", "0.0").split("-")[0].split(".") + ["0", "0"])[:3] if x.isdigit())
-check("backend is the 1.20 version (not an old one still running)", _v >= (1, 20, 0), r.text)
+check("backend is the 1.21 version (not an old one still running)", _v >= (1, 21, 0), r.text)
 
 login = input("Owner username [nishanth_s]: ").strip() or "nishanth_s"
 pw = getpass.getpass("Owner password (hidden): ")
@@ -887,6 +887,9 @@ check("Document Q&A finds the answer", any(s.get("kind") == "doc" for s in j.get
 r = c.get("/api/ai-render/status")
 rs20 = r.json() if r.status_code == 200 else {}
 check("1.20 AI Render set-up readable", r.status_code == 200 and "cloudflare" in rs20, r.text[:200])
+# 1.21 Plan view: the AI polish of a furnished plan is a third kind ("plan"); a wrong kind is refused before anything runs
+r = c.post(f"/api/projects/{pid}/ai-render", json={"image": "AAAA", "kind": "poster"})
+check("1.21 AI Render knows the 'plan' kind (furnished plan polish)", r.status_code == 400 and "plan" in r.text, r.text[:200])
 if not rs20.get("cloudflare"):
     print("       (AI Render: CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_AI_TOKEN not in .env – add them to use AI Render)")
 elif FULL:
@@ -957,4 +960,4 @@ if fail:
     print("Failed:", ", ".join(fail), "\nSend this output to Claude.")
     sys.exit(1)
 else:
-    print("NEXORA 1.20 API: ALL GOOD")
+    print("NEXORA 1.21 API: ALL GOOD")

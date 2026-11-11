@@ -20,7 +20,7 @@ _last: dict[int, float] = {}
 
 class RenderIn(BaseModel):
     image: str  # PNG / JPEG, base64 or data URL
-    kind: str = "exterior"  # exterior | interior
+    kind: str = "exterior"  # exterior | interior | plan (1.21 furnished plan from the top)
     style: str = "modern"
     light: str = "day"
     extra: str = ""
@@ -39,6 +39,8 @@ def ai_render(project_id: int, body: RenderIn, user: User = Depends(get_current_
     perms = project_permissions(db, user, p)
     if not (perms.get("design") or perms.get("ai")):
         raise HTTPException(403, "You need Design or AI access on this project")
+    if body.kind not in ("exterior", "interior", "plan"):
+        raise HTTPException(400, "kind must be exterior, interior or plan")
     now = time.time()
     if now - _last.get(user.id, 0) < 8:
         raise HTTPException(429, "One render at a time – wait a few seconds.")
@@ -48,8 +50,6 @@ def ai_render(project_id: int, body: RenderIn, user: User = Depends(get_current_
         img = base64.b64decode(data, validate=False)
     except Exception:
         raise HTTPException(400, "Picture could not be read")
-    if body.kind not in ("exterior", "interior"):
-        raise HTTPException(400, "kind must be exterior or interior")
     try:
         out = R.render(img, body.kind, body.style, body.light, body.extra, body.strength, body.seed)
     except R.RenderError as e:
