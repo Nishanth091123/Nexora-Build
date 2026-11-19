@@ -62,7 +62,7 @@ def template(inputs: dict, rates: list[dict], state: str, project: str, is_owner
     wb = Workbook()
     ws = wb.active
     ws.title = "Inputs"
-    ws.append([f"Nexora Build – estimate inputs · {project}"])
+    ws.append([f"Estimate inputs · {project}"])
     ws["A1"].font = Font(bold=True, size=13)
     ws.append(["Fill column B, save, then upload this file in Estimate → Input Methods → Excel. Do not change column A."])
     ws["A2"].font = NOTE

@@ -45,7 +45,7 @@ def to_pdf(plan: dict, project: dict, meta: dict) -> bytes:
         c.setFont("Helvetica", 8.5)
         c.drawString(margin, H - margin - 12,
                      _pdf_safe(f"Design v{meta.get('version', '')} · {plan['facing'].title()} facing · "
-                               f"Plot {plot['w']:g} × {plot['d']:g} ft · Concept plan – not for construction"))
+                               f"Plot {plot['w']:g} × {plot['d']:g} ft"))
         # plot & setback
         c.setStrokeColor(colors.HexColor("#334155"))
         c.setLineWidth(1)
@@ -144,9 +144,8 @@ def to_pdf(plan: dict, project: dict, meta: dict) -> bytes:
             c.drawString(px, py, _pdf_safe(f"Height ≈ {sb['height_m']} m · coverage {sb['coverage_pct']}%"))
         c.setFont("Helvetica-Oblique", 7)
         c.setFillColor(colors.HexColor("#64748b"))
-        c.drawString(margin, 8 * mm, _pdf_safe(((project.get("company") or {}).get("name") or "Nexora Build")
-                                               + " – concept plan. Verify setbacks with the local body "
-                                               "(DTCP/CMDA/Panchayat); structural design by a qualified engineer."))
+        c.drawString(margin, 8 * mm, _pdf_safe(((project.get("company") or {}).get("name") or "Praganya Construction")
+                                               + " – verify setbacks with the local body (DTCP/CMDA/Panchayat)."))
         c.showPage()
     c.save()
     return buf.getvalue()
@@ -215,6 +214,6 @@ def to_dxf(plan: dict, project: dict, meta: dict) -> bytes:
     _dxf_line(out, "TEXT", ax + nx * 3, ay + ny * 3, ax + nx * 1.8 + ny * 0.8, ay + ny * 1.8 - nx * 0.8)
     _dxf_text(out, "TEXT", ax + nx * 4.5, ay + ny * 4.5, 1.2, "N")
     _dxf_text(out, "TEXT", 0, plot["d"] + 4, 1.5,
-              f"{project.get('name', '')} - design v{meta.get('version', '')} - concept plan", center=False)
+              f"{project.get('name', '')} - design v{meta.get('version', '')}", center=False)
     out += ["0", "ENDSEC", "0", "EOF"]
     return ("\r\n".join(out) + "\r\n").encode("ascii", "replace")

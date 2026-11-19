@@ -372,7 +372,7 @@ def export_current(project_id: int, body: ExportIn, kind: str = "sheets_pdf", st
     except (KeyError, TypeError, ValueError) as e:
         raise HTTPException(400, f"Invalid plan: {e}")
     ver = body.version if body.version not in (None, "") else "draft"
-    meta = {"version": ver, "date": _date.today().strftime("%d-%m-%Y")}
+    meta = {"version": ver, "date": ""}
     tag = f"v{ver}" if ver != "draft" else "draft"
     st = "cad" if style == "cad" else "paper"
     if kind == "sheets_pdf":
@@ -406,7 +406,7 @@ def design_sheets_pdf(design_id: int, style: str = "paper", user: User = Depends
     from ..design import sheets
     d, p = load_design(db, user, design_id, ("design", "estimate"))
     plan = recompute(d.plan)
-    data = sheets.sheet_set_pdf(plan, _proj(p, db), {"version": d.version, "date": d.created_at.strftime("%d-%m-%Y")},
+    data = sheets.sheet_set_pdf(plan, _proj(p, db), {"version": d.version, "date": ""},
                                 style="cad" if style == "cad" else "paper")
     name = f"{p.code}_Drawing_Set_v{d.version}{'_CAD' if style == 'cad' else ''}.pdf"
     return Response(data, media_type="application/pdf",
@@ -464,14 +464,14 @@ def project_pdf(project_id: int, estimate: str = "detailed", design_id: int | No
         d = q.filter(Design.id == design_id).first() if design_id else q.order_by(Design.version.desc()).first()
         if d:
             plan = recompute(d.plan)
-            parts.append(sheets.sheet_set_pdf(plan, _proj(p, db), {"version": d.version, "date": d.created_at.strftime("%d-%m-%Y")}))
+            parts.append(sheets.sheet_set_pdf(plan, _proj(p, db), {"version": d.version, "date": ""}))
     if perms.get("design") and d:
         from ..models import StructuralDesign
         from ..structural import sheets as ssheets
         sd = (db.query(StructuralDesign).filter(StructuralDesign.project_id == p.id, StructuralDesign.design_id == d.id,
                                                 StructuralDesign.is_hidden.is_(False)).order_by(StructuralDesign.version.desc()).first())
         if sd:
-            parts.append(ssheets.structural_pdf(sd.result, plan, _proj(p, db), {"version": sd.version, "date": sd.created_at.strftime("%d-%m-%Y")}))
+            parts.append(ssheets.structural_pdf(sd.result, plan, _proj(p, db), {"version": sd.version, "date": ""}))
     if perms.get("estimate"):
         q = db.query(Estimate).filter(Estimate.project_id == p.id, Estimate.is_hidden.is_(False))
         e = q.filter(Estimate.id == estimate_id).first() if estimate_id else q.order_by(Estimate.version.desc()).first()

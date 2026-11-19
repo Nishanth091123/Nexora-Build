@@ -1029,7 +1029,7 @@ def sheet_set_pdf(plan: dict, project: dict, meta: dict, style: str = "paper") -
             c.line(x, yy, W - M, yy)
         c.setFont("Helvetica-Oblique", 6.5)
         c.setFillColor(colors.HexColor("#64748b"))
-        notes = ["Concept / submission drawing prepared from the design.", "All dimensions in feet and inches unless noted.",
+        notes = ["All dimensions in feet and inches unless noted.",
                  "Structural members as per structural drawings.", "Verify setbacks, FSI and coverage with the local body."]
         for i, t in enumerate(notes):
             c.drawString(x + 3 * mm, M + (4 + 3.5 * (len(notes) - i)) * mm, t)

@@ -76,7 +76,7 @@ def export_current(project_id: int, body: CalcIn, kind: str = "pdf", style: str 
     p = require_any(db, user, project_id, ("design",))
     plan = recompute(_design(db, project_id, body.design_id).plan)
     r = _run(plan, body.inputs)
-    meta = {"version": "draft", "date": _date.today().strftime("%d-%m-%Y")}
+    meta = {"version": "draft", "date": ""}
     if kind == "dxf":
         dw = [sheets.column_layout(r, plan), sheets.foundation_plan(r, plan), sheets.footing_detail(r), sheets.column_section(r),
               sheets.beam_detail(r)] + [sheets.beam_layout(r, plan, l) for l in r["levels"]] + [sheets.slab_layout(r, plan, l) for l in r["levels"]]

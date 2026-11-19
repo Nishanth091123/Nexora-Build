@@ -56,6 +56,19 @@ def r2(v: float) -> float:
     return round(v * 4) / 4  # snap to 3 inches
 
 
+TIGHT = False  # 1.24: compact attached toilet (4 ft) + slightly smaller bedroom minimum, used before dropping a toilet
+
+
+def _tw() -> float:
+    return 4.0 if TIGHT else SIZES["toilet"][0]
+
+
+def _min_area(kind: str) -> float:
+    if TIGHT:
+        return 90.0 if kind == "master" else 75.0
+    return 100.0 if kind == "master" else 80.0
+
+
 class Cell:
     def __init__(self, kind: str, fixed_w: float | None = None, attached: bool = False):
         self.kind = kind
@@ -63,7 +76,7 @@ class Cell:
         dw, dd, mw, md = SIZES[kind]
         if attached:
             tw = SIZES["toilet"]
-            dw, mw = dw + tw[0], mw + tw[2]
+            dw, mw = dw + _tw(), mw + min(tw[2], _tw())
         self.dw, self.dd, self.mw, self.md = dw, dd, mw, md
         self.fixed_w = fixed_w
         self.x = self.w = 0.0
@@ -74,7 +87,7 @@ def level_items(lv: dict, multi: bool) -> tuple[list[Cell], list[Cell], Cell | N
     front, rest, stair = _level_items(lv, multi)
     sizes = lv.get("_sizes") or {}
     if sizes:
-        tw = SIZES["toilet"][0]
+        tw = _tw()
         for c in front + rest + ([stair] if stair else []):
             s = sizes.get(c.kind)
             if s and len(s) == 2 and s[0] > 0 and s[1] > 0:
@@ -283,7 +296,41 @@ def _depths(rows, bd, template, cap_front=False):
     return depths, need
 
 
+def merge_passages(rooms: list[dict]) -> list[dict]:
+    """1.24: passage cells of the same width that touch end-to-end are ONE continuous passage (never split cells)."""
+    rooms = [dict(r) for r in rooms]
+    changed = True
+    while changed:
+        changed = False
+        ps = [r for r in rooms if r["type"] == "passage"]
+        for a in ps:
+            for b in ps:
+                if a is b or a not in rooms or b not in rooms:
+                    continue
+                vert = abs(a["x"] - b["x"]) < 0.06 and abs(a["w"] - b["w"]) < 0.06 and abs(a["y"] + a["d"] - b["y"]) < 0.06
+                horiz = abs(a["y"] - b["y"]) < 0.06 and abs(a["d"] - b["d"]) < 0.06 and abs(a["x"] + a["w"] - b["x"]) < 0.06
+                if vert:
+                    a["d"] = r2(a["d"] + b["d"])
+                elif horiz:
+                    a["w"] = r2(a["w"] + b["w"])
+                else:
+                    continue
+                rooms.remove(b)
+                changed = True
+    return rooms
+
+
 def build_level(lv: dict, bw: float, bd: float, comp: dict, multi: bool, template: dict | None) -> tuple[list[dict], dict]:
+    global TIGHT
+    TIGHT = bool(lv.get("_tight_att"))
+    try:
+        r_ = _build_level_best(lv, bw, bd, comp, multi, template)
+    finally:
+        TIGHT = False
+    return merge_passages(r_[0]), r_[1]
+
+
+def _build_level_best(lv: dict, bw: float, bd: float, comp: dict, multi: bool, template: dict | None) -> tuple[list[dict], dict]:
     """1.17: lay the floor out; if a room cannot be reached without passing through another room, try again with
     an access passage (spine) along one side. The first layout where every room is reachable wins."""
     first = _build_level(lv, bw, bd, comp, multi, template)
@@ -335,8 +382,8 @@ def _row_ok(cand: list, ws: list[float], d: float) -> bool:
         if c.mw - w > 0.6:
             return False
         if c.kind in ("bedroom", "master"):
-            net_w = w - (SIZES["toilet"][0] if c.attached else 0)
-            if net_w * d < (100 if c.kind == "master" else 80) - 0.5:
+            net_w = w - (_tw() if c.attached else 0)
+            if net_w * d < _min_area(c.kind) - 0.5:
                 return False
     return True
 
@@ -506,10 +553,10 @@ def _build_level(lv: dict, bw: float, bd: float, comp: dict, multi: bool, templa
                     raise LayoutError([f"{lv['name']}: {NAMES[c.kind]} would be only {w:.1f} ft wide (minimum "
                                        f"{c.mw:g} ft)."])
                 if c.kind in ("bedroom", "master"):
-                    net_w = w - (SIZES["toilet"][0] if c.attached else 0)
-                    if net_w * d < (100 if c.kind == "master" else 80) - 0.5:
+                    net_w = w - (_tw() if c.attached else 0)
+                    if net_w * d < _min_area(c.kind) - 0.5:
                         raise LayoutError([f"{lv['name']}: {NAMES[c.kind]} would be only {net_w * d:.0f} sq ft "
-                                           f"(minimum {100 if c.kind == 'master' else 80} sq ft)."])
+                                           f"(minimum {_min_area(c.kind):g} sq ft)."])
                 if c.kind == "stair":
                     info["stair_side"] = "left" if x < 0.1 else ("right" if abs(x + w - bw) < 0.1 else "middle")
                 add_cell(rooms, c, r2(x), y, w, d, counters)
@@ -671,7 +718,7 @@ def add_cell(rooms: list[dict], c: Cell, x: float, y: float, w: float, d: float,
 
     kind = c.kind
     if kind in ("bedroom", "master") and c.attached:
-        tw, td = SIZES["toilet"][0], min(SIZES["toilet"][1], max(SIZES["toilet"][3], d * 0.62))
+        tw, td = _tw(), min(SIZES["toilet"][1], max(SIZES["toilet"][3], d * 0.62))
         tw, td = r2(tw), r2(td)
         bid = nid("bedroom")
         rooms.append({"id": bid, "type": "bedroom", "name": NAMES[kind], "x": x, "y": y, "w": r2(w - tw), "d": d})
@@ -681,8 +728,9 @@ def add_cell(rooms: list[dict], c: Cell, x: float, y: float, w: float, d: float,
             rooms.append({"id": nid("dress"), "type": "dress", "name": "Dress", "x": r2(x + w - tw), "y": y,
                           "w": tw, "d": r2(d - td), "parent": bid})
         return
-    if kind in ("common_toilet", "pooja") and d > SIZES[kind][1] * 1.5 and d - SIZES[kind][1] >= 3:
-        td = r2(SIZES[kind][1] + 1)
+    big_toilet = kind == "common_toilet" and w * d > 48 and d >= 8.5  # 1.24: a common toilet is never bedroom-sized
+    if big_toilet or (kind in ("common_toilet", "pooja") and d > SIZES[kind][1] * 1.5 and d - SIZES[kind][1] >= 3):
+        td = r2(max(5.0, min(7.0, 40.0 / max(w, 1))) if big_toilet else SIZES[kind][1] + 1)
         rooms.append({"id": nid("passage"), "type": "passage", "name": "Passage / Wash", "x": r2(x), "y": r2(y),
                       "w": r2(w), "d": r2(d - td)})
         rooms.append({"id": nid(kind), "type": kind, "name": NAMES[kind], "x": r2(x), "y": r2(y + d - td),
@@ -713,6 +761,10 @@ def fallback(levels: list[dict], i: int, notes: list[str]) -> bool:
     if lv.get("lounge") and beds > 0:
         lv["lounge"] = False
         notes.append(f"{lv['name']}: family lounge removed to fit – rooms open from the staircase lobby.")
+        return True
+    if int(lv.get("attached_toilets") or 0) >= 1 and not lv.get("_tight_att"):
+        lv["_tight_att"] = True
+        notes.append(f"{lv['name']}: attached toilet made compact (4 ft wide) so it stays inside the bedroom.")
         return True
     if BENIGN_ONLY:  # 1.23: first try to keep every room the user asked for (toilets, bedrooms)
         return False
@@ -745,6 +797,7 @@ def fallback(levels: list[dict], i: int, notes: list[str]) -> bool:
     common = int(lv.get("common_toilets") or 0)
     if att >= 1:
         lv["attached_toilets"] = att - 1
+        notes[:] = [n for n in notes if not (lv["name"] in n and "made compact" in n)]
         if common == 0:
             lv["common_toilets"] = 1
             notes.append(f"⚠ {lv['name']}: one attached toilet changed to a common toilet to fit.")
@@ -767,6 +820,7 @@ def generate(req: dict, _probe: bool = False) -> dict:
     if _probe or any(lv.get("units") for lv in (req.get("levels") or [])):
         return _generate(req, _probe)  # probes / several houses on a floor: one plain pass (fast, no suggestion loop)
     first_err = None
+    best_bad = None
     for relax, benign in ((False, True), (False, False), (True, True), (True, False)):
         geometry.RELAX_KITCHEN, BENIGN_ONLY = relax, benign
         try:
@@ -776,11 +830,27 @@ def generate(req: dict, _probe: bool = False) -> dict:
             continue
         finally:
             geometry.RELAX_KITCHEN, BENIGN_ONLY = False, False
+        from .validate import check
+        res = check(out)  # 1.24: every plan is checked before it is handed out
+        if res["hard"]:
+            if best_bad is None or len(res["hard"]) < len(best_bad[1]):
+                best_bad = (out, res["hard"])
+            continue
         if relax:
             out["notes"] = list(out.get("notes") or []) + [
                 "⚠ This plot is too tight to give every bedroom its own door from the hall / passage – one room opens "
                 "through the kitchen. To avoid it: widen the plot, drop the car parking, make it G+1, or ask for fewer rooms."]
+        out["notes"] = list(out.get("notes") or []) + ["⚠ " + x for x in res["soft"]]
+        out["checks"] = {"passed": True, "soft": res["soft"]}
         return out
+    if best_bad is not None:  # every layout failed the check → ask the user instead of handing out a bad plan
+        try:
+            sug = suggest_alternatives(req)
+        except Exception:
+            sug = []
+        raise LayoutError(["I could not make a clean plan for this input: " + "; ".join(best_bad[1][:4]),
+                           "Options: widen the plot, drop the car parking, make it one floor more, or ask for fewer rooms / toilets – "
+                           "tell me which one to try."], sug)
     return _generate(req, False)  # nothing fits: raises the error WITH the options / suggestions
 
 
@@ -841,7 +911,7 @@ def _generate(req: dict, _probe: bool = False) -> dict:
     b = sb["buildable"]
     bw, bd = math.floor(b["w"] * 4) / 4, math.floor(b["d"] * 4) / 4  # snap to 3" grid, never into setbacks
     comp = compass(req["facing"])
-    multi = n > 1 and req.get("staircase", True)
+    multi = (n > 1 and req.get("staircase", True)) or bool(req.get("staircase_asked"))
     levels = [dict(lv, name=lv.get("name") or f"Level {i}") for i, lv in enumerate(levels)]
     notes: list[str] = list(req.get("assumptions") or [])
     out_levels, template = [], None

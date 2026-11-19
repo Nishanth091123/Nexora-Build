@@ -34,12 +34,13 @@ def backup_running() -> dict:
     return dict(_state)
 
 
-def run_backup(kind: str = "auto", user_id: int | None = None) -> BackupRecord:
-    """Stream every table into a gzip'd JSON file (low memory, works for large databases). One backup at a time."""
+def run_backup(kind: str = "auto", user_id: int | None = None, only: set | None = None) -> BackupRecord:
+    """Stream every table (or only the named tables) into a gzip'd JSON file (low memory, works for large databases).
+    One backup at a time. ``only`` = a quick safety copy of just the tables a delete can touch."""
     with _lock:
         _state.update(running=True, kind=kind, started=datetime.now(timezone.utc).isoformat(), error="")
         try:
-            return _run(kind, user_id)
+            return _run(kind, user_id, only)
         except Exception as e:
             _state["error"] = str(e)[:300]
             raise
@@ -47,18 +48,18 @@ def run_backup(kind: str = "auto", user_id: int | None = None) -> BackupRecord:
             _state["running"] = False
 
 
-def _run(kind: str, user_id: int | None) -> BackupRecord:
+def _run(kind: str, user_id: int | None, only: set | None = None) -> BackupRecord:
     buf = io.BytesIO()
     counts = {}
     with SessionLocal() as db:
-        with gzip.GzipFile(fileobj=buf, mode="wb", compresslevel=6) as gz:
+        with gzip.GzipFile(fileobj=buf, mode="wb", compresslevel=3) as gz:
             head = {"app": "Nexora Build", "created_at": datetime.now(timezone.utc).isoformat(), "kind": kind}
             gz.write(json.dumps(head, ensure_ascii=False)[:-1].encode("utf-8") + b', "tables": {')
-            tables = [t for t in Base.metadata.sorted_tables if t.name != "stored_blobs"]  # file contents: not in backups
+            tables = [t for t in Base.metadata.sorted_tables if t.name != "stored_blobs" and (only is None or t.name in only)]  # file contents: not in backups
             for ti, table in enumerate(tables):
                 gz.write((", " if ti else "").encode() + json.dumps(table.name).encode() + b": [")
                 n = 0
-                res = db.execute(select(table).execution_options(yield_per=500))
+                res = db.execute(select(table).execution_options(yield_per=5000))
                 for r in res.mappings():
                     gz.write((b", " if n else b"") + json.dumps({k: _jsonable(v) for k, v in r.items()},
                                                                ensure_ascii=False).encode("utf-8"))

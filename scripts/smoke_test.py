@@ -97,7 +97,7 @@ except httpx.ConnectError:
         sys.exit("[ERROR] Backend did not start in 2 minutes.")
 check("health", r.status_code == 200 and r.json().get("status") == "ok", r.text)
 _v = tuple(int(x) for x in (r.json().get("version", "0.0").split("-")[0].split(".") + ["0", "0"])[:3] if x.isdigit())
-check("backend is the 1.23 version (not an old one still running)", _v >= (1, 23, 0), r.text)
+check("backend is the 1.24 version (not an old one still running)", _v >= (1, 24, 0), r.text)
 
 login = input("Owner username [nishanth_s]: ").strip() or "nishanth_s"
 pw = getpass.getpass("Owner password (hidden): ")
@@ -932,6 +932,23 @@ check("1.23 no bedroom opens through the kitchen (or it is reported with a ⚠)"
 check("1.23 every room is reachable from the main door", r.status_code == 200 and not unreach23, str(unreach23)[:300])
 check("1.23 car parking has a door to the entrance", any(any(o["type"] == "door" and any(x["id"] == o["room"] and x["type"] == "parking" for x in lv["rooms"])
                                                           for o in lv.get("openings", [])) for lv in pl23.get("levels", [])[:1]), "no parking door")
+
+# 1.24: the plan is validated before it is handed out (no split passage, small common toilet), staircase / toilets are listed
+r = c.post(f"/api/projects/{pid}/design/parse", json={"text": "30x40 north facing 2BHK, G only, staircase, 1 attached toilet, 1 common toilet, car parking"})
+und24 = " | ".join((r.json() or {}).get("understood", [])) if r.status_code == 200 else ""
+check("1.24 checklist lists toilets and the staircase", "Attached toilet" in und24 and "Common toilet" in und24 and "Staircase" in und24, und24[:300])
+bad24 = []
+for lv in pl23.get("levels", []):
+    ps = [x for x in lv["rooms"] if x["type"] == "passage"]
+    for i, a in enumerate(ps):
+        for b in ps[i + 1:]:
+            if abs(a["x"] - b["x"]) < .06 and abs(a["w"] - b["w"]) < .06 and abs(a["y"] + a["d"] - b["y"]) < .06:
+                bad24.append("split passage")
+    for x in lv["rooms"]:
+        if x["type"] == "common_toilet" and x["w"] * x["d"] > 60:
+            bad24.append("big common toilet")
+check("1.24 no split passage and the common toilet stays small", not bad24, str(bad24))
+check("1.24 plan passed the automatic check", (pl23.get("checks") or {}).get("passed") is True, str(pl23.get("checks")))
 if not rs20.get("cloudflare"):
     print("       (AI Render: CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_AI_TOKEN not in .env – add them to use AI Render)")
 elif FULL:
@@ -1002,4 +1019,4 @@ if fail:
     print("Failed:", ", ".join(fail), "\nSend this output to Claude.")
     sys.exit(1)
 else:
-    print("NEXORA 1.23 API: ALL GOOD")
+    print("NEXORA 1.24 API: ALL GOOD")

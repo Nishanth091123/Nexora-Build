@@ -298,10 +298,10 @@ def render_pdf(project: dict, title: str, subtitle: str, sections: list[dict]) -
     small = ParagraphStyle("small", parent=ss["BodyText"], fontSize=8, leading=10)
     cellst = ParagraphStyle("cell", parent=ss["BodyText"], fontSize=7.5, leading=9)
     co = project.get("company") or {}
-    story = [Paragraph(_safe(f"{co.get('name') or 'Nexora Build'} – {title}"), h1),
+    story = [Paragraph(_safe(f"{co.get('name') or 'Praganya Construction'} – {title}"), h1),
              Paragraph(_safe(" · ".join(x for x in [f"{project.get('code', '')} {project.get('name', '')}",
                                                     project.get("client_name") and f"Client: {project['client_name']}",
-                                                    subtitle, datetime.now().strftime("%d %b %Y")] if x)), small),
+                                                    subtitle]  if x)), small),
              Spacer(1, 6)]
     width = landscape(A4)[0] - 24 * mm
     for s in sections:
@@ -325,8 +325,6 @@ def render_pdf(project: dict, title: str, subtitle: str, sections: list[dict]) -
         if s.get("note"):
             story.append(Paragraph(_safe(s["note"]), small))
         story.append(Spacer(1, 6))
-    story.append(Paragraph("Quantities from the Nexora Build estimate engine. Rates as per the rate library at the "
-                           "time of download. Structural sizes must be confirmed by a qualified engineer.", small))
     doc.build(story)
     return buf.getvalue()
 
@@ -338,10 +336,9 @@ def render_excel(project: dict, title: str, subtitle: str, sections: list[dict])
     wb = Workbook()
     ws = wb.active
     ws.title = re.sub(r"[^A-Za-z0-9 ]", "", title)[:30] or "Estimate"
-    ws.append([f"{(project.get('company') or {}).get('name') or 'Nexora Build'} – {title}"])
+    ws.append([f"{(project.get('company') or {}).get('name') or 'Praganya Construction'} – {title}"])
     ws["A1"].font = Font(bold=True, size=14, color=NAVY)
-    ws.append([f"{project.get('code', '')} {project.get('name', '')}", subtitle,
-               datetime.now().strftime("%d %b %Y")])
+    ws.append([f"{project.get('code', '')} {project.get('name', '')}", subtitle])
     for s in sections:
         ws.append([])
         ws.append([s["title"]])

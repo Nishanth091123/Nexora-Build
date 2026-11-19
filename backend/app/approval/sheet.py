@@ -346,7 +346,6 @@ def approval_pdf(plan: dict, project: dict, info: dict, meta: dict, style: str =
     notes = ["All dimensions are in feet-inches unless noted; metric values in brackets.",
              "Setbacks shown are the open spaces actually provided on site.",
              "Rain water harvesting structure as per local body norms." if info.get("rwh", True) else "",
-             "Structural design by a qualified engineer; materials as per IS codes.",
              str(info.get("extra_note") or "")]
     yy = y - 8.5 * mm
     for t in [t for t in notes if t]:

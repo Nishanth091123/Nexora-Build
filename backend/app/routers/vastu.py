@@ -193,7 +193,7 @@ def report_pdf_now(project_id: int, body: SaveIn, user: User = Depends(get_curre
     kw = _kw(db, project_id)
     res = engine.analyse(plan, **kw)
     best = engine.options_for_vastu(plan, **kw)["options"]
-    meta = {"version": d.version if d else "-", "date": datetime.now().strftime("%d %b %Y"), "code": p.code,
+    meta = {"version": d.version if d else "-", "date": "", "code": p.code,
             "client": p.client_name or "", "location": p.location or ""}
     data = report.to_pdf(plan, res, {"name": p.name}, meta, best[0] if best else None)
     name = f"{p.code}_{p.name}_Vastu_Report.pdf".replace(" ", "_")
@@ -209,7 +209,7 @@ def report_html(project_id: int, body: SaveIn, user: User = Depends(get_current_
     kw = _kw(db, project_id)
     res = engine.analyse(plan, lang=body.lang, **kw)
     best = engine.options_for_vastu(plan, **kw)["options"]
-    meta = {"version": d.version if d else "-", "date": datetime.now().strftime("%d %b %Y"), "code": p.code,
+    meta = {"version": d.version if d else "-", "date": "", "code": p.code,
             "client": p.client_name or "", "location": p.location or ""}
     from ..vastu import report_html as RH
     return Response(RH.html(plan, res, {"name": p.name}, meta, best[0] if best else None, body.lang),
@@ -231,7 +231,7 @@ def report_pdf(report_id: int, user: User = Depends(get_current_user), db: Sessi
         raise HTTPException(404, "Report not found")
     p = require_any(db, user, r.project_id, ("vastu",))
     data = report.to_pdf(r.plan, r.result, {"name": p.name}, {"version": r.design_version or "-",
-                                                             "date": datetime.now().strftime("%d %b %Y")})
+                                                             "date": ""})
     name = f"{p.code}_Vastu_Report_{r.id}.pdf"
     return Response(data, media_type="application/pdf",
                     headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"})

@@ -2,7 +2,7 @@
  *  works offline. The picture is stored as JPEG inside the PDF at full resolution. */
 const PAGES: Record<string, [number, number]> = { A3: [841.89, 1190.55], A4: [595.28, 841.89] };
 
-export function imagePdf(jpegDataUrl: string, wPx: number, hPx: number, page: "A3" | "A4" = "A3", title = "Nexora Build"): Blob {
+export function imagePdf(jpegDataUrl: string, wPx: number, hPx: number, page: "A3" | "A4" = "A3", title = "Drawing"): Blob {
   const bin = atob(jpegDataUrl.split(",")[1]);
   const jpg = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) jpg[i] = bin.charCodeAt(i);
@@ -29,7 +29,7 @@ export function imagePdf(jpegDataUrl: string, wPx: number, hPx: number, page: "A
   obj(3, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pw.toFixed(2)} ${ph.toFixed(2)}] /Resources << /XObject << /Im0 4 0 R >> >> /Contents 5 0 R >>`);
   obj(4, `<< /Type /XObject /Subtype /Image /Width ${wPx} /Height ${hPx} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpg.length} >>`, jpg);
   obj(5, `<< /Length ${content.length} >>`, content);
-  obj(6, `<< /Title (${safe}) /Producer (Nexora Build) >>`);
+  obj(6, `<< /Title (${safe}) /Producer (Praganya Construction) >>`);
   const xref = len;
   push(`xref\n0 7\n0000000000 65535 f \n${[1, 2, 3, 4, 5, 6].map((n) => `${String(offs[n]).padStart(10, "0")} 00000 n \n`).join("")}`);
   push(`trailer\n<< /Size 7 /Root 1 0 R /Info 6 0 R >>\nstartxref\n${xref}\n%%EOF\n`);

@@ -273,7 +273,7 @@ def _summary_pdf(p: Project, d: dict) -> bytes:
     st = getSampleStyleSheet()
     doc = SimpleDocTemplate(buf, pagesize=A4, title="Plan approval documents")
     el = [Paragraph("<b>Plan approval – document pack</b>", st["Title"]),
-          Paragraph(f"{p.name} ({p.code}) · {p.location or ''} · {d['authority_label']} · {datetime.now():%d %b %Y}", st["BodyText"]),
+          Paragraph(f"{p.name} ({p.code}) · {p.location or ''} · {d['authority_label']}", st["BodyText"]),
           Spacer(1, 8)]
     rows = [["#", "Document", "Status", "File in pack"]]
     for n, i in enumerate(d["items"], 1):

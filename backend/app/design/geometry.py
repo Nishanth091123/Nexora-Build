@@ -330,6 +330,16 @@ def level_openings(lv: dict, level_index: int, building_d: float) -> tuple[list[
                          ({by_id.get(w["a"], {}).get("type"), by_id.get(w["b"], {}).get("type")} & {"parking", "sitout"})]
             if front and door_on_wall(rid, "main_door", 3.5, 7, [max(front, key=seg_len)]):
                 break
+    # 1.24: no hall on the road side (parking + staircase in front) → the main door goes on the staircase lobby's front wall
+    if level_index == 0 and not lv.get("stilt") and not unit_labels and not any(o["type"] == "main_door" for o in ops):
+        y_front0 = min(rr["y"] for rr in rooms)
+        for r in rooms:
+            if r["type"] not in ("stair", "passage", "dining", "sitout"):
+                continue
+            front = [w for w in ws if w["kind"] == "ext" and r["id"] in (w["a"], w["b"]) and w["y1"] == w["y2"]
+                     and abs(w["y1"] - y_front0) < 0.01 and seg_len(w) >= 3.5]
+            if front and door_on_wall(r["id"], "main_door", 3.5, 7, [max(front, key=seg_len)]):
+                break
     # 1.23 (Nishanth): car parking connects to the main entrance – a door from the parking into the hall / sit-out
     # (the room that holds the main door), so you can walk from the car straight to the entrance
     if not unit_labels and not lv.get("stilt"):

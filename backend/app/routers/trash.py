@@ -194,8 +194,25 @@ def _purge(db: Session, entity: str, o) -> None:
         db.delete(o)
 
 
+_FILE_T = {"files", "ai_doc_chunks", "ai_indexed_files", "ai_photo_checks", "site_photos", "site_activities"}
+_EXTRA_T = {"file": _FILE_T, "photo": _FILE_T, "library_item": _FILE_T, "client": _FILE_T | {"projects"},
+            "conversation": {"ai_messages"}, "market_brand": {"market_variants"}, "worker": {"attendance"}}
+
+
+def _backup_tables(pairs):
+    """Tables a delete can touch. None = everything (a project takes all its children with it)."""
+    names = set()
+    for entity, _ in pairs:
+        if entity == "project":
+            return None
+        names.add(ENTITIES[entity][0].__tablename__)
+        names |= _EXTRA_T.get(entity, set())
+    return names | {"trash_log"}
+
+
 def _purge_many(db: Session, owner: User, pairs: list[tuple[str, int]]) -> int:
-    rec = run_backup("predelete", owner.id)  # safety copy first – can be restored if needed
+    # safety copy first (only the tables this delete can touch – seconds, not minutes) – can be restored if needed
+    rec = run_backup("predelete", owner.id, _backup_tables(pairs))
     _allow(db)
     n = 0
     titles = []

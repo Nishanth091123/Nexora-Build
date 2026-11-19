@@ -76,7 +76,7 @@ def to_excel(project: dict, est: dict) -> bytes:
     ws = wb.active
     ws.title = "Summary"
     co = project.get("company") or {}
-    ws["A1"] = (co.get("name") or "Nexora Build") + " – Construction Estimate"
+    ws["A1"] = (co.get("name") or "Praganya Construction") + " – Construction Estimate"
     ws["A1"].font = Font(bold=True, size=15, color=NAVY)
     if co.get("proprietor"):
         ws["A2"] = f"Proprietor: {co['proprietor']}" + (f"  ·  {co['phone']}" if co.get("phone") else "")
@@ -226,7 +226,7 @@ def to_pdf(project: dict, est: dict) -> bytes:
     t = r["totals"]
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=landscape(A4), leftMargin=12 * mm, rightMargin=12 * mm,
-                            topMargin=12 * mm, bottomMargin=12 * mm, title="Nexora Build Estimate")
+                            topMargin=12 * mm, bottomMargin=12 * mm, title="Estimate")
     ss = getSampleStyleSheet()
     h1 = ParagraphStyle("h1", parent=ss["Title"], textColor=colors.HexColor("#" + NAVY), alignment=0, fontSize=18)
     h2 = ParagraphStyle("h2", parent=ss["Heading2"], textColor=colors.HexColor("#" + NAVY))
@@ -248,7 +248,7 @@ def to_pdf(project: dict, est: dict) -> bytes:
         return tb
 
     co = project.get("company") or {}
-    story = [Paragraph((co.get("name") or "Nexora Build") + " – Construction Estimate", h1)]
+    story = [Paragraph((co.get("name") or "Praganya Construction") + " – Construction Estimate", h1)]
     if co.get("proprietor") or co.get("phone"):
         story.append(Paragraph(" · ".join(x for x in [f"Proprietor: {co['proprietor']}" if co.get("proprietor") else "",
                                                        co.get("phone", ""), co.get("address", "")] if x), small))
@@ -333,8 +333,7 @@ def to_pdf(project: dict, est: dict) -> bytes:
         canvas.saveState()
         canvas.setFont("Helvetica", 7)
         canvas.setFillColor(colors.grey)
-        canvas.drawString(12 * mm, 7 * mm, (co.get("name") or "Nexora Build") + " · preliminary estimate – verify rates "
-                                            "locally; structural sizes need a qualified engineer")
+        canvas.drawString(12 * mm, 7 * mm, (co.get("name") or "Praganya Construction"))
         canvas.drawRightString(285 * mm, 7 * mm, f"Page {d.page}")
         canvas.restoreState()
 
@@ -392,7 +391,7 @@ def _portrait_pdf(project: dict, est: dict, kind: str) -> bytes:
                             bottomMargin=16 * mm, title=("Bank loan estimate" if kind == "bank" else "Estimate"))
     W = 180 * mm
     # letterhead
-    story = [Paragraph(co.get("name") or "Nexora Build", h1)]
+    story = [Paragraph(co.get("name") or "Praganya Construction", h1)]
     line2 = " · ".join(x for x in [f"Proprietor: {co['proprietor']}" if co.get("proprietor") else "",
                                     co.get("phone", ""), co.get("email", "")] if x)
     if line2:
@@ -459,10 +458,6 @@ def _portrait_pdf(project: dict, est: dict, kind: str) -> bytes:
         data.append(["", "Total", f"{sum(x['pct'] for x in ps):g}%", inr(sum(x.get('amount', 0) for x in ps))])
         story.append(tbl(data, [16 * mm, 106 * mm, 20 * mm, 38 * mm], 2, True))
 
-    story += [Spacer(1, 8), Paragraph(
-        "Notes: This estimate is prepared from the proposed plan at current market rates and is indicative. "
-        "Actual cost can vary with design changes, site conditions, material prices and specifications. "
-        "Structural sizes are to be confirmed by the structural design.", tiny)]
     # signature block – only the company and proprietor names (the owner signs the printed copy)
     sig = [["", f"For {co.get('name') or ''}"], ["", ""], ["", ""],
            ["", co.get("proprietor") and f"{co['proprietor']} (Proprietor)" or "Authorised signatory"]]
@@ -476,7 +471,7 @@ def _portrait_pdf(project: dict, est: dict, kind: str) -> bytes:
         canvas.saveState()
         canvas.setFont("Helvetica", 7)
         canvas.setFillColor(colors.grey)
-        canvas.drawString(15 * mm, 8 * mm, f"{co.get('name') or 'Nexora Build'} · {project.get('code', '')} · "
+        canvas.drawString(15 * mm, 8 * mm, f"{co.get('name') or 'Praganya Construction'} · {project.get('code', '')} · "
                                            f"estimate v{est.get('version')}")
         canvas.drawRightString(195 * mm, 8 * mm, f"Page {d.page}")
         canvas.restoreState()

@@ -115,7 +115,7 @@ def dpr_pdf(db: Session, p: Project, d: date) -> bytes:
         t = Table(flat, colWidths=[58 * mm] * 3)
         t.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP")]))
         story.append(t)
-    story += [Spacer(1, 10), P("Prepared with Nexora Build. Signature: ____________________", small)]
+    story += [Spacer(1, 10), P("Signature: ____________________", small)]
     buf = io.BytesIO()
     SimpleDocTemplate(buf, pagesize=A4, leftMargin=14 * mm, rightMargin=14 * mm, topMargin=12 * mm, bottomMargin=12 * mm,
                       title=f"DPR {d}").build(story)

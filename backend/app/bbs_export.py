@@ -14,7 +14,7 @@ def to_excel(project: dict, title: str, res: dict) -> bytes:
     ws.title = "BBS"
     ws.append([f"Bar Bending Schedule – {title}"])
     ws["A1"].font = Font(bold=True, size=13)
-    ws.append([f"{project.get('name', '')} · {project.get('code', '')} · {datetime.now():%d %b %Y}"])
+    ws.append([f"{project.get('name', '')} · {project.get('code', '')}"])
     ws.append([])
     head = ["Member", "Bar mark", "Description", "Shape", "Shape sizes (mm)", "Dia (mm)", "Nos / member", "Members",
             "Total nos", "Cutting length (mm)", "Total length (m)", "Weight (kg)"]
@@ -157,7 +157,7 @@ def to_pdf(project: dict, title: str, res: dict) -> bytes:
     st = getSampleStyleSheet()
     small = st["BodyText"].clone("s", fontSize=7.5, leading=9)
     el = [Paragraph(f"<b>Bar Bending Schedule – {title}</b>", st["Title"]),
-          Paragraph(f"{project.get('name', '')} · {project.get('code', '')} · {datetime.now():%d %b %Y}", small), Spacer(1, 6)]
+          Paragraph(f"{project.get('name', '')} · {project.get('code', '')}", small), Spacer(1, 6)]
     head = ["Member", "Mark", "Description", "Shape", "Dia", "Nos/mem", "Mem", "Total nos", "Cut length (mm)",
             "Total (m)", "Weight (kg)"]
     data = [head]

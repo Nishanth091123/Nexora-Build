@@ -954,5 +954,5 @@ def summarize(c: Calc, inp: Inputs, names: list[str], total_sqft: float, months:
         "extras": extras, "floors": floors, "breakdown": breakdown, "totals": totals,
         "assumptions": c.assumptions, "warnings": c.warnings,
         "note": ("Preliminary estimate from a standard layout model. Quantities will be recalculated from the "
-                 "actual drawing in Design Studio. Structural sizes must be confirmed by a qualified engineer."),
+                 "actual drawing in Design Studio."),
     }

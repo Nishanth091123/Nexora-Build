@@ -111,6 +111,12 @@ def parse(text: str, defaults: dict | None = None) -> dict:
         understood.append(f"{d['toilets']} toilet(s)")
     if "attached" in t:
         d["attached"] = True
+        understood.append("Attached toilet inside the master bedroom")
+    if re.search(r"common\s*(?:toilet|bath)", t):
+        understood.append("Common toilet (small, opens from the hall / passage)")
+    if re.search(r"\bstair\w*|\bsteps\b|படிக்கட்டு|padikattu|\bmetti", t) and not re.search(r"\bno\s+stair|without\s+stair|stair\w*\s+(?:venda|vendam)", t):
+        d["staircase_asked"] = True
+        understood.append("Staircase (kept even on a ground-floor-only plan)")
 
     # extras
     if not fw and re.search(r"car\s*(parking|park)?|car\b", t):
@@ -235,6 +241,7 @@ def build_requirements(d: dict) -> dict:
         "corner": bool(d.get("corner")), "side_road_width_m": d.get("side_road_width_m"),
         "floor_height_ft": float(d.get("floor_height_ft") or 10), "stilt": stilt,
         "staircase": n > 1 or bool(d.get("staircase", True)), "levels": levels,
+        "staircase_asked": bool(d.get("staircase_asked")),
         "room_sizes": d.get("room_sizes") or {},
         "assumptions": list(d.get("_notes", [])),
     }
