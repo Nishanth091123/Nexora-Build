@@ -33,12 +33,18 @@ def rooms_from_raw(ext: dict, units: str | None = None, scale: float | None = No
                 "x": _r(r["x"] * k), "y": _r(r["y"] * k), "w": _r(r["w"] * k), "d": _r(r["d"] * k),
                 "placed": True, "source": ext["method"], "confidence": 0.9 if r.get("rectangular", True) else 0.6,
                 "note": "" if r.get("rectangular", True) else "Room is not rectangular – bounding box used"}
+        if re.search(r"\bext(?:ernal|\.)?\b", " ".join([r["label"]] + [str(x) for x in r.get("extra", [])]), re.I) and typ == "stair":
+            room["name"] = "Staircase (External)"   # reached from outside, not through the house
         stated = None
         for t in [r["label"]] + r.get("extra", []):
             ps = parse_size(t)
             if ps:
                 stated = ps
                 break
+        if r.get("carved") or r.get("lpart"):  # 1.24.2: an L-shaped room kept as two rectangles – its box is NOT the written size
+            stated = None
+            room["note"] = "L-shaped room (two rectangles) – the written size is the box around both"
+            room["l_part"] = 2 if r.get("lpart") else 1
         if stated:
             a, b, hint = stated
             unit_hint = hint.rstrip("?") if hint != "ft?" else "ft"
@@ -306,6 +312,12 @@ def build_plan(levels_in: list[dict], opts: dict) -> dict:
             from . import connect
             tag = f"{lv.get('name') or 'Floor ' + str(li + 1)}: "
             conn_notes += [tag + n for n in connect.settle(rooms)]
+            _f = connect.fill(rooms)
+            if _f:
+                connect.settle(rooms)   # rooms next to the new passage touch it
+            conn_notes += [tag + n for n in _f]
+            for fr in rooms:
+                fr.setdefault("id", "x")
         minx, miny = min(r["x"] for r in rooms), min(r["y"] for r in rooms)
         for r in rooms:
             r["x"], r["y"] = _r(r["x"] - minx), _r(r["y"] - miny)

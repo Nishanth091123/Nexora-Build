@@ -9,7 +9,8 @@ import re
 
 NUM_WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "single": 1, "double": 2,
              "oru": 1, "onnu": 1, "rendu": 2, "irandu": 2, "moonu": 3, "munu": 3, "naalu": 4, "nalu": 4,
-             "anju": 5, "aaru": 6}
+             "anju": 5, "aaru": 6, "ore": 1, "ஒரு": 1, "ஒன்னு": 1, "ஒண்ணு": 1, "ஒன்று": 1, "ரெண்டு": 2, "இரண்டு": 2,
+             "மூணு": 3, "மூன்று": 3, "நாலு": 4, "நான்கு": 4, "அஞ்சு": 5, "ஐந்து": 5}
 FACINGS = {
     "north-east": ["north east", "northeast", "north-east", "ne facing", "vadakku kizhakku"],
     "north-west": ["north west", "northwest", "north-west", "nw facing", "vadakku merku"],
@@ -30,7 +31,7 @@ def _num(s: str) -> float | None:
         return None
 
 
-NUM = r"(\d+(?:\.\d+)?|one|two|three|four|five|six|single|oru|onnu|rendu|irandu|moonu|munu|naalu|nalu|anju|aaru)"
+NUM = r"(\d+(?:\.\d+)?|one|two|three|four|five|six|single|oru|ore|onnu|rendu|irandu|moonu|munu|naalu|nalu|anju|aaru|ஒரு|ஒன்னு|ஒண்ணு|ஒன்று|ரெண்டு|இரண்டு|மூணு|மூன்று|நாலு|நான்கு|அஞ்சு|ஐந்து)"
 
 
 def parse(text: str, defaults: dict | None = None) -> dict:
@@ -82,7 +83,7 @@ def parse(text: str, defaults: dict | None = None) -> dict:
         floors = int(m.group(1)) + 1
     elif re.search(r"\bduplex\b", t):
         floors = 2
-    elif re.search(r"(ground floor only|single floor|single storey|single story|only ground|\bg only\b)", t):
+    elif re.search(r"(ground\s*floor\s*(?:only|mattum|mattume|matum|மட்டும்)|single floor|single storey|single story|only ground|\bg\s*only\b|\bg\s*(?:mattum|மட்டும்)|கிரவுண்ட்\s*(?:ஃப்ளோர்|ப்ளோர்)?\s*மட்டும்|தரை\s*தளம்\s*மட்டும்)", t):
         floors = 1
     m2 = re.search(r"stilt\s*\+\s*(\d)", t)
     if m2:
@@ -109,11 +110,26 @@ def parse(text: str, defaults: dict | None = None) -> dict:
     if m:
         d["toilets"] = int(_num(m.group(1)) or 0)
         understood.append(f"{d['toilets']} toilet(s)")
-    if "attached" in t:
+    TOI = r"(?:toilets?|bath\s*rooms?|baths?|wash\s*rooms?|restrooms?|பாத்ரூம்|பாத்\s*ரூம்|டாய்லெட்|கழிப்பறை|குளியலறை)?"
+    ATT = r"(?:attached|attach|attch|atached|அட்டாச்டு|அட்டாச்|அட்டாச்சுடு)"
+    COM = r"(?:common|comman|காமன்)"
+    ma = re.search(NUM + r"\s*" + ATT + r"\s*" + TOI, t) or re.search(ATT + r"\s*" + TOI + r"\s*(?:x|=|:)?\s*" + NUM + r"(?!\d)", t)
+    mc = re.search(NUM + r"\s*" + COM + r"\s*" + TOI, t) or re.search(COM + r"\s*" + TOI + r"\s*(?:x|=|:)?\s*" + NUM + r"(?!\d)", t)
+    if re.search(ATT, t):
         d["attached"] = True
-        understood.append("Attached toilet inside the master bedroom")
-    if re.search(r"common\s*(?:toilet|bath)", t):
-        understood.append("Common toilet (small, opens from the hall / passage)")
+        if ma and _num(ma.group(1)) is not None:
+            d["attached_count"] = int(_num(ma.group(1)))
+            d.setdefault("_explicit", []).append("attached_count")
+            understood.append(f"{d['attached_count']} attached toilet(s) – inside the master bedroom first (door from inside the room)")
+        else:
+            understood.append("Attached toilet inside the master bedroom")
+    if re.search(COM + r"\s*" + TOI, t):
+        if mc and _num(mc.group(1)) is not None:
+            d["common_count"] = int(_num(mc.group(1)))
+            d.setdefault("_explicit", []).append("common_count")
+            understood.append(f"{d['common_count']} common toilet(s) – small, opens from the hall / passage")
+        else:
+            understood.append("Common toilet (small, opens from the hall / passage)")
     if re.search(r"\bstair\w*|\bsteps\b|படிக்கட்டு|padikattu|\bmetti", t) and not re.search(r"\bno\s+stair|without\s+stair|stair\w*\s+(?:venda|vendam)", t):
         d["staircase_asked"] = True
         understood.append("Staircase (kept even on a ground-floor-only plan)")
@@ -122,14 +138,21 @@ def parse(text: str, defaults: dict | None = None) -> dict:
     if not fw and re.search(r"car\s*(parking|park)?|car\b", t):
         d["parking_car"] = True
         understood.append("Car parking")
+        d.setdefault("_explicit", []).append("parking_car")
     if re.search(r"bike|two.?wheeler|scooter", t):
         d["parking_bike"] = True
         understood.append("Two-wheeler parking")
+        d.setdefault("_explicit", []).append("parking_bike")
     if re.search(r"pooja|puja|prayer|பூஜை", t):
         d["pooja"] = True
         understood.append("Pooja room")
-    if "dining" in t:
+        d.setdefault("_explicit", []).append("pooja")
+    if re.search(r"(?:no|without)\s+dining|dining\s+(?:vendam|venda|illa|vendaam)|டைனிங்\s*(?:வேண்டாம்|வேணாம்)", t):
+        d["dining"] = False
+        understood.append("No separate dining (joined with the hall)")
+    elif "dining" in t:
         d["dining"] = True
+        d.setdefault("_explicit", []).append("dining")
     if "corner" in t:
         d["corner"] = True
         understood.append("Corner plot")
@@ -175,7 +198,7 @@ def build_requirements(d: dict) -> dict:
             "corner": bool(d.get("corner")), "side_road_width_m": d.get("side_road_width_m"),
             "floor_height_ft": float(d.get("floor_height_ft") or 10), "stilt": bool(d.get("stilt")),
             "staircase": len(levels) > 1, "levels": levels, "floor_specs": d["floor_specs"],
-            "room_sizes": d.get("room_sizes") or {},
+            "room_sizes": d.get("room_sizes") or {}, "explicit": list(dict.fromkeys(d.get("_explicit", []))),
             "assumptions": list(d.get("_notes", [])) + ["Toilets per house: 1 BHK = 1 common, 2 BHK = 1 attached + 1 common, "
                                                         "3 BHK = 2 attached + 1 common – change them in the table."],
         }
@@ -235,6 +258,25 @@ def build_requirements(d: dict) -> dict:
             "parking_bike": bool(i == 0 and not stilt and d.get("parking_bike")),
             "lounge": not is_main,
         })
+    if d.get("attached_count") is not None or d.get("common_count") is not None:  # 1.24.2: the counts the user wrote win
+        a_left = int(d.get("attached_count") or 0)
+        c_left = int(d.get("common_count") or 0)
+        rl = [lv for lv in levels if not lv.get("stilt")]
+        for lv in rl:
+            take = min(a_left, int(lv.get("bedrooms") or 0))
+            lv["attached_toilets"] = take
+            a_left -= take
+        for i, lv in enumerate(rl):
+            lv["common_toilets"] = 0
+        i = 0
+        while c_left > 0 and rl:
+            rl[i % len(rl)]["common_toilets"] += 1
+            c_left -= 1
+            i += 1
+        if a_left:
+            d.setdefault("_notes", []).append(f"{a_left} attached toilet(s) could not be given – there are not enough bedrooms.")
+        d.setdefault("_notes", []).append(
+            f"Toilets as you asked: {int(d.get('attached_count') or 0)} attached + {int(d.get('common_count') or 0)} common.")
     return {
         "plot_w_ft": d.get("plot_w_ft"), "plot_d_ft": d.get("plot_d_ft"), "facing": d.get("facing"),
         "road_width_m": d.get("road_width_m"), "area_type": d.get("area_type", "other"),
@@ -242,8 +284,8 @@ def build_requirements(d: dict) -> dict:
         "floor_height_ft": float(d.get("floor_height_ft") or 10), "stilt": stilt,
         "staircase": n > 1 or bool(d.get("staircase", True)), "levels": levels,
         "staircase_asked": bool(d.get("staircase_asked")),
-        "room_sizes": d.get("room_sizes") or {},
-        "assumptions": list(d.get("_notes", [])),
+        "room_sizes": d.get("room_sizes") or {}, "explicit": list(dict.fromkeys(d.get("_explicit", []))),
+        "assumptions": list(dict.fromkeys(d.get("_notes", []))),
     }
 
 

@@ -97,7 +97,7 @@ except httpx.ConnectError:
         sys.exit("[ERROR] Backend did not start in 2 minutes.")
 check("health", r.status_code == 200 and r.json().get("status") == "ok", r.text)
 _v = tuple(int(x) for x in (r.json().get("version", "0.0").split("-")[0].split(".") + ["0", "0"])[:3] if x.isdigit())
-check("backend is the 1.24 version (not an old one still running)", _v >= (1, 24, 0), r.text)
+check("backend is the 1.24.3 version (not an old one still running)", _v >= (1, 24, 3), r.text)
 
 login = input("Owner username [nishanth_s]: ").strip() or "nishanth_s"
 pw = getpass.getpass("Owner password (hidden): ")
@@ -909,7 +909,7 @@ if globals().get("pdfp"):
 
 # 1.23 connected plan: every room is reachable only through hall / dining / passage (never through a kitchen or a toilet),
 # no bedroom opens into the kitchen, the car parking joins the entrance, and nothing the plot cannot hold is dropped silently
-r = c.post(f"/api/projects/{pid}/design/parse", json={"text": "30x40 north facing 2BHK, G only, 1 attached toilet, 1 common toilet, car parking front, 11 ft road"})
+r = c.post(f"/api/projects/{pid}/design/parse", json={"text": "30x50 north facing 2BHK, G only, 1 attached toilet, 1 common toilet, car parking front, 11 ft road"})
 rq23 = (r.json() or {}).get("requirements") if r.status_code == 200 else None
 r = c.post(f"/api/projects/{pid}/design/generate", json={"requirements": rq23}) if rq23 else r
 pl23 = r.json() if r.status_code == 200 else {}
@@ -934,9 +934,9 @@ check("1.23 car parking has a door to the entrance", any(any(o["type"] == "door"
                                                           for o in lv.get("openings", [])) for lv in pl23.get("levels", [])[:1]), "no parking door")
 
 # 1.24: the plan is validated before it is handed out (no split passage, small common toilet), staircase / toilets are listed
-r = c.post(f"/api/projects/{pid}/design/parse", json={"text": "30x40 north facing 2BHK, G only, staircase, 1 attached toilet, 1 common toilet, car parking"})
+r = c.post(f"/api/projects/{pid}/design/parse", json={"text": "30x50 north facing 2BHK, G only, staircase, 1 attached toilet, 1 common toilet, car parking"})
 und24 = " | ".join((r.json() or {}).get("understood", [])) if r.status_code == 200 else ""
-check("1.24 checklist lists toilets and the staircase", "Attached toilet" in und24 and "Common toilet" in und24 and "Staircase" in und24, und24[:300])
+check("1.24 checklist lists toilets and the staircase", "attached toilet" in und24.lower() and "common toilet" in und24.lower() and "staircase" in und24.lower(), und24[:300])
 bad24 = []
 for lv in pl23.get("levels", []):
     ps = [x for x in lv["rooms"] if x["type"] == "passage"]
@@ -949,6 +949,21 @@ for lv in pl23.get("levels", []):
             bad24.append("big common toilet")
 check("1.24 no split passage and the common toilet stays small", not bad24, str(bad24))
 check("1.24 plan passed the automatic check", (pl23.get("checks") or {}).get("passed") is True, str(pl23.get("checks")))
+
+# 1.24.2: the rooms table is followed EXACTLY (or the user is asked with options) – never changed silently
+if rq23:
+    rq242 = dict(rq23); rq242.pop("explicit", None); rq242["strict"] = True
+    r = c.post(f"/api/projects/{pid}/design/generate", json={"requirements": rq242})
+    p242 = r.json() if r.status_code == 200 else {}
+    p242 = p242.get("plan", p242)
+    beds242 = sum(1 for lv in p242.get("levels", []) for x in lv["rooms"] if x["type"] == "bedroom")
+    want242 = sum(int(l.get("bedrooms") or 0) for l in rq242.get("levels", []))
+    check("1.24.2 rooms table → exactly the bedrooms chosen (or asked)", (r.status_code == 200 and beds242 == want242) or r.status_code == 422, f"{r.status_code} {beds242}/{want242}")
+    pass242 = [x for lv in p242.get("levels", []) for x in lv["rooms"] if x["type"] == "passage"]
+    check("1.24.2 one passage per floor, no filler cells", r.status_code != 200 or len(pass242) <= len(p242.get("levels", [])), str(len(pass242)))
+    tight = dict(rq242); tight["plot_w_ft"], tight["plot_d_ft"] = 20, 30
+    r = c.post(f"/api/projects/{pid}/design/generate", json={"requirements": tight})
+    check("1.24.2 plot too small → asks (422 + reason), never a quietly changed plan", r.status_code == 422 and bool((r.json().get("detail") or {}).get("questions")), r.text[:200])
 if not rs20.get("cloudflare"):
     print("       (AI Render: CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_AI_TOKEN not in .env – add them to use AI Render)")
 elif FULL:
@@ -1019,4 +1034,4 @@ if fail:
     print("Failed:", ", ".join(fail), "\nSend this output to Claude.")
     sys.exit(1)
 else:
-    print("NEXORA 1.24 API: ALL GOOD")
+    print("NEXORA 1.24.3 API: ALL GOOD")

@@ -15,7 +15,7 @@ def env(name: str, default: str = "") -> str:
 
 
 APP_NAME = env("APP_NAME", "Nexora Build")
-APP_VERSION = "1.24.1"
+APP_VERSION = "1.24.3"
 
 OWNER_USERNAME = env("OWNER_USERNAME", "nishanth_s").lower()
 OWNER_EMAIL = env("OWNER_EMAIL").lower()

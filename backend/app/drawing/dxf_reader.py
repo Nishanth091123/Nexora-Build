@@ -222,7 +222,8 @@ def parse(data: bytes) -> dict:
             labels.append({**t, "type": typ})
     size_texts = [t for t in texts if parse_size(t["text"]) and not room_type(t["text"])]
     all_regs: list = []
-    rooms_raw, unplaced = find_regions(segs, labels, all_regions=all_regs)
+    grid: dict = {}
+    rooms_raw, unplaced = find_regions(segs, labels, all_regions=all_regs, grid_out=grid)
     # 1.22: every size text belongs to exactly one room name (by position) – open plans no longer mix sizes up
     lab_by_room = [next((lb for lb in labels if lb["x"] == r["lx"] and lb["y"] == r["ly"]), None) for r in rooms_raw]
     pairs = pair_sizes([lb for lb in lab_by_room if lb], texts, extent)
@@ -237,7 +238,7 @@ def parse(data: bytes) -> dict:
             r["size_xy"] = (st["x"], st["y"])
     exact_done = False
     if unit and rooms_raw:  # units written in the file → written sizes can be applied exactly; otherwise the user confirms units first
-        exact_done = refine(rooms_raw, all_regs, TO_FT.get(unit, 1.0), warnings, segs)
+        exact_done = refine(rooms_raw, all_regs, TO_FT.get(unit, 1.0), warnings, segs, grid)
         if exact_done:
             warnings += overlaps(rooms_raw, TO_FT.get(unit, 1.0))
     x0, y0 = min(xs), min(ys)

@@ -56,6 +56,8 @@ def r2(v: float) -> float:
     return round(v * 4) / 4  # snap to 3 inches
 
 
+SPINE_FRAC = 0.0  # ground floor made at least this share of the buildable depth (upper floors reuse it)
+SPINE_K = None  # 1.24.2: None = row-zoning generator, 0..n = spine generator variant
 TIGHT = False  # 1.24: compact attached toilet (4 ft) + slightly smaller bedroom minimum, used before dropping a toilet
 
 
@@ -811,31 +813,86 @@ def fallback(levels: list[dict], i: int, notes: list[str]) -> bool:
     return False
 
 
-def generate(req: dict, _probe: bool = False) -> dict:
-    """1.23: the plan must (1) keep every room the user asked for and (2) open each bedroom from the hall / dining /
-    passage – never through the kitchen. Order: strict + all rooms → strict with the toilets / bedrooms the plot cannot hold
-    removed (reported with ⚠) → kitchen as a last resort (reported with ⚠)."""
-    global BENIGN_ONLY
+def _rebalance(req: dict):
+    """Variants that keep the TOTAL bedrooms / toilets but move a bedroom (with its attached toilet) to another floor."""
+    import copy
+    lv0 = [lv for lv in (req.get("levels") or [])]
+    idx = [i for i, lv in enumerate(lv0) if not lv.get("stilt") and not lv.get("units")]
+    if len(idx) < 2:
+        return
+    seen = set()
+    frontier = [(copy.deepcopy(req), "")]
+    for _ in range(2):
+        nxt = []
+        for r, desc in frontier:
+            for i in idx:
+                for j in idx:
+                    if i == j or int(r["levels"][i].get("bedrooms") or 0) <= 0:
+                        continue
+                    v = copy.deepcopy(r)
+                    a, b = v["levels"][i], v["levels"][j]
+                    a["bedrooms"] = int(a["bedrooms"]) - 1
+                    b["bedrooms"] = int(b.get("bedrooms") or 0) + 1
+                    if int(a.get("attached_toilets") or 0) > a["bedrooms"] or (int(a.get("attached_toilets") or 0) > 0 and int(b.get("attached_toilets") or 0) < b["bedrooms"] - 0):
+                        if int(a.get("attached_toilets") or 0) > 0:
+                            a["attached_toilets"] = int(a["attached_toilets"]) - 1
+                            b["attached_toilets"] = int(b.get("attached_toilets") or 0) + 1
+                    key = tuple((int(l.get("bedrooms") or 0), int(l.get("attached_toilets") or 0)) for l in v["levels"])
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    d2 = (desc + "; " if desc else "") + f"1 bedroom from {a.get('name')} to {b.get('name')}"
+                    nxt.append((v, d2))
+                    yield v, d2
+        frontier = nxt[:4]
+
+
+def _pipeline(req: dict, orig: dict, adjust: bool):
+    """Try every layout engine in order. Returns (plan | None, best_dev, best_bad, first_err).
+    A plan is accepted only if it passes the automatic check AND keeps exactly what the user chose
+    (unless the user allowed adjusting)."""
+    global BENIGN_ONLY, SPINE_K, SPINE_FRAC
     from . import geometry
-    if _probe or any(lv.get("units") for lv in (req.get("levels") or [])):
-        return _generate(req, _probe)  # probes / several houses on a floor: one plain pass (fast, no suggestion loop)
-    first_err = None
-    best_bad = None
-    for relax, benign in ((False, True), (False, False), (True, True), (True, False)):
-        geometry.RELAX_KITCHEN, BENIGN_ONLY = relax, benign
-        try:
-            out = _generate(req, True)  # probe mode inside the loop: suggestions are worked out once, at the end
-        except LayoutError as e:
-            first_err = first_err or e
-            continue
-        finally:
-            geometry.RELAX_KITCHEN, BENIGN_ONLY = False, False
-        from .validate import check
-        res = check(out)  # 1.24: every plan is checked before it is handed out
+    from .validate import check, compliance
+    first_err, best_bad, best_dev = None, None, None
+
+    def _void_over_parking(out):
+        """A floor has one passage. The void above the car porch is an open terrace, not a second passage."""
+        lvs = out.get("levels") or []
+        if len(lvs) < 2:
+            return
+        park = [r for r in lvs[0]["rooms"] if r["type"] == "parking"]
+        for lv in lvs[1:]:
+            ps = [r for r in lv["rooms"] if r["type"] == "passage"]
+            if len(ps) < 2:
+                continue
+            for r in ps:
+                area = r["w"] * r["d"]
+                over = sum(max(0.0, min(r["x"] + r["w"], q["x"] + q["w"]) - max(r["x"], q["x"]))
+                           * max(0.0, min(r["y"] + r["d"], q["y"] + q["d"]) - max(r["y"], q["y"])) for q in park)
+                if area and over >= 0.6 * area and sum(1 for x in lv["rooms"] if x["type"] == "passage") > 1:
+                    r["type"], r["name"] = "terrace", "Open Terrace (above car park)"
+
+    def judge(out, relax=False):
+        nonlocal best_bad, best_dev
+        _void_over_parking(out)
+        res = check(out)
         if res["hard"]:
             if best_bad is None or len(res["hard"]) < len(best_bad[1]):
                 best_bad = (out, res["hard"])
-            continue
+            return None
+        cp = compliance(orig, out)
+        dev = cp["hard"]
+        if dev and not adjust:
+            if best_dev is None or len(dev) < len(best_dev[1]):
+                best_dev = (out, dev)
+            return None
+        if dev:
+            out["notes"] = list(out.get("notes") or []) + ["⚠ Adjusted as you allowed: " + "; ".join(dev)]
+        if cp["soft"]:
+            out["notes"] = list(out.get("notes") or []) + ["⚠ Changed to fit this plot: " + " ".join(cp["soft"][:6])]
+        if isinstance(out.get("requirements"), dict):
+            out["requirements"].pop("allow_adjust", None)
         if relax:
             out["notes"] = list(out.get("notes") or []) + [
                 "⚠ This plot is too tight to give every bedroom its own door from the hall / passage – one room opens "
@@ -843,15 +900,95 @@ def generate(req: dict, _probe: bool = False) -> dict:
         out["notes"] = list(out.get("notes") or []) + ["⚠ " + x for x in res["soft"]]
         out["checks"] = {"passed": True, "soft": res["soft"]}
         return out
+
+    # 1. spine engine: every room opens from a hall / dining / passage by construction
+    if not any(lv.get("stilt") or lv.get("units") for lv in (req.get("levels") or [])):
+        gname = ((req.get("levels") or [{}])[0].get("name") or "Ground Floor")
+        for k in range(6):
+            out, stop = None, False
+            for frac in (0.0, 0.6, 0.8, 0.95):
+                SPINE_K, SPINE_FRAC = k, frac
+                try:
+                    out = _generate(req, True)
+                    break
+                except LayoutError as e:
+                    first_err = first_err or e
+                    if any("no further layout variant" in q for q in e.questions):
+                        stop = True
+                        break
+                    if e.questions and str(e.questions[0]).startswith(gname):
+                        break   # a ground-floor problem – a deeper ground floor does not help
+                    # an upper floor needs more depth than the ground floor gave → try a deeper ground floor
+                finally:
+                    SPINE_K, SPINE_FRAC = None, 0.0
+            if stop:
+                break
+            if out is None:
+                continue
+            got = judge(out)
+            if got:
+                return got, best_dev, best_bad, first_err
+    # 2. row-zoning engine
+    for relax, benign in ((False, True), (False, False), (True, True), (True, False)):
+        geometry.RELAX_KITCHEN, BENIGN_ONLY = relax, benign
+        try:
+            out = _generate(req, True)  # probe mode: suggestions are worked out once, at the end
+        except LayoutError as e:
+            first_err = first_err or e
+            continue
+        finally:
+            geometry.RELAX_KITCHEN, BENIGN_ONLY = False, False
+        got = judge(out, relax)
+        if got:
+            return got, best_dev, best_bad, first_err
+    return None, best_dev, best_bad, first_err
+
+
+def generate(req: dict, _probe: bool = False) -> dict:
+    """1.24.2: the plan keeps EXACTLY the rooms the user chose and passes the automatic check (every room has a door
+    from a hall / dining / passage, one passage, small common toilet …). If that is impossible on this plot, nothing is
+    changed silently – the user is asked and gets options (one of them: "adjust automatically", which lists every change)."""
+    import copy
+    if _probe or any(lv.get("units") for lv in (req.get("levels") or [])):
+        return _generate(req, _probe)  # probes / several houses on a floor: one plain pass (fast, no suggestion loop)
+    orig = copy.deepcopy(req)
+    adjust = bool(req.get("allow_adjust"))
+    out, best_dev, best_bad, first_err = _pipeline(req, orig, adjust)
+    if out is not None:
+        return out
+    if (best_dev is not None or best_bad is not None or first_err is not None) and not orig.get("strict") and not adjust:
+        # the user gave totals (e.g. 2 bedrooms), not a floor split → try other splits before asking
+        for var, what in _rebalance(orig):
+            out2 = _pipeline(copy.deepcopy(var), orig, False)[0]
+            if out2 is not None:
+                out2["notes"] = list(out2.get("notes") or []) + [f"Floor split changed to fit the plot: {what}."]
+                return out2
+    if best_dev is not None:  # only plans that change what the user chose → ask first
+        try:
+            sug = suggest_alternatives(orig)
+        except Exception:
+            sug = []
+        sug.append({"label": "Adjust automatically (I will list exactly what changed)",
+                    "requirements": {**orig, "allow_adjust": True}, "notes": best_dev[1]})
+        raise LayoutError(["These rooms do not fit this plot exactly as you chose: " + " ".join(best_dev[1][:6]),
+                           "Nothing was changed. Pick an option below, or change the plot / rooms and generate again."], sug)
     if best_bad is not None:  # every layout failed the check → ask the user instead of handing out a bad plan
         try:
-            sug = suggest_alternatives(req)
+            sug = suggest_alternatives(orig)
         except Exception:
             sug = []
         raise LayoutError(["I could not make a clean plan for this input: " + "; ".join(best_bad[1][:4]),
                            "Options: widen the plot, drop the car parking, make it one floor more, or ask for fewer rooms / toilets – "
                            "tell me which one to try."], sug)
-    return _generate(req, False)  # nothing fits: raises the error WITH the options / suggestions
+    try:
+        return _generate(req, False)  # nothing fits: raises the error WITH the options / suggestions
+    except LayoutError as e:
+        if not e.suggestions:
+            try:
+                e.suggestions = suggest_alternatives(orig)
+            except Exception:
+                pass
+        raise
 
 
 def _generate(req: dict, _probe: bool = False) -> dict:
@@ -922,9 +1059,16 @@ def _generate(req: dict, _probe: bool = False) -> dict:
             if lv.get("units"):  # 1.19 several houses on this floor
                 from .units import build_units_level
                 rooms, info = build_units_level(lv, bw, bd, comp, template, i)
+            elif SPINE_K is not None and not lv.get("stilt"):
+                from . import spine
+                rooms, info = spine.build(lv, bw, bd, multi or n > 1, template if i > 0 else None, SPINE_K, SPINE_FRAC)
+                if i == 0:
+                    template = info
             else:
                 rooms, info = build_level(lv, bw, bd, comp, multi, template)
         except LayoutError as e:
+            if SPINE_K is not None:  # spine layouts never change what the user chose – the caller asks instead
+                raise
             if lv.get("units"):
                 err = LayoutError(e.questions)
                 if not _probe:
@@ -951,7 +1095,9 @@ def _generate(req: dict, _probe: bool = False) -> dict:
         "plot": ({"w": pinfo["w"], "d": pinfo["d"], "poly": [list(p) for p in poly], "info": pinfo, "edges": sb["edge_kinds"]}
                  if poly else {"w": float(req["plot_w_ft"]), "d": float(req["plot_d_ft"])}),
         "facing": req["facing"], "compass": comp, "setbacks": sb,
-        "building": {"x": b["x"], "y": b["y"], "w": bw, "d": bd},
+        "building": ({"x": r2(b["x"] + (bw - template["Wf"]) / 2), "y": b["y"], "w": template["Wf"], "d": template["Du"]}
+                     if SPINE_K is not None and template and template.get("spine") else
+                     {"x": b["x"], "y": b["y"], "w": bw, "d": bd}),
         "floor_height_ft": float(req.get("floor_height_ft") or 10),
         "levels": out_levels, "notes": notes,
         "requirements": {**req, "levels": levels},
@@ -993,7 +1139,11 @@ def suggest_alternatives(req: dict) -> list[dict]:
     """When the requested rooms do not fit, try a few honest variants and return those that work.
     The user picks one (nothing is changed silently)."""
     import copy
+    import time as _time
+    _t_end = _time.monotonic() + 15.0   # never keep the user waiting: options found within 15 s are offered
     base = copy.deepcopy(req)
+    if any(lv.get("units") for lv in (base.get("levels") or [])):
+        return []   # several houses on a floor: the message lists the options (a probe per option would take minutes)
     base["levels"] = _clean_levels(base.get("levels") or [])
     cands: list[tuple[str, dict]] = []
     total_beds = sum(int(lv.get("bedrooms") or 0) for lv in base["levels"])
@@ -1034,12 +1184,95 @@ def suggest_alternatives(req: dict) -> list[dict]:
             r["staircase"] = True
             n = len(r["levels"])
             cands.append((f"Add a floor ({'Stilt' if stilt else 'G'}+{n - (2 if stilt else 1)}) with {move} bedroom(s) upstairs", r))
+    # 4. single-room changes (each one is only offered if the result is a clean, exact plan)
+    def flag_off(label, key, cond=None):
+        if any(lv.get(key) and not lv.get("stilt") for lv in base["levels"]):
+            r = copy.deepcopy(base)
+            for lv in r["levels"]:
+                if not lv.get("stilt"):
+                    lv[key] = False
+            cands.append((label, r))
+    flag_off("Without the pooja room", "pooja")
+    flag_off("Without two-wheeler parking", "parking_bike")
+    flag_off("Dining joined with the hall (no separate dining)", "dining")
+    flag_off("Without the family lounge", "lounge")
+    if any(int(lv.get("attached_toilets") or 0) > 0 for lv in base["levels"]):
+        r = copy.deepcopy(base)
+        lv = max(r["levels"], key=lambda l: int(l.get("attached_toilets") or 0))
+        lv["attached_toilets"] = int(lv["attached_toilets"]) - 1
+        lv["common_toilets"] = int(lv.get("common_toilets") or 0) + 1
+        cands.append(("One attached toilet as a common toilet", r))
     # 4. dining in hall + no pooja everywhere (compact)
     out = []
     for label, r in cands:
+        if len(out) >= 4 or _time.monotonic() > _t_end:
+            break
         try:
-            plan = generate(r, _probe=True)
+            import copy as _c
+            plan = _pipeline(_c.deepcopy(r), _c.deepcopy(r), False)[0]
         except (LayoutError, ValueError):
             continue
+        if plan is None:  # an option that again fails / drops something is not offered as "works"
+            continue
         out.append({"label": label, "requirements": r, "notes": plan.get("notes", [])})
+    if not out:  # no single change is enough → several together (each step listed, tried in the order that costs the user least)
+        import copy as _c
+        cur = _c.deepcopy(base)
+        done: list[str] = []
+
+        def _drop(key: str, text: str):
+            if any(lv.get(key) and not lv.get("stilt") for lv in cur["levels"]):
+                for lv in cur["levels"]:
+                    if not lv.get("stilt"):
+                        lv[key] = False
+                done.append(text)
+                return True
+            return False
+
+        def _less_bed():
+            lv = max(reversed(cur["levels"]), key=lambda l: int(l.get("bedrooms") or 0))
+            if sum(int(l.get("bedrooms") or 0) for l in cur["levels"]) <= 1 or int(lv.get("bedrooms") or 0) < 1:
+                return False
+            lv["bedrooms"] = int(lv["bedrooms"]) - 1
+            lv["attached_toilets"] = min(int(lv.get("attached_toilets") or 0), lv["bedrooms"])
+            if int(lv.get("attached_toilets") or 0) + int(lv.get("common_toilets") or 0) == 0:
+                lv["common_toilets"] = 1
+            done.append("1 bedroom less")
+            return True
+
+        def _att_to_common():
+            lv = max(cur["levels"], key=lambda l: int(l.get("attached_toilets") or 0))
+            if int(lv.get("attached_toilets") or 0) < 1:
+                return False
+            lv["attached_toilets"] = int(lv["attached_toilets"]) - 1
+            lv["common_toilets"] = max(1, int(lv.get("common_toilets") or 0))
+            done.append("one attached toilet made common")
+            return True
+        def _min_toilets():
+            ch = False
+            for l in cur["levels"]:
+                a, c = int(l.get("attached_toilets") or 0), int(l.get("common_toilets") or 0)
+                want = 0 if a >= 1 else 1
+                if c > want:
+                    l["common_toilets"] = want
+                    ch = True
+            if ch:
+                done.append("no extra common toilet")
+            return ch
+        steps = [lambda: _drop("pooja", "no pooja room"), lambda: _drop("parking_bike", "no two-wheeler parking"),
+                 lambda: _drop("lounge", "no family lounge"), lambda: _drop("dining", "dining joined with the hall"),
+                 _att_to_common, lambda: _drop("parking_car", "no car parking"), _min_toilets] + [_att_to_common, _min_toilets, _less_bed, _min_toilets] * 4
+        for st in steps:
+            if _time.monotonic() > _t_end:
+                break
+            if not st():
+                continue
+            try:
+                plan = _pipeline(_c.deepcopy(cur), _c.deepcopy(cur), False)[0]
+            except (LayoutError, ValueError):
+                plan = None
+            if plan is not None:
+                out.append({"label": "Several changes together: " + ", ".join(done), "requirements": _c.deepcopy(cur),
+                            "notes": plan.get("notes", [])})
+                break
     return out

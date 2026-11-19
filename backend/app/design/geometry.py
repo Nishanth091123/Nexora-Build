@@ -11,7 +11,8 @@ FT_M = 0.3048
 OPEN_PAIRS = {frozenset(p) for p in [("hall", "dining"), ("dining", "passage"), ("lounge", "passage"),
                                       ("passage", "stair"), ("parking", "parking"), ("hall", "passage"),
                                       ("lounge", "stair"), ("parking", "stair"),
-                                      ("passage", "passage")]}
+                                      ("passage", "passage"),
+                                      ("hall", "hall"), ("dining", "dining"), ("lounge", "lounge")]}
 OPEN_OUTSIDE = {"parking"}  # no external wall on open parking sides
 OPEN_TYPES = {"terrace", "balcony", "sitout"}  # open to sky / partly open – parapet instead of wall
 HABITABLE = {"bedroom", "hall", "lounge", "kitchen", "dining"}
@@ -210,7 +211,7 @@ KIND = {"bedroom": ("door", 3.0), "toilet": ("toilet_door", 2.5), "common_toilet
         "kitchen": ("opening", 3.0), "dining": ("opening", 3.0), "hall": ("opening", 3.0), "lounge": ("opening", 3.0),
         "passage": ("opening", 3.0), "stair": ("opening", 3.0), "utility": ("door", 2.5), "store": ("door", 2.5),
         "pooja": ("pooja_door", 2.5), "terrace": ("door", 3.0), "balcony": ("door", 3.0), "sitout": ("door", 3.0)}
-NO_ACCESS_NEEDED = {"dress", "parking"}
+NO_ACCESS_NEEDED = {"dress", "parking", "terrace"}  # 1.24.2: spare open roof is not a room to walk into
 PASS = {"hall", "dining", "lounge", "passage", "stair", "parking", "sitout"}
 DEPENDENT = {"kitchen": {"utility", "store", "pooja"}, "bedroom": {"dress", "toilet", "balcony", "terrace"},
              "dress": {"bedroom", "toilet"}, "utility": {"store"}, "toilet": set()}
@@ -274,7 +275,7 @@ def reachable(lv: dict, ops: list[dict], ws: list[dict] | None = None, level_ind
             if x not in roots and tx not in passing and by[y]["type"] not in DEPENDENT.get(tx, ()):
                 continue
             seen.add(y); todo.append(y)
-    need = {r["id"] for r in rooms if r["type"] not in NO_ACCESS_NEEDED}
+    need = {r["id"] for r in rooms if r["type"] not in NO_ACCESS_NEEDED and "external" not in r["name"].lower()}
     return seen, need - seen
 
 
@@ -415,9 +416,9 @@ def level_openings(lv: dict, level_index: int, building_d: float) -> tuple[list[
                     break
             if spot:
                 add(rid, "vent" if t == "toilet" or t == "common_toilet" else "window", WIN_H.get(t, 4), spot)
-            elif ext and t in HABITABLE:
+            elif ext and t in HABITABLE and "(part 2)" not in r["name"].lower():
                 warnings.append(f"{lv['name']}: {r['name']} – no free outside wall length for a window next to the door.")
-            elif t in HABITABLE:
+            elif t in HABITABLE and "(part 2)" not in r["name"].lower():
                 warnings.append(f"{lv['name']}: {r['name']} has no outside wall for a window – add a light well / "
                                 f"duct or rearrange.")
         if t == "common_toilet":

@@ -130,7 +130,8 @@ def _stacks(regs: list[dict]) -> list[dict]:
     return out
 
 
-def refine(rooms: list[dict], regions: list[dict], k: float, notes: list[str], segs: list | None = None) -> bool:
+def refine(rooms: list[dict], regions: list[dict], k: float, notes: list[str], segs: list | None = None,
+           grid: dict | None = None) -> bool:
     """Replace measured boxes by the written sizes (see module doc). rooms are modified in place (drawing units)."""
     if not k or k <= 0:
         return False
@@ -141,6 +142,18 @@ def refine(rooms: list[dict], regions: list[dict], k: float, notes: list[str], s
     bx1, by1 = max(r["x"] + r["w"] for r in outer), max(r["y"] + r["d"] for r in outer)
     used_regions = {r["region"] for r in rooms}
     moved: list[dict] = []
+    if grid:  # the wall geometry is trusted only when most rooms really are closed rectangles of their written size
+        ok = 0
+        for r in rooms:
+            a, b, _w = _written(r)
+            if not (a and b) or r.get("shared"):
+                continue
+            mw, md = r["w"] * k, r["d"] * k
+            if (abs(mw - a) <= max(0.75, 0.12 * a) and abs(md - b) <= max(0.75, 0.12 * b)) or \
+               (abs(mw - b) <= max(0.75, 0.12 * b) and abs(md - a) <= max(0.75, 0.12 * a)):
+                ok += 1
+        if ok < max(2, int(0.4 * len(rooms) + 0.5)):
+            grid = None
     for r in rooms:
         a, b, width = _written(r)
         mw, md = r["w"] * k, r["d"] * k
@@ -158,6 +171,10 @@ def refine(rooms: list[dict], regions: list[dict], k: float, notes: list[str], s
             if clean:
                 cx, cy = r["x"] + r["w"] / 2, r["y"] + r["d"] / 2
                 r["rigid"] = True  # the closed region IS this room: keep its position
+            elif grid:
+                cx, cy = r["x"] + r["w"] / 2, r["y"] + r["d"] / 2   # placed from the wall geometry below
+                moved.append(r)
+                r["anchored"] = True
             else:
                 sx, sy = r.get("size_xy") or (r["lx"], r["ly"])
                 cx, cy = (r["lx"] + sx) / 2, (r["ly"] + sy) / 2
@@ -186,7 +203,7 @@ def refine(rooms: list[dict], regions: list[dict], k: float, notes: list[str], s
                             cx, cy = min(ok, key=lambda c: (c[0] - cx) ** 2 + (c[1] - cy) ** 2)
                 moved.append(r)
                 r["anchored"] = True
-            if not clean:
+            if not clean and (mw > ww + 0.75 or md > wd + 0.75) and not r.get("shared"):
                 notes.append(f"{r['label'].title()}: the walls drawn for it measure about {mw:.1f}' × {md:.1f}' but "
                              f"{ww:.2f}' × {wd:.2f}' is written – the written size is used.")
             r["w"], r["d"] = ww / k, wd / k
@@ -219,6 +236,14 @@ def refine(rooms: list[dict], regions: list[dict], k: float, notes: list[str], s
             else:
                 notes.append(f"{r['label'].title()}: only the width ({width:g}') is written and no matching area was found – "
                              "please enter its length.")
+    if grid and moved:
+        try:
+            from .place import carve, place
+            place(rooms, [r for r in moved if r.get("exact_size")], regions, grid, k, notes)
+            carve(rooms, k, notes)
+            moved = [r for r in moved if not r.get("placed_by_walls")]
+        except Exception as e:  # never lose the import because of the placer
+            notes.append(f"(wall-based placement skipped: {e})")
     # push anchored rooms away from whatever they overlap (rigid rooms and already placed rooms stay)
     fixed = [r for r in rooms if r not in moved]
     for _ in range(12):

@@ -234,7 +234,8 @@ def parse(data: bytes, page_no: int | None = None) -> dict:
             why = "No readable room names / lines in this PDF (scanned or text drawn as lines)."
         return {"method": "pdf", "vector_ok": False, "info": info, "reason": why}
     all_regs: list = []
-    rooms_raw, unplaced = find_regions(segs, labels, all_regions=all_regs)
+    grid: dict = {}
+    rooms_raw, unplaced = find_regions(segs, labels, all_regions=all_regs, grid_out=grid)
     if segs:  # labels outside all line work are legends / schedules, not rooms
         sx0 = min(min(q[0], q[2]) for q in segs); sx1 = max(max(q[0], q[2]) for q in segs)
         sy0 = min(min(q[1], q[3]) for q in segs); sy1 = max(max(q[1], q[3]) for q in segs)
@@ -291,7 +292,7 @@ def parse(data: bytes, page_no: int | None = None) -> dict:
     warnings: list[str] = []
     exact_done = False
     if scale and rooms_raw:
-        exact_done = refine(rooms_raw, all_regs, scale, warnings, segs)
+        exact_done = refine(rooms_raw, all_regs, scale, warnings, segs, grid)
         if exact_done:
             warnings += overlaps(rooms_raw, scale)
     ox = min([r["x"] for r in rooms_raw], default=0)

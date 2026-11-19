@@ -108,7 +108,7 @@ export default function DesignPage() {
     const lv = r.levels || [];
     const stilt = lv.some((l: any) => l.stilt);
     const sum = (k: string) => lv.reduce((a: number, l: any) => a + Number(l[k] || 0), 0);
-    setForm((f: any) => ({ ...f, plot_w_ft: r.plot_w_ft ?? f.plot_w_ft, plot_d_ft: r.plot_d_ft ?? f.plot_d_ft, facing: r.facing || f.facing,
+    setForm((f: any) => ({ ...f, attached_count: undefined, common_count: undefined, plot_w_ft: r.plot_w_ft ?? f.plot_w_ft, plot_d_ft: r.plot_d_ft ?? f.plot_d_ft, facing: r.facing || f.facing,
       road_width_m: r.road_width_m ?? f.road_width_m, floors: lv.length || f.floors, stilt, bedrooms: sum("bedrooms"),
       toilets: sum("attached_toilets") + sum("common_toilets"), parking_car: lv.some((l: any) => l.parking_car && !l.stilt) || f.parking_car,
       pooja: lv.some((l: any) => l.pooja) || f.pooja, corner: !!r.corner, area_type: r.area_type || "other", floor_height_ft: r.floor_height_ft || 10 }));
@@ -473,7 +473,7 @@ export default function DesignPage() {
   };
   const reqTable = req && (
     <Card title={confirmFloors ? "Confirm rooms / houses per floor" : "Rooms per floor (edit & regenerate)"} icon={<Layers size={20} />}
-      action={<button className="btn-primary btn-sm" onClick={() => { setConfirmFloors(false); generate(req); }} disabled={busy === "gen"}>
+      action={<button className="btn-primary btn-sm" onClick={() => { setConfirmFloors(false); const r2: any = { ...req, strict: true }; delete r2.explicit; delete r2.allow_adjust; generate(r2); }} disabled={busy === "gen"}>
         {confirmFloors ? <><Wand2 size={14} />Looks right – Generate</> : <><RotateCcw size={14} />Regenerate</>}</button>}>
       {confirmFloors && <p className="mb-2 rounded-lg bg-brand-50 p-2 text-sm text-brand-800">This is what I understood floor by floor. Change anything (houses, BHK, owner / rental) and press <b>Looks right – Generate</b>.</p>}
       <div className="overflow-x-auto">

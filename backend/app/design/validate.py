@@ -47,6 +47,10 @@ def check(plan: dict) -> dict:
                 if vert or horiz:
                     hard.append(f"{nm}: the passage is split into separate cells.")
 
+        # 2b. one passage per floor – extra "Passage / Wash" filler cells are separate rooms nobody asked for
+        if len(ps) > 1:
+            hard.append(f"{nm}: the passage is cut into {len(ps)} separate cells.")
+
         # 3. reachability (every room that needs access can be walked into without crossing a bedroom / kitchen / toilet)
         if not lv.get("stilt"):
             tmp = {"name": nm, "rooms": rooms, "stilt": False}
@@ -112,6 +116,70 @@ def check(plan: dict) -> dict:
         up = plan["compass"].get("up")
         if up not in ((0, -1), (0, 1), (-1, 0), (1, 0), [0, -1], [0, 1], [-1, 0], [1, 0], None) and False:
             soft.append("Check the north arrow against the road side.")
+    return {"hard": list(dict.fromkeys(hard)), "soft": list(dict.fromkeys(soft))}
+
+
+def compliance(req: dict, plan: dict) -> dict:
+    """1.24.2 – did the plan keep what the user asked for? -> {"hard": [...], "soft": [...]}.
+    hard = something the user explicitly chose is missing (the plan must not be handed out silently);
+    soft = a default / floor split that changed (reported with a ⚠ note).
+    req["strict"] = True (rooms table edited by the user): every number per floor is hard.
+    Several houses on one floor (units) are checked by their own flow and skipped here."""
+    hard: list[str] = []
+    soft: list[str] = []
+    strict = bool(req.get("strict"))
+    explicit = set(req.get("explicit") or [])
+    lvls_req = req.get("levels") or []
+    lvls = plan.get("levels") or []
+    tot = {"bedroom": [0, 0], "attached": [0, 0], "common": [0, 0]}
+    for li, rq in enumerate(lvls_req):
+        if rq.get("units") or li >= len(lvls) or rq.get("stilt"):
+            continue
+        lv = lvls[li]
+        nm = rq.get("name") or lv.get("name") or f"Floor {li + 1}"
+        rooms = lv.get("rooms") or []
+        cnt = lambda t: sum(1 for r in rooms if r["type"] == t)
+        low = lambda r: r["name"].lower()
+        car = sum(1 for r in rooms if r["type"] == "parking" and "bike" not in low(r) and "two" not in low(r))
+        bike = sum(1 for r in rooms if r["type"] == "parking" and ("bike" in low(r) or "two" in low(r)))
+        bed = sum(1 for r in rooms if r["type"] == "bedroom" and not r.get("parent"))
+        att = sum(1 for r in rooms if r["type"] == "toilet" and r.get("parent"))
+        com = cnt("common_toilet")
+        tot["bedroom"][0] += int(rq.get("bedrooms") or 0); tot["bedroom"][1] += bed
+        tot["attached"][0] += int(rq.get("attached_toilets") or 0); tot["attached"][1] += att
+        tot["common"][0] += int(rq.get("common_toilets") or 0); tot["common"][1] += com
+        want = [("bedrooms", int(rq.get("bedrooms") or 0), bed, "bedroom", "bedroom"),
+                ("attached_toilets", int(rq.get("attached_toilets") or 0), att, "attached toilet", "attached_count"),
+                ("common_toilets", int(rq.get("common_toilets") or 0), com, "common toilet", "common_count"),
+                ("kitchen", 1 if rq.get("kitchen") else 0, cnt("kitchen"), "kitchen", "*"),
+                ("hall", 1 if rq.get("hall") else 0, cnt("hall"), "hall", "*"),
+                ("dining", 1 if rq.get("dining") and rq.get("hall") else 0, cnt("dining"), "separate dining", "dining"),
+                ("pooja", 1 if rq.get("pooja") else 0, cnt("pooja"), "pooja room", "pooja"),
+                ("parking_car", 1 if rq.get("parking_car") else 0, car, "car parking", "*"),
+                ("parking_bike", 1 if rq.get("parking_bike") else 0, bike, "two-wheeler parking", "*"),
+                ("lounge", 1 if rq.get("lounge") else 0, cnt("lounge"), "lounge", "lounge")]
+        for key, w, got, label, ex in want:
+            if got == w:
+                continue
+            msg = f"{nm}: you chose {w} {label}, the plan has {got}."
+            if key in ("bedrooms", "attached_toilets", "common_toilets"):
+                (hard if strict else soft).append(msg)  # totals are judged below when the user did not set the floors
+            elif strict or ex == "*" or ex in explicit:
+                hard.append(msg)
+            else:
+                soft.append(msg)
+    if not strict:  # the user gave totals / counts, not a floor split → compare the totals
+        for key, label, ex in (("bedroom", "bedrooms", None), ("attached", "attached toilets", "attached_count"),
+                               ("common", "common toilets", "common_count")):
+            want_t, got_t = tot[key]
+            if want_t != got_t and (ex is None or ex in explicit):
+                hard.append(f"You chose {want_t} {label} in total, the plan has {got_t}.")
+    if req.get("staircase") and (len(lvls_req) > 1 or req.get("staircase_asked")):
+        for li, lv in enumerate(lvls):
+            if li < len(lvls_req) and lvls_req[li].get("stilt") and len(lvls) == 1:
+                continue
+            if not any(r["type"] == "stair" for r in lv.get("rooms") or []):
+                hard.append(f"{lv.get('name', 'Floor')}: staircase asked but not placed.")
     return {"hard": list(dict.fromkeys(hard)), "soft": list(dict.fromkeys(soft))}
 
 

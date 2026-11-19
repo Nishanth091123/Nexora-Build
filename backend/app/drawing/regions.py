@@ -18,7 +18,7 @@ ROOM_WORDS = [
     ("kitchen", "kitchen"), ("kit", "kitchen"), ("cook", "kitchen"),
     ("toilet", "toilet"), ("bath", "toilet"), ("wc", "toilet"), ("w.c", "toilet"), ("t&b", "toilet"),
     ("restroom", "toilet"), ("powder", "toilet"),
-    ("living", "hall"), ("hall", "hall"), ("drawing", "hall"), ("lounge", "lounge"), ("family", "lounge"),
+    ("living", "hall"), ("hall", "hall"), ("drawing room", "hall"), ("drawing hall", "hall"), ("drawing/dining", "hall"), ("drawing / dining", "hall"), ("lounge", "lounge"), ("family", "lounge"),
     ("dining", "dining"), ("pooja", "pooja"), ("puja", "pooja"), ("prayer", "pooja"),
     ("stair", "stair"), ("staircase", "stair"), ("lift", "stair"),
     ("parking", "parking"), ("car", "parking"), ("portico", "parking"), ("garage", "parking"),
@@ -94,7 +94,7 @@ def _cluster(values: list[float], tol: float) -> list[float]:
 
 
 def find_regions(segments: list[tuple[float, float, float, float]], labels: list[dict],
-                 max_lines: int = 450, all_regions: list | None = None) -> tuple[list[dict], list[dict]]:
+                 max_lines: int = 450, all_regions: list | None = None, grid_out: dict | None = None) -> tuple[list[dict], list[dict]]:
     """segments: (x1,y1,x2,y2) in drawing units (y up). labels: {"text","x","y"}.
     Returns (rooms, unplaced_labels). Each room: {label, x, y, w, d, cells} in drawing units."""
     axis = []
@@ -201,6 +201,8 @@ def find_regions(segments: list[tuple[float, float, float, float]], labels: list
         rooms.append(room)
     if all_regions is not None:
         all_regions.extend(regions)
+    if grid_out is not None:
+        grid_out.update(xs=xs, ys=ys, region=region)
     return rooms, unplaced
 
 
