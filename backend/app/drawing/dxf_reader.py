@@ -9,6 +9,7 @@ from __future__ import annotations
 import math
 import re
 
+from .exact import overlaps, pair_sizes, refine
 from .regions import find_north, find_regions, parse_size, room_type
 
 INSUNITS = {1: "in", 2: "ft", 4: "mm", 5: "cm", 6: "m"}
@@ -220,13 +221,25 @@ def parse(data: bytes) -> dict:
         if typ and len(t["text"]) <= 32 and ":" not in t["text"]:
             labels.append({**t, "type": typ})
     size_texts = [t for t in texts if parse_size(t["text"]) and not room_type(t["text"])]
-    rooms_raw, unplaced = find_regions(segs, labels)
-    # attach separate size texts to the room whose region contains them
-    for st in size_texts:
-        for r in rooms_raw:
-            if r["x"] <= st["x"] <= r["x"] + r["w"] and r["y"] <= st["y"] <= r["y"] + r["d"]:
-                r.setdefault("extra", []).append(st["text"])
-                break
+    all_regs: list = []
+    rooms_raw, unplaced = find_regions(segs, labels, all_regions=all_regs)
+    # 1.22: every size text belongs to exactly one room name (by position) – open plans no longer mix sizes up
+    lab_by_room = [next((lb for lb in labels if lb["x"] == r["lx"] and lb["y"] == r["ly"]), None) for r in rooms_raw]
+    pairs = pair_sizes([lb for lb in lab_by_room if lb], texts, extent)
+    j = 0
+    for r, lb in zip(rooms_raw, lab_by_room):
+        if not lb:
+            continue
+        st = pairs.get(j)
+        j += 1
+        if st:
+            r["extra"] = [st["text"]]
+            r["size_xy"] = (st["x"], st["y"])
+    exact_done = False
+    if unit and rooms_raw:  # units written in the file → written sizes can be applied exactly; otherwise the user confirms units first
+        exact_done = refine(rooms_raw, all_regs, TO_FT.get(unit, 1.0), warnings, segs)
+        if exact_done:
+            warnings += overlaps(rooms_raw, TO_FT.get(unit, 1.0))
     x0, y0 = min(xs), min(ys)
     ox = min([r["x"] for r in rooms_raw], default=x0)
     oy = min([r["y"] for r in rooms_raw], default=y0)
@@ -239,6 +252,7 @@ def parse(data: bytes) -> dict:
         "titles": [{"text": t["text"], "x": t["x"] - ox, "y": t["y"] - oy} for t in texts
                    if re.search(r"floor|stilt|terrace plan|ground|first|second|plan", t["text"], re.I) and len(t["text"]) < 60],
         "preview_raw": preview, "questions": questions, "warnings": warnings, "north_deg": find_north(texts, segs),
+        "exact": exact_done,
         "stats": {"lines": len(segs), "texts": len(texts), "labels": len(labels)},
     }
 

@@ -1,6 +1,8 @@
 """Turn reader output (DXF / PDF / AI vision) into confirmed-ready rooms (feet) and a design plan."""
 from __future__ import annotations
 
+import re
+
 import math
 
 from ..design.geometry import add_openings
@@ -70,7 +72,9 @@ def rooms_from_raw(ext: dict, units: str | None = None, scale: float | None = No
                       "note": "Label found but no closed room around it – place it in the 2D editor"
                               + ("" if ps else "; size not written (10' × 10' shown)")})
     preview = [[round(a * k, 2), round(b * k, 2), round(c * k, 2), round(d * k, 2)] for a, b, c, d in ext.get("preview_raw", [])]
-    tidy([r for r in rooms if r["placed"]], tol=1.0)
+    if not ext.get("exact"):  # 1.22: the exact reader already placed every room – tidying would move written sizes
+        tidy([r for r in rooms if r["placed"]], tol=1.0)
+    notes += verify(rooms)
     titles = [{"text": t["text"], "x": t["x"] * k, "y": t["y"] * k} for t in ext.get("titles", [])]
     groups = group_floors(rooms, titles)
     if len(groups) > 1:
@@ -79,6 +83,34 @@ def rooms_from_raw(ext: dict, units: str | None = None, scale: float | None = No
     if nd is not None:
         notes.append(f"North arrow found on the drawing: {nd:g}° (clockwise from up) – the dial is set to it, please check.")
     return {"rooms": rooms, "preview": preview, "notes": notes, "to_ft": k, "groups": groups, "north_deg": nd}
+
+
+def verify(rooms: list[dict]) -> list[str]:
+    """1.22 check list: every size written on the drawing against the size now in the plan. Nothing is silent."""
+    from .regions import parse_size as ps_
+    bad, ok = [], 0
+    for r in rooms:
+        s = r.get("stated")
+        if not s:
+            continue
+        nums = re.findall(r"\d+(?:\.\d+)?", s)
+        if len(nums) < 2:
+            continue
+        a, b = float(nums[0]), float(nums[1])
+        if abs(r["w"] - a) + abs(r["d"] - b) <= 0.6 or abs(r["w"] - b) + abs(r["d"] - a) <= 0.6:
+            ok += 1
+        else:
+            bad.append(f"{r['name']}: written {s}, plan {r['w']:g} × {r['d']:g}")
+    out = []
+    if ok:
+        out.append(f"Check: {ok} written room size(s) are kept exactly as on the drawing.")
+    for m in bad:
+        out.append("Size differs – " + m)
+    nos = [r["name"] for r in rooms if r.get("placed") and not r.get("stated")]
+    if nos:
+        out.append("No size is written for: " + ", ".join(nos) + " – measured from the drawing, please confirm.")
+    del ps_
+    return out
 
 
 FLOOR_WORDS = [("stilt", "Stilt / Parking"), ("ground", "Ground Floor"), ("first", "First Floor"),
@@ -207,6 +239,7 @@ def rooms_from_vision(v: dict, img_w: float, img_h: float) -> dict:
         groups.append({"id": gi, "name": name, "rooms": sum(1 for r in rooms if r["group"] == gi)})
     if len(groups) > 1:
         notes.append(f"{len(groups)} floor plans found on the picture – confirm which floor each one is.")
+    notes += verify(rooms)
     for n in v.get("notes") or []:
         notes.append(f"AI note: {str(n)[:160]}")
     return {"rooms": rooms, "preview": [], "notes": notes, "to_ft": scale, "groups": groups,

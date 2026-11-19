@@ -169,6 +169,7 @@ def build_requirements(d: dict) -> dict:
             "corner": bool(d.get("corner")), "side_road_width_m": d.get("side_road_width_m"),
             "floor_height_ft": float(d.get("floor_height_ft") or 10), "stilt": bool(d.get("stilt")),
             "staircase": len(levels) > 1, "levels": levels, "floor_specs": d["floor_specs"],
+            "room_sizes": d.get("room_sizes") or {},
             "assumptions": list(d.get("_notes", [])) + ["Toilets per house: 1 BHK = 1 common, 2 BHK = 1 attached + 1 common, "
                                                         "3 BHK = 2 attached + 1 common – change them in the table."],
         }
@@ -234,6 +235,7 @@ def build_requirements(d: dict) -> dict:
         "corner": bool(d.get("corner")), "side_road_width_m": d.get("side_road_width_m"),
         "floor_height_ft": float(d.get("floor_height_ft") or 10), "stilt": stilt,
         "staircase": n > 1 or bool(d.get("staircase", True)), "levels": levels,
+        "room_sizes": d.get("room_sizes") or {},
         "assumptions": list(d.get("_notes", [])),
     }
 

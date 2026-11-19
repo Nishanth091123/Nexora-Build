@@ -94,7 +94,7 @@ def _cluster(values: list[float], tol: float) -> list[float]:
 
 
 def find_regions(segments: list[tuple[float, float, float, float]], labels: list[dict],
-                 max_lines: int = 450) -> tuple[list[dict], list[dict]]:
+                 max_lines: int = 450, all_regions: list | None = None) -> tuple[list[dict], list[dict]]:
     """segments: (x1,y1,x2,y2) in drawing units (y up). labels: {"text","x","y"}.
     Returns (rooms, unplaced_labels). Each room: {label, x, y, w, d, cells} in drawing units."""
     axis = []
@@ -177,7 +177,7 @@ def find_regions(segments: list[tuple[float, float, float, float]], labels: list
             area = sum((xs[i + 1] - xs[i]) * (ys[j + 1] - ys[j]) for i in range(mnx, mxx + 1) for j in range(mny, mxy + 1)
                        if region[i][j] == rid)
             bb_area = (xs[mxx + 1] - xs[mnx]) * (ys[mxy + 1] - ys[mny])
-            regions.append({"x": xs[mnx], "y": ys[mny], "w": xs[mxx + 1] - xs[mnx], "d": ys[mxy + 1] - ys[mny],
+            regions.append({"id": rid, "x": xs[mnx], "y": ys[mny], "w": xs[mxx + 1] - xs[mnx], "d": ys[mxy + 1] - ys[mny],
                             "outside": touches, "fill": area / bb_area if bb_area else 0})
     rooms, unplaced = [], []
     used: dict[int, dict] = {}
@@ -192,13 +192,15 @@ def find_regions(segments: list[tuple[float, float, float, float]], labels: list
         if rg["outside"] and rg["w"] * rg["d"] > ext * ext * 0.5:
             unplaced.append(lb)
             continue
-        if rid in used:  # second label in the same area (e.g. size text) – attach to the first
-            used[rid].setdefault("extra", []).append(lb["text"])
-            continue
         room = {"label": lb["text"], "x": rg["x"], "y": rg["y"], "w": rg["w"], "d": rg["d"],
-                "rectangular": rg["fill"] > 0.92, "region": rid}
-        used[rid] = room
+                "rectangular": rg["fill"] > 0.92, "region": rid, "lx": lb["x"], "ly": lb["y"]}
+        if rid in used:  # 1.22: a second ROOM name in the same area (open plan: hall + dining) is its own room, never an "extra"
+            used[rid]["shared"] = room["shared"] = True
+        else:
+            used[rid] = room
         rooms.append(room)
+    if all_regions is not None:
+        all_regions.extend(regions)
     return rooms, unplaced
 
 
@@ -227,7 +229,9 @@ def tidy(rooms: list[dict], tol: float = 1.0) -> list[dict]:
                 newpos[(e[1], e[2])] = v
         for k, r in enumerate(rooms):
             a, b = newpos[(k, 0)], newpos[(k, 1)]
-            if b - a >= 2:
+            if r.get("stated"):  # 1.22: a size WRITTEN on the drawing is never changed by tidying – only the position moves
+                r[p] = a
+            elif b - a >= 2:
                 r[p], r[s] = a, round((b - a) * 4) / 4
     return rooms
 

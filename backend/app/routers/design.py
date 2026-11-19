@@ -53,7 +53,8 @@ class ParseIn(BaseModel):
 def parse_request(project_id: int, body: ParseIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     p = require_any(db, user, project_id, ("design",))
     defaults = project_defaults(p) | {k: v for k, v in (body.defaults or {}).items() if v not in (None, "")}
-    return parser.parse(body.text, defaults)
+    from ..design import understand  # 1.22: Tamil / English / Tanglish, any order; AI reads first, keywords are the fallback
+    return understand.understand(body.text, defaults)
 
 
 class ReqIn(BaseModel):

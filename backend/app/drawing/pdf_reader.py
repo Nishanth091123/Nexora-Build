@@ -11,6 +11,7 @@ from __future__ import annotations
 import io
 import re
 
+from .exact import estimate_scale, overlaps, pair_sizes, refine
 from .regions import find_north, find_regions, parse_size, room_type, to_ft
 
 PT_MM = 25.4 / 72
@@ -103,7 +104,29 @@ def _texts(data: bytes, pdf, page_no: int) -> list[dict]:
             pg = doc.pages[page_no]
             H = float(pg.height)
             words = pg.extract_words(keep_blank_chars=False, use_text_flow=False, x_tolerance=2, y_tolerance=2,
-                                     extra_attrs=["size"])
+                                     extra_attrs=["size", "upright"])
+            # 1.22: rotated words (side-setback notes, vertical labels) used to be merged into the horizontal text on the
+            # same line and moved the size texts → they are rebuilt on their own (a column of letters = one word)
+            rot = [w for w in words if not w.get("upright", True)]
+            words = [w for w in words if w.get("upright", True)]
+            rot.sort(key=lambda w: (round(w["x0"] / 3), w["top"]))
+            col: list[dict] = []
+
+            def flush_rot():
+                if not col:
+                    return
+                s = "".join(w["text"] for w in col)
+                from .regions import room_type as _rt
+                if not _rt(s) and _rt(s[::-1]):
+                    s = s[::-1]  # text read bottom → top
+                out.append({"text": s, "x": sum((w["x0"] + w["x1"]) / 2 for w in col) / len(col),
+                            "y": H - (min(w["top"] for w in col) + max(w["bottom"] for w in col)) / 2, "rotated": True})
+            for w in rot:
+                if col and (abs(w["x0"] - col[-1]["x0"]) > 3 or w["top"] - col[-1]["bottom"] > 8):
+                    flush_rot()
+                    col = []
+                col.append(w)
+            flush_rot()
             words.sort(key=lambda w: (round(w["top"]), w["x0"]))
             line: list[dict] = []
 
@@ -210,18 +233,28 @@ def parse(data: bytes, page_no: int | None = None) -> dict:
         else:
             why = "No readable room names / lines in this PDF (scanned or text drawn as lines)."
         return {"method": "pdf", "vector_ok": False, "info": info, "reason": why}
-    rooms_raw, unplaced = find_regions(segs, labels)
+    all_regs: list = []
+    rooms_raw, unplaced = find_regions(segs, labels, all_regions=all_regs)
     if segs:  # labels outside all line work are legends / schedules, not rooms
         sx0 = min(min(q[0], q[2]) for q in segs); sx1 = max(max(q[0], q[2]) for q in segs)
         sy0 = min(min(q[1], q[3]) for q in segs); sy1 = max(max(q[1], q[3]) for q in segs)
         unplaced = [u for u in unplaced if sx0 <= u["x"] <= sx1 and sy0 <= u["y"] <= sy1]
-    # separate size texts
-    for st in texts:
-        if parse_size(st["text"]) and not room_type(st["text"]):
-            for r in rooms_raw:
-                if r["x"] <= st["x"] <= r["x"] + r["w"] and r["y"] <= st["y"] <= r["y"] + r["d"]:
-                    r.setdefault("extra", []).append(st["text"])
-                    break
+    # 1.22: every size text belongs to exactly one room name (by position), not to "the region it falls in"
+    if rooms_raw:
+        ext_d = max(max(q[0], q[2]) for q in segs) - min(min(q[0], q[2]) for q in segs)
+        idx_of = {id(lb): i for i, lb in enumerate(labels)}
+        lab_by_room = [next((lb for lb in labels if lb["x"] == r["lx"] and lb["y"] == r["ly"]), None) for r in rooms_raw]
+        pairs = pair_sizes([lb for lb in lab_by_room if lb], texts, ext_d)
+        j = 0
+        for r, lb in zip(rooms_raw, lab_by_room):
+            if not lb:
+                continue
+            st = pairs.get(j)
+            j += 1
+            if st:
+                r["extra"] = [st["text"]]
+                r["size_xy"] = (st["x"], st["y"])
+        del idx_of
     # ---- scale
     questions, scale, scale_src = [], None, ""
     for t in texts:
@@ -231,6 +264,10 @@ def parse(data: bytes, page_no: int | None = None) -> dict:
             scale = PT_MM * ratio / 304.8
             scale_src = f"scale note 1:{int(ratio)}"
             break
+    if not scale:
+        scale = estimate_scale(rooms_raw)
+        if scale:
+            scale_src = "room sizes written on the drawing"
     if not scale:
         ratios = []
         for r in rooms_raw:
@@ -251,6 +288,12 @@ def parse(data: bytes, page_no: int | None = None) -> dict:
             scale_src = f"room sizes written on the drawing ({len(ratios)} rooms)"
     if not scale:
         questions.append("The drawing scale is unknown – enter one known length (e.g. the overall building width in feet).")
+    warnings: list[str] = []
+    exact_done = False
+    if scale and rooms_raw:
+        exact_done = refine(rooms_raw, all_regs, scale, warnings, segs)
+        if exact_done:
+            warnings += overlaps(rooms_raw, scale)
     ox = min([r["x"] for r in rooms_raw], default=0)
     oy = min([r["y"] for r in rooms_raw], default=0)
     titles = [{"text": t["text"], "x": t["x"] - ox, "y": t["y"] - oy} for t in texts
@@ -263,7 +306,7 @@ def parse(data: bytes, page_no: int | None = None) -> dict:
         "unplaced": [{"text": u["text"], "type": u.get("type")} for u in unplaced],
         "texts": [t["text"] for t in texts][:200], "titles": titles,
         "preview_raw": [[a - ox, b - oy, c - ox, d - oy] for a, b, c, d in preview],
-        "questions": questions, "warnings": [], "north_deg": find_north(texts, segs),
+        "questions": questions, "warnings": warnings, "north_deg": find_north(texts, segs), "exact": exact_done,
         "stats": {"lines": len(segs), "texts": len(texts), "labels": len(labels)},
     }
 

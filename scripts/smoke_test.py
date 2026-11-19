@@ -97,7 +97,7 @@ except httpx.ConnectError:
         sys.exit("[ERROR] Backend did not start in 2 minutes.")
 check("health", r.status_code == 200 and r.json().get("status") == "ok", r.text)
 _v = tuple(int(x) for x in (r.json().get("version", "0.0").split("-")[0].split(".") + ["0", "0"])[:3] if x.isdigit())
-check("backend is the 1.21 version (not an old one still running)", _v >= (1, 21, 0), r.text)
+check("backend is the 1.22 version (not an old one still running)", _v >= (1, 22, 0), r.text)
 
 login = input("Owner username [nishanth_s]: ").strip() or "nishanth_s"
 pw = getpass.getpass("Owner password (hidden): ")
@@ -890,6 +890,22 @@ check("1.20 AI Render set-up readable", r.status_code == 200 and "cloudflare" in
 # 1.21 Plan view: the AI polish of a furnished plan is a third kind ("plan"); a wrong kind is refused before anything runs
 r = c.post(f"/api/projects/{pid}/ai-render", json={"image": "AAAA", "kind": "poster"})
 check("1.21 AI Render knows the 'plan' kind (furnished plan polish)", r.status_code == 400 and "plan" in r.text, r.text[:200])
+# 1.22 understanding: Tamil / Tanglish / English in any order; nothing the person asked is dropped silently
+r = c.post(f"/api/projects/{pid}/design/parse", json={"text": "30x40 north facing 2BHK ground floor only, car parking venum, 11 ft road, kitchen 9x10, staircase veliya"})
+pj = r.json() if r.status_code == 200 else {}
+check("1.22 request understood with a checklist (AI or keyword fallback)", r.status_code == 200 and "checklist" in pj and any("30 × 40" in x for x in pj.get("understood", [])), r.text[:300])
+if globals().get("pdfp"):
+    import re as _re
+    r = c.post(f"/api/projects/{pid}/drawings/upload", files={"file": ("smoke_exact.pdf", pdfp, "application/pdf")})
+    ra = (r.json() or {}).get("result", {}) if r.status_code == 200 else {}
+    bad_ = []
+    for rm in ra.get("rooms", []):
+        nums = _re.findall(r"\d+(?:\.\d+)?", rm.get("stated") or "")
+        if len(nums) >= 2:
+            a_, b_ = float(nums[0]), float(nums[1])
+            if not (abs(rm["w"] - a_) + abs(rm["d"] - b_) <= 0.6 or abs(rm["w"] - b_) + abs(rm["d"] - a_) <= 0.6):
+                bad_.append((rm["name"], rm["stated"], rm["w"], rm["d"]))
+    check("1.22 every size written on the drawing is kept exactly", r.status_code == 200 and not bad_, str(bad_)[:300])
 if not rs20.get("cloudflare"):
     print("       (AI Render: CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_AI_TOKEN not in .env – add them to use AI Render)")
 elif FULL:
@@ -960,4 +976,4 @@ if fail:
     print("Failed:", ", ".join(fail), "\nSend this output to Claude.")
     sys.exit(1)
 else:
-    print("NEXORA 1.21 API: ALL GOOD")
+    print("NEXORA 1.22 API: ALL GOOD")

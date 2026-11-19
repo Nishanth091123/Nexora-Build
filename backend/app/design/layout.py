@@ -70,6 +70,21 @@ class Cell:
 
 
 def level_items(lv: dict, multi: bool) -> tuple[list[Cell], list[Cell], Cell | None]:
+    """1.22: sizes the user wrote (room_sizes) replace the default desired size of that room."""
+    front, rest, stair = _level_items(lv, multi)
+    sizes = lv.get("_sizes") or {}
+    if sizes:
+        tw = SIZES["toilet"][0]
+        for c in front + rest + ([stair] if stair else []):
+            s = sizes.get(c.kind)
+            if s and len(s) == 2 and s[0] > 0 and s[1] > 0:
+                c.dw, c.dd = float(s[0]) + (tw if c.attached else 0), float(s[1])
+                c.mw, c.md = min(c.mw, c.dw), min(c.md, c.dd)
+                c.wanted = True
+    return front, rest, stair
+
+
+def _level_items(lv: dict, multi: bool) -> tuple[list[Cell], list[Cell], Cell | None]:
     """Front items, other items (in priority order) and the staircase cell."""
     stair = Cell("stair") if multi else None
     if lv.get("stilt"):
@@ -688,6 +703,8 @@ def generate(req: dict, _probe: bool = False) -> dict:
         q.append("Please confirm the rooms on each floor.")
     if q:
         raise LayoutError(q)
+    for lv_ in levels:
+        lv_["_sizes"] = req.get("room_sizes") or {}
     n = len(levels)
     shape = req.get("plot_shape") if isinstance(req.get("plot_shape"), dict) else None
     poly = pinfo = None
@@ -777,7 +794,32 @@ def generate(req: dict, _probe: bool = False) -> dict:
         "requirements": {**req, "levels": levels},
     }
     from .geometry import add_openings
-    return add_openings(plan)
+    out = add_openings(plan)
+    out["notes"] = list(out.get("notes") or []) + size_report(req, out_levels)
+    return out
+
+
+TYPE_OF = {"master": ("Master Bedroom",), "bedroom": ("Bedroom",), "hall": ("Living / Hall",), "lounge": ("Family Lounge",),
+           "kitchen": ("Kitchen",), "dining": ("Dining",), "common_toilet": ("Common Toilet",), "pooja": ("Pooja",),
+           "stair": ("Staircase",), "parking_car": ("Car Parking",), "parking_bike": ("Bike Parking",)}
+
+
+def size_report(req: dict, out_levels: list[dict]) -> list[str]:
+    """1.22: sizes the user asked for against what the generator could give. Nothing is silent."""
+    wanted = req.get("room_sizes") or {}
+    msgs = []
+    for kind, (w, d) in ((k, v) for k, v in wanted.items() if isinstance(v, (list, tuple)) and len(v) == 2):
+        names = TYPE_OF.get(kind, ())
+        got = [r for lv in out_levels[:1] for r in lv["rooms"] if r.get("name") in names]
+        if not got:
+            continue
+        r = got[0]
+        if abs(r["w"] - w) + abs(r["d"] - d) <= 0.6 or abs(r["w"] - d) + abs(r["d"] - w) <= 0.6:
+            msgs.append(f"{names[0]} {w:g}' × {d:g}' – kept as asked.")
+        else:
+            msgs.append(f"{names[0]}: you asked {w:g}' × {d:g}', the generated plan has {r['w']:g}' × {r['d']:g}' "
+                        "(the rooms had to share the plot width). Edit it in the 2D editor, or upload your drawing to keep exact sizes.")
+    return msgs
 
 
 def _clean_levels(levels: list[dict]) -> list[dict]:
