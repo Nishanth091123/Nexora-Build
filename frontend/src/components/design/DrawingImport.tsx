@@ -13,7 +13,8 @@ type Analysis = {
   id: number; file_id: number; file_name: string; method: string; model: string; status: string; design_id: number | null;
   created_at: string; rooms: number;
   result?: { rooms: XRoom[]; groups?: { id: number; name: string; rooms: number }[]; notes: string[]; preview: number[][];
-    to_ft: number | null; north_deg?: number | null; plot?: { w: number; d: number } | null };
+    to_ft: number | null; north_deg?: number | null; plot?: { w: number; d: number } | null;
+    sheet?: { setbacks?: { front?: number; rear?: number; left?: number; right?: number }; road_ft?: number } | null };
   questions?: string[]; warnings?: string[]; info?: any;
 };
 const FLOOR_ORDER = ["Stilt / Parking", "Ground Floor", "First Floor", "Second Floor", "Third Floor"];
@@ -69,6 +70,10 @@ export default function DrawingImport({ projectId, onSaved, designs = [] }: {
     setGroupNames(Object.fromEntries((a.result?.groups || [{ id: 0, name: "Ground Floor", rooms: rs.length }]).map((g) => [g.id, g.name])));
     if (a.result?.north_deg != null) setOpts((o: any) => ({ ...o, north_deg: Number(a.result!.north_deg) || 0 }));
     if (a.result?.plot) setOpts((o: any) => ({ ...o, plot_w_ft: a.result!.plot!.w, plot_d_ft: a.result!.plot!.d }));
+    // 1.23: what is written on the sheet (setbacks, road) fills the boxes – nothing is guessed
+    const sh = a.result?.sheet;
+    if (sh?.setbacks) setOpts((o: any) => ({ ...o, front_gap_ft: sh.setbacks!.front ?? o.front_gap_ft, left_gap_ft: sh.setbacks!.left ?? o.left_gap_ft }));
+    if (sh?.road_ft) setOpts((o: any) => ({ ...o, road_ft: sh.road_ft }));
     setOrig(null);
     if (a.file_id && !/\.dxf$/i.test(a.file_name)) fileObjectUrl(`/api/files/${a.file_id}/download`).then(setOrig).catch(() => {});
   };

@@ -151,7 +151,9 @@ def refine(rooms: list[dict], regions: list[dict], k: float, notes: list[str], s
                 ww, wd = a, b
             else:
                 ww, wd = b, a
-            clean = (not r.get("shared") and r.get("rectangular", True)
+            # 1.23: a closed region whose box already matches the written size IS the room – even when a door swing or a
+            # fixture line makes its outline "not rectangular" (the text position is not the room centre)
+            clean = (not r.get("shared")
                      and abs(mw - ww) <= max(0.75, 0.12 * ww) and abs(md - wd) <= max(0.75, 0.12 * wd))
             if clean:
                 cx, cy = r["x"] + r["w"] / 2, r["y"] + r["d"] / 2
@@ -163,6 +165,25 @@ def refine(rooms: list[dict], regions: list[dict], k: float, notes: list[str], s
                 if ww / k <= r["w"] and wd / k <= r["d"]:
                     cx = min(max(cx, r["x"] + ww / k / 2), r["x"] + r["w"] - ww / k / 2)
                     cy = min(max(cy, r["y"] + wd / k / 2), r["y"] + r["d"] - wd / k / 2)
+                    if r.get("shared"):
+                        # 1.23: open plan – sit the room in the corner of the shared area nearest its name, clear of
+                        # the closed rooms (toilets, bedrooms …) already placed from their own walls
+                        hw, hd = ww / k / 2, wd / k / 2
+                        cands = [(cx, cy)] + [(r["x"] + hw if a == 0 else r["x"] + r["w"] - hw,
+                                               r["y"] + hd if b == 0 else r["y"] + r["d"] - hd) for a in (0, 1) for b in (0, 1)]
+
+                        def _clash(c):
+                            for o in rooms:
+                                if o is r or not o.get("rigid"):
+                                    continue
+                                ox = min(c[0] + hw, o["x"] + o["w"]) - max(c[0] - hw, o["x"])
+                                oy = min(c[1] + hd, o["y"] + o["d"]) - max(c[1] - hd, o["y"])
+                                if ox > 0.02 * hw * 2 and oy > 0.02 * hd * 2:
+                                    return True
+                            return False
+                        ok = [c for c in cands if not _clash(c)]
+                        if ok:
+                            cx, cy = min(ok, key=lambda c: (c[0] - cx) ** 2 + (c[1] - cy) ** 2)
                 moved.append(r)
                 r["anchored"] = True
             if not clean:

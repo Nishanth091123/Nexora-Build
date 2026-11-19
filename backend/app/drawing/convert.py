@@ -82,7 +82,14 @@ def rooms_from_raw(ext: dict, units: str | None = None, scale: float | None = No
     nd = ext.get("north_deg")
     if nd is not None:
         notes.append(f"North arrow found on the drawing: {nd:g}° (clockwise from up) – the dial is set to it, please check.")
-    return {"rooms": rooms, "preview": preview, "notes": notes, "to_ft": k, "groups": groups, "north_deg": nd}
+    from .sheet import read_sheet
+    sheet = read_sheet(ext.get("texts", []))
+    if sheet.get("plot"):
+        notes.append(f"Plot {sheet['plot']['w']:g} × {sheet['plot']['d']:g} ft is written on the drawing – used (not guessed).")
+    if sheet.get("setbacks"):
+        notes.append("Setbacks written on the drawing: " + ", ".join(f"{k} {v:g} ft" for k, v in sheet["setbacks"].items()) + ".")
+    return {"rooms": rooms, "preview": preview, "notes": notes, "to_ft": k, "groups": groups, "north_deg": nd,
+            "plot": sheet.get("plot"), "sheet": sheet}
 
 
 def verify(rooms: list[dict]) -> list[str]:
@@ -287,6 +294,7 @@ def build_plan(levels_in: list[dict], opts: dict) -> dict:
     north = (north - 90 * q) % 360  # the drawing turned counter-clockwise → north turns with it
     comp = compass_from_north(north)
     levels, W, D = [], 0.0, 0.0
+    conn_notes: list[str] = []
     for li, lv in enumerate(levels_in):
         rooms = [dict(r) for r in lv.get("rooms", []) if float(r.get("w", 0)) >= 2 and float(r.get("d", 0)) >= 2]
         if not rooms:
@@ -294,6 +302,10 @@ def build_plan(levels_in: list[dict], opts: dict) -> dict:
         for r in rooms:
             for k in ("x", "y", "w", "d"):
                 r[k] = float(r.get(k) or 0)
+        if opts.get("settle", True) and len(rooms) >= 3:  # 1.23: touching rooms + passages, sizes untouched
+            from . import connect
+            tag = f"{lv.get('name') or 'Floor ' + str(li + 1)}: "
+            conn_notes += [tag + n for n in connect.settle(rooms)]
         minx, miny = min(r["x"] for r in rooms), min(r["y"] for r in rooms)
         for r in rooms:
             r["x"], r["y"] = _r(r["x"] - minx), _r(r["y"] - miny)
@@ -316,7 +328,7 @@ def build_plan(levels_in: list[dict], opts: dict) -> dict:
     plot_w = float(opts.get("plot_w_ft") or 0)
     plot_d = float(opts.get("plot_d_ft") or 0)
     road = float(opts.get("road_width_m") or 0)
-    warnings, notes = [], []
+    warnings, notes = [], list(conn_notes)
     sb = None
     if plot_w and plot_d and road:
         try:

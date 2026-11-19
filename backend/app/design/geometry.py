@@ -184,10 +184,14 @@ def place(w: dict, width: float, prefer_end: bool = False) -> dict:
 
 # 1.17: who may open into whom (priority order). A bedroom NEVER opens into another bedroom.
 COMMON = ["passage", "lounge", "hall", "dining", "stair"]
+RELAX_KITCHEN = False  # 1.23: set by layout.generate() only when no plan without a kitchen walk-through fits
 ACCESS = {
-    "bedroom": COMMON + ["kitchen"],
+    # 1.23 (Nishanth): a bedroom opens from the hall / dining (hall + dining combined = the same space), then lounge /
+    # passage / stair – NEVER through the kitchen
+    "bedroom": ["hall", "dining", "lounge", "passage", "stair"],
     "toilet": COMMON,  # attached toilets first try their own bedroom / dress (below)
-    "common_toilet": ["passage", "dining", "hall", "lounge", "stair", "utility", "kitchen"],
+    # 1.23: a common toilet next to the hall opens from the hall itself; passage only when it is not next to the hall
+    "common_toilet": ["hall", "dining", "lounge", "passage", "stair", "utility"],
     "kitchen": ["dining", "hall", "lounge", "passage", "stair", "utility"],
     "dining": ["hall", "lounge", "passage", "kitchen", "stair"],
     "hall": ["dining", "lounge", "passage", "stair"],
@@ -207,6 +211,9 @@ KIND = {"bedroom": ("door", 3.0), "toilet": ("toilet_door", 2.5), "common_toilet
         "passage": ("opening", 3.0), "stair": ("opening", 3.0), "utility": ("door", 2.5), "store": ("door", 2.5),
         "pooja": ("pooja_door", 2.5), "terrace": ("door", 3.0), "balcony": ("door", 3.0), "sitout": ("door", 3.0)}
 NO_ACCESS_NEEDED = {"dress", "parking"}
+PASS = {"hall", "dining", "lounge", "passage", "stair", "parking", "sitout"}
+DEPENDENT = {"kitchen": {"utility", "store", "pooja"}, "bedroom": {"dress", "toilet", "balcony", "terrace"},
+             "dress": {"bedroom", "toilet"}, "utility": {"store"}, "toilet": set()}
 # rooms are opened up in this order: circulation first, then bedrooms, … attached toilets last
 ORDER = {"hall": 0, "lounge": 0, "dining": 0, "passage": 0, "stair": 0, "kitchen": 1, "bedroom": 2, "utility": 3,
          "store": 3, "pooja": 3, "common_toilet": 4, "terrace": 4, "balcony": 4, "sitout": 4, "toilet": 5}
@@ -254,12 +261,19 @@ def reachable(lv: dict, ops: list[dict], ws: list[dict] | None = None, level_ind
         roots |= {r["id"] for r in rooms if r["type"] == "stair"}
     if level_index == 0 and not lv.get("stilt"):
         roots |= {r["id"] for r in rooms if r["type"] == "sitout"}  # ground sit-out is outside
+    # 1.23: you walk THROUGH hall / dining / lounge / passage / stair only. A bedroom, kitchen or toilet is a dead end
+    # (its own dress / attached toilet / balcony, or the kitchen's utility / store, belong to it).
+    passing = set(PASS) | ({"kitchen"} if RELAX_KITCHEN else set())
     seen, todo = set(roots), list(roots)
     while todo:
         x = todo.pop()
+        tx = by[x]["type"]
         for y in adj.get(x, ()):
-            if y not in seen:
-                seen.add(y); todo.append(y)
+            if y in seen:
+                continue
+            if x not in roots and tx not in passing and by[y]["type"] not in DEPENDENT.get(tx, ()):
+                continue
+            seen.add(y); todo.append(y)
     need = {r["id"] for r in rooms if r["type"] not in NO_ACCESS_NEEDED}
     return seen, need - seen
 
@@ -316,6 +330,20 @@ def level_openings(lv: dict, level_index: int, building_d: float) -> tuple[list[
                          ({by_id.get(w["a"], {}).get("type"), by_id.get(w["b"], {}).get("type")} & {"parking", "sitout"})]
             if front and door_on_wall(rid, "main_door", 3.5, 7, [max(front, key=seg_len)]):
                 break
+    # 1.23 (Nishanth): car parking connects to the main entrance – a door from the parking into the hall / sit-out
+    # (the room that holds the main door), so you can walk from the car straight to the entrance
+    if not unit_labels and not lv.get("stilt"):
+        entry_ids = {o["room"] for o in ops if o["type"] == "main_door"}
+        for pk in [r for r in rooms if r["type"] == "parking"]:
+            for t in ("hall", "sitout", "lounge", "dining", "passage", "stair"):
+                cands = [w for x in rooms if x["type"] == t and (x["id"] in entry_ids or t != "hall") and x.get("unit") == pk.get("unit")
+                         for w in _wall_between(ws, pk["id"], x["id"])
+                         if w["kind"] and seg_len(w) >= 3.0]
+                if cands and door_on_wall(pk["id"], "opening" if t == "sitout" else "door", 3.0, 7, cands):
+                    break
+            else:
+                continue
+            break  # one connection from the car porch is enough
     # attached toilets → their own bedroom (or its dress area)
     for r in rooms:
         if r["type"] == "toilet" and r.get("parent"):
@@ -331,17 +359,23 @@ def level_openings(lv: dict, level_index: int, building_d: float) -> tuple[list[
         if not missing:
             break
         progress = False
-        for r in sorted((by_id[i] for i in missing), key=lambda q: (ORDER.get(q["type"], 3), q["id"])):
+        for r in sorted((by_id[i] for i in missing if not by_id[i].get("parent")), key=lambda q: (ORDER.get(q["type"], 3), q["id"])):
             allowed = ACCESS.get(r["type"], COMMON)
+            family = [r] + [x for x in rooms if x.get("parent") == r["id"] and x["type"] == "dress"]
+            if RELAX_KITCHEN and r["type"] in ("bedroom", "common_toilet"):
+                allowed = list(allowed) + ["kitchen"]  # 1.23 last resort, only when the plot is too tight for a passage
             for t in allowed:
-                cands = [w for x in rooms if x["id"] in seen and x["type"] == t and x.get("unit") == r.get("unit")
-                         for w in _wall_between(ws, r["id"], x["id"])
-                         if w["kind"] and w["kind"] != "parapet" and seg_len(w) >= 3.0]
                 kind, width = KIND.get(r["type"], ("door", 3.0))
                 if r["type"] in ("terrace", "balcony", "sitout") and t in ("bedroom", "lounge", "hall", "dining", "passage", "stair"):
                     kind = "door"
-                if cands and door_on_wall(r["id"], kind, width, 6 if kind == "pooja_door" else 7, cands, prefer_end=r["type"] == "bedroom"):
-                    progress = True
+                for m in family:  # a bedroom may also open through its own dress area
+                    cands = [w for x in rooms if x["id"] in seen and x["type"] == t and x.get("unit") == r.get("unit")
+                             for w in _wall_between(ws, m["id"], x["id"])
+                             if w["kind"] and w["kind"] != "parapet" and seg_len(w) >= 3.0]
+                    if cands and door_on_wall(m["id"], kind, width, 6 if kind == "pooja_door" else 7, cands, prefer_end=r["type"] == "bedroom"):
+                        progress = True
+                        break
+                if progress:
                     break
             if progress:
                 break  # re-check what is reachable now

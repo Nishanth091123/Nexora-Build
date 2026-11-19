@@ -97,7 +97,7 @@ except httpx.ConnectError:
         sys.exit("[ERROR] Backend did not start in 2 minutes.")
 check("health", r.status_code == 200 and r.json().get("status") == "ok", r.text)
 _v = tuple(int(x) for x in (r.json().get("version", "0.0").split("-")[0].split(".") + ["0", "0"])[:3] if x.isdigit())
-check("backend is the 1.22 version (not an old one still running)", _v >= (1, 22, 0), r.text)
+check("backend is the 1.23 version (not an old one still running)", _v >= (1, 23, 0), r.text)
 
 login = input("Owner username [nishanth_s]: ").strip() or "nishanth_s"
 pw = getpass.getpass("Owner password (hidden): ")
@@ -906,6 +906,32 @@ if globals().get("pdfp"):
             if not (abs(rm["w"] - a_) + abs(rm["d"] - b_) <= 0.6 or abs(rm["w"] - b_) + abs(rm["d"] - a_) <= 0.6):
                 bad_.append((rm["name"], rm["stated"], rm["w"], rm["d"]))
     check("1.22 every size written on the drawing is kept exactly", r.status_code == 200 and not bad_, str(bad_)[:300])
+
+# 1.23 connected plan: every room is reachable only through hall / dining / passage (never through a kitchen or a toilet),
+# no bedroom opens into the kitchen, the car parking joins the entrance, and nothing the plot cannot hold is dropped silently
+r = c.post(f"/api/projects/{pid}/design/parse", json={"text": "30x40 north facing 2BHK, G only, 1 attached toilet, 1 common toilet, car parking front, 11 ft road"})
+rq23 = (r.json() or {}).get("requirements") if r.status_code == 200 else None
+r = c.post(f"/api/projects/{pid}/design/generate", json={"requirements": rq23}) if rq23 else r
+pl23 = r.json() if r.status_code == 200 else {}
+pl23 = pl23.get("plan", pl23)
+bad23 = []
+for lv in pl23.get("levels", []):
+    by = {x["id"]: x for x in lv["rooms"]}
+    for o in lv.get("openings", []):
+        if o["type"] in ("window", "vent") or by.get(o["room"], {}).get("type") != "bedroom":
+            continue
+        mx, my = (o["x1"] + o["x2"]) / 2, (o["y1"] + o["y2"]) / 2
+        horiz = abs(o["y1"] - o["y2"]) < 1e-6
+        for pt in (((mx, my - 0.8), (mx, my + 0.8)) if horiz else ((mx - 0.8, my), (mx + 0.8, my))):
+            for x in lv["rooms"]:
+                if x["x"] <= pt[0] <= x["x"] + x["w"] and x["y"] <= pt[1] <= x["y"] + x["d"] and x["type"] == "kitchen":
+                    bad23.append(by[o["room"]]["name"])
+unreach23 = [w for w in (pl23.get("warnings") or []) if "reached" in w or "no access" in w]
+note23 = " ".join(pl23.get("notes") or [])
+check("1.23 no bedroom opens through the kitchen (or it is reported with a ⚠)", r.status_code == 200 and (not bad23 or "⚠" in note23), str(bad23))
+check("1.23 every room is reachable from the main door", r.status_code == 200 and not unreach23, str(unreach23)[:300])
+check("1.23 car parking has a door to the entrance", any(any(o["type"] == "door" and any(x["id"] == o["room"] and x["type"] == "parking" for x in lv["rooms"])
+                                                          for o in lv.get("openings", [])) for lv in pl23.get("levels", [])[:1]), "no parking door")
 if not rs20.get("cloudflare"):
     print("       (AI Render: CLOUDFLARE_ACCOUNT_ID / CLOUDFLARE_AI_TOKEN not in .env – add them to use AI Render)")
 elif FULL:
@@ -976,4 +1002,4 @@ if fail:
     print("Failed:", ", ".join(fail), "\nSend this output to Claude.")
     sys.exit(1)
 else:
-    print("NEXORA 1.22 API: ALL GOOD")
+    print("NEXORA 1.23 API: ALL GOOD")

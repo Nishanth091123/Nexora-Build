@@ -297,7 +297,7 @@ def build_level(lv: dict, bw: float, bd: float, comp: dict, multi: bool, templat
         c = _unreached_count(carved, lv)
         if c < best_cost:
             best, best_cost = (carved, first[1]), c
-    sides = ([template["stair_side"]] if template and template.get("stair_side") in ("left", "right") else []) + ["left", "right"]
+    sides = ([template["stair_side"]] if template and template.get("stair_side") in ("left", "right") else []) + ["left", "right", "mid", "mid1", "mid2", "mid3"]
     global SPINE
     for sw in (3.5, 3.0):
         if best_cost == 0:
@@ -327,6 +327,31 @@ def build_level(lv: dict, bw: float, bd: float, comp: dict, multi: bool, templat
         raise LayoutError([f"{lv['name']}: {', '.join(names)} cannot be reached without walking through another room "
                            f"on this plot."])
     return best
+
+
+def _row_ok(cand: list, ws: list[float], d: float) -> bool:
+    """Every room in this row is wide enough (and every bedroom big enough) – same limits the layout enforces."""
+    for c, w in zip(cand, ws):
+        if c.mw - w > 0.6:
+            return False
+        if c.kind in ("bedroom", "master"):
+            net_w = w - (SIZES["toilet"][0] if c.attached else 0)
+            if net_w * d < (100 if c.kind == "master" else 80) - 0.5:
+                return False
+    return True
+
+
+def _mid_widths(cand: list, kk: int, px: float | None, bw: float, avail: float) -> list[float]:
+    """Widths of a row split by the middle passage: first row free; later rows keep the passage at the same x."""
+    if px is None:
+        ws = [r2(w) for w in size_row(cand, avail)]
+        ws[-1] = r2(avail - sum(ws[:-1]))
+        return ws
+    left = [r2(w) for w in size_row(cand[:kk], px)]
+    left[-1] = r2(px - sum(left[:-1]))
+    right = [r2(w) for w in size_row(cand[kk:], bw - px - SPINE)]
+    right[-1] = r2(bw - px - SPINE - sum(right[:-1]))
+    return left + right
 
 
 def _build_level(lv: dict, bw: float, bd: float, comp: dict, multi: bool, template: dict | None,
@@ -403,12 +428,45 @@ def _build_level(lv: dict, bw: float, bd: float, comp: dict, multi: bool, templa
         info = {"front_d": depths[0], "mid_d": depths[1] if len(depths) > 1 else 0, "stair_w": stair_w, "stair_side": None}
         pinned = template["stair_side"] if template else ("edge" if multi else None)
         counters: dict[str, int] = {}
+        mid_px = None  # 1.23: x of the middle passage – the same in every row so the passages join up
         for ri, (row, d) in enumerate(zip(rows, depths)):
             use = spine and ri >= 1 and not all(c.kind in ("terrace",) for c in row)
             avail = bw - SPINE if use else bw
             x0 = SPINE if use and spine == "left" else 0.0
-            if ri == 0 and spine:
+            mid_k, mid_ws = None, None  # 1.23: 'mid' spine – the passage sits between two groups of rooms, so rooms on BOTH sides open into it
+            if ri == 0 and spine in ("left", "right"):
                 row = _pin_edge(order_row(row, y, d, bw, bd, comp, pinned), spine)
+            elif use and spine.startswith("mid"):
+                forced = int(spine[3:]) if len(spine) > 3 else None
+                cands = order_candidates(row, y, d, avail, bd, comp, pinned, 14)
+                best_row, best_bad, mid_k, mid_ws = cands[0] if cands else row, None, 1, None
+                for cand in cands:
+                    ks = [forced] if (mid_px is None and forced and 0 < forced < len(cand)) else list(range(1, len(cand)))
+                    for kk in ks:
+                        ws_ = _mid_widths(cand, kk, mid_px, bw, avail)
+                        if not _row_ok(cand, ws_, d):
+                            continue
+                        trial = list(rooms)
+                        xx, cnt = 0.0, dict(counters)
+                        for i_, (c, w) in enumerate(zip(cand, ws_)):
+                            if i_ == kk:
+                                trial.append({"id": f"passage_s{ri}", "type": "passage", "name": "Passage",
+                                              "x": r2(xx), "y": r2(y), "w": SPINE, "d": r2(d)})
+                                xx += SPINE
+                            add_cell(trial, c, r2(xx), y, w, d, cnt)
+                            xx += w
+                        bad = _unreached_count(trial, lv)
+                        if best_bad is None or bad < best_bad:
+                            best_row, best_bad, mid_k, mid_ws = cand, bad, kk, ws_
+                        if bad == 0:
+                            break
+                    if best_bad == 0:
+                        break
+                row = best_row
+                if best_bad is None:
+                    mid_k, mid_ws = None, None
+                elif mid_px is None:
+                    mid_px = r2(sum(mid_ws[:mid_k]))
             elif ri == 0 or stilt:
                 row = order_row(row, y, d, avail, bd, comp, pinned)
             else:  # 1.17: among the good orders, take the one that leaves the fewest rooms without access
@@ -433,11 +491,17 @@ def _build_level(lv: dict, bw: float, bd: float, comp: dict, multi: bool, templa
                 row = best_row
             widths = [r2(w) for w in size_row(row, avail)]
             widths[-1] = r2(avail - sum(widths[:-1]))
+            if mid_k is not None and mid_ws:
+                widths = list(mid_ws)
             x = x0
-            if use:
+            if use and mid_k is None:
                 rooms.append({"id": f"passage_s{ri}", "type": "passage", "name": "Passage",
                               "x": 0.0 if spine == "left" else r2(bw - SPINE), "y": r2(y), "w": SPINE, "d": r2(d)})
-            for c, w in zip(row, widths):
+            for ci, (c, w) in enumerate(zip(row, widths)):
+                if mid_k is not None and ci == mid_k:
+                    rooms.append({"id": f"passage_s{ri}", "type": "passage", "name": "Passage",
+                                  "x": r2(x), "y": r2(y), "w": SPINE, "d": r2(d)})
+                    x += SPINE
                 if c.mw - w > 0.6:
                     raise LayoutError([f"{lv['name']}: {NAMES[c.kind]} would be only {w:.1f} ft wide (minimum "
                                        f"{c.mw:g} ft)."])
@@ -456,6 +520,7 @@ def _build_level(lv: dict, bw: float, bd: float, comp: dict, multi: bool, templa
     return place(spine)
 
 
+BENIGN_ONLY = False  # 1.23: fallback() may only merge dining / drop pooja / drop lounge
 SPINE = 3.5  # ft – width of the access passage (1.17)
 ENTRY = ("hall", "lounge", "stair", "passage", "dining")
 MIN_W = {"bedroom": 8.5, "kitchen": 6.5, "dining": 7.0, "toilet": 4.0, "common_toilet": 4.0, "pooja": 3.5,
@@ -649,10 +714,12 @@ def fallback(levels: list[dict], i: int, notes: list[str]) -> bool:
         lv["lounge"] = False
         notes.append(f"{lv['name']}: family lounge removed to fit – rooms open from the staircase lobby.")
         return True
+    if BENIGN_ONLY:  # 1.23: first try to keep every room the user asked for (toilets, bedrooms)
+        return False
     if int(lv.get("attached_toilets") or 0) >= 1 and int(lv.get("common_toilets") or 0) == 0 and beds >= 1:
         lv["attached_toilets"] = int(lv["attached_toilets"]) - 1
         lv["common_toilets"] = 1
-        notes.append(f"{lv['name']}: one attached toilet changed to a common toilet to fit.")
+        notes.append(f"⚠ {lv['name']}: one attached toilet changed to a common toilet to fit.")
         return True
     if beds > 0 and i + 1 < len(levels):
         up = levels[i + 1]
@@ -668,11 +735,11 @@ def fallback(levels: list[dict], i: int, notes: list[str]) -> bool:
             if (moved_att and (lv.get("hall") or lv.get("kitchen"))
                     and int(lv.get("attached_toilets") or 0) + int(lv.get("common_toilets") or 0) == 0):
                 lv["common_toilets"] = 1
-                notes.append(f"{lv['name']}: a common toilet kept for the living area.")
+                notes.append(f"⚠ {lv['name']}: a common toilet kept for the living area.")
             if not moved_att and int(up.get("common_toilets") or 0) == 0:
                 up["common_toilets"] = 1
                 notes.append(f"{up['name']}: a common toilet added for the moved bedroom.")
-            notes.append(f"Moved 1 bedroom{' with toilet' if moved_att else ''} from {lv['name']} to {up['name']} to fit.")
+            notes.append(f"⚠ Moved 1 bedroom{' with toilet' if moved_att else ''} from {lv['name']} to {up['name']} to fit.")
             return True
     att = int(lv.get("attached_toilets") or 0)
     common = int(lv.get("common_toilets") or 0)
@@ -680,9 +747,9 @@ def fallback(levels: list[dict], i: int, notes: list[str]) -> bool:
         lv["attached_toilets"] = att - 1
         if common == 0:
             lv["common_toilets"] = 1
-            notes.append(f"{lv['name']}: one attached toilet changed to a common toilet to fit.")
+            notes.append(f"⚠ {lv['name']}: one attached toilet changed to a common toilet to fit.")
         else:
-            notes.append(f"{lv['name']}: one attached toilet removed – the common toilet serves this bedroom.")
+            notes.append(f"⚠ {lv['name']}: one attached toilet removed – the plot is too tight to connect every room with it. To keep it: widen the plot, drop the car parking, or make it G+1.")
         return True
     if common > 1:
         lv["common_toilets"] = common - 1
@@ -692,6 +759,32 @@ def fallback(levels: list[dict], i: int, notes: list[str]) -> bool:
 
 
 def generate(req: dict, _probe: bool = False) -> dict:
+    """1.23: the plan must (1) keep every room the user asked for and (2) open each bedroom from the hall / dining /
+    passage – never through the kitchen. Order: strict + all rooms → strict with the toilets / bedrooms the plot cannot hold
+    removed (reported with ⚠) → kitchen as a last resort (reported with ⚠)."""
+    global BENIGN_ONLY
+    from . import geometry
+    if _probe or any(lv.get("units") for lv in (req.get("levels") or [])):
+        return _generate(req, _probe)  # probes / several houses on a floor: one plain pass (fast, no suggestion loop)
+    first_err = None
+    for relax, benign in ((False, True), (False, False), (True, True), (True, False)):
+        geometry.RELAX_KITCHEN, BENIGN_ONLY = relax, benign
+        try:
+            out = _generate(req, True)  # probe mode inside the loop: suggestions are worked out once, at the end
+        except LayoutError as e:
+            first_err = first_err or e
+            continue
+        finally:
+            geometry.RELAX_KITCHEN, BENIGN_ONLY = False, False
+        if relax:
+            out["notes"] = list(out.get("notes") or []) + [
+                "⚠ This plot is too tight to give every bedroom its own door from the hall / passage – one room opens "
+                "through the kitchen. To avoid it: widen the plot, drop the car parking, make it G+1, or ask for fewer rooms."]
+        return out
+    return _generate(req, False)  # nothing fits: raises the error WITH the options / suggestions
+
+
+def _generate(req: dict, _probe: bool = False) -> dict:
     """req = parser.build_requirements(...) output (possibly edited by the user)."""
     q = []
     for k, label in [("plot_w_ft", "plot frontage"), ("plot_d_ft", "plot depth"), ("facing", "facing"),
