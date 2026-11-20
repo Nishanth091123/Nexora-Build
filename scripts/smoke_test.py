@@ -98,7 +98,7 @@ except httpx.ConnectError:
         sys.exit("[ERROR] Backend did not start in 2 minutes.")
 check("health", r.status_code == 200 and r.json().get("status") == "ok", r.text)
 _v = tuple(int(x) for x in (r.json().get("version", "0.0").split("-")[0].split(".") + ["0", "0"])[:3] if x.isdigit())
-check("backend is the 1.25 version (not an old one still running)", _v >= (1, 25, 0), r.text)
+check("backend is the 1.26 version (not an old one still running)", _v >= (1, 26, 0), r.text)
 
 login = input("Owner username [nishanth_s]: ").strip() or "nishanth_s"
 pw = getpass.getpass("Owner password (hidden): ")
@@ -256,9 +256,6 @@ if ok:
     except Exception:
         pages = 0
 check("1.25 Building Loan Process PDF (cover, estimate, payment stages, bank checklist)", ok and pages >= 6, r.text[:200] if r.status_code != 200 else f"pages={pages}")
-if QUICK:
-    print("NEXORA 1.25 API: QUICK CHECK GOOD  (run scripts\\update.bat now and then for the full test)")
-    sys.exit(0)
 # ---------------- 1.16: download under every tab + part estimate ----------------
 for tab, fmt, magic in (("overview", "pdf", b"%PDF"), ("floorboq", "excel", b"PK"), ("takeoff", "pdf", b"%PDF"), ("material", "excel", b"PK"),
                         ("cost", "pdf", b"%PDF"), ("boq", "pdf", b"%PDF"), ("payment", "pdf", b"%PDF"), ("compare", "excel", b"PK")):
@@ -308,6 +305,25 @@ req = r.json().get("requirements") if r.status_code == 200 else None
 check("design understands the request", bool(req) and len(req["levels"]) == 2, r.text[:200])
 r = c.post(f"/api/projects/{pid}/design/generate", json={"requirements": req})
 plan = r.json() if r.status_code == 200 else None
+# ---------------- 1.26: interior package + electrical / plumbing drawings ----------------
+if plan:
+    r = c.post(f"/api/projects/{pid}/designs", json={"plan": plan, "title": "SMOKE 1.26 fit-out"})
+    check("1.26 save a drawing for interior / services", r.status_code == 200, r.text[:200])
+    r = c.get(f"/api/projects/{pid}/interior")
+    iv = r.json() if r.status_code == 200 else {}
+    check("1.26 interior items + suggested rates", bool(iv.get("items")) and iv.get("totals", {}).get("grand", 0) > 0 and len(iv.get("rates", [])) >= 5, r.text[:200])
+    r = c.put(f"/api/projects/{pid}/interior", json={"rates": {"wardrobe": 1500}, "on": ["ceiling_cove"], "off": [], "qty": {}, "loose_rates": {}})
+    check("1.26 edited interior rate is used", r.status_code == 200 and any(x["key"] == "wardrobe" and x["rate"] == 1500 for x in r.json()["rates"]), r.text[:200])
+    for path, magic in (("interior/pdf", b"%PDF"), ("interior/excel", b"PK"), ("mep/pdf?kind=both", b"%PDF"), ("mep/pdf?kind=electrical", b"%PDF"),
+                        ("mep/pdf?kind=plumbing", b"%PDF"), ("mep/dxf?kind=both", b"0\r\nSECTION")):
+        r = c.get(f"/api/projects/{pid}/{path}", timeout=120)
+        check(f"1.26 download {path}", r.status_code == 200 and r.content[:len(magic)] == magic, r.text[:200] if r.status_code != 200 else "")
+    r = c.get(f"/api/projects/{pid}/mep")
+    mj = r.json() if r.status_code == 200 else {}
+    check("1.26 electrical + plumbing numbers", bool(mj.get("electrical", {}).get("totals")) and bool(mj.get("plumbing", {}).get("totals")), r.text[:200])
+if QUICK:
+    print("NEXORA 1.26 API: QUICK CHECK GOOD  (run scripts\\update.bat now and then for the full test)")
+    sys.exit(0)
 check("plan generated", bool(plan) and plan["summary"]["bedrooms"] == 2, r.text[:300])
 if plan:
     check("TN setbacks applied (front 3 m for 30 ft road)", plan["setbacks"]["m"]["front"] == 3.0, str(plan["setbacks"]["m"]))
@@ -1049,4 +1065,4 @@ if fail:
     print("Failed:", ", ".join(fail), "\nSend this output to Claude.")
     sys.exit(1)
 else:
-    print("NEXORA 1.25 API: ALL GOOD")
+    print("NEXORA 1.26 API: ALL GOOD")

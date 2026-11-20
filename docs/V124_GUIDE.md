@@ -67,3 +67,11 @@ It is wired into the estimate PDFs in 1.25.
 - Estimate → Export → "Building Loan Process (one PDF)": cover, 2D plan, oral (quick) estimate, detailed estimate + BOQ, stage-wise payment with loan release stages, common bank document checklist (web-checked Nov 2026; the bank's own list wins).
 - Total rate per sq ft is typed by you; the whole estimate is scaled to it (quantities unchanged, a note says so). Client name, date, bank, loan %, loan amount are typed – blank stays blank.
 - Estimate PDFs (detailed, bank, client) now use the Praganya letterhead: header band on page 1, footer line + firm name on every page, one blank "Seal & Signature" box. No auto date anywhere.
+
+## 1.26.0 – Interior & Services
+- New menu "Interior & Services" (works on the project's active drawing).
+- Interior: room-wise kitchen cabinets, wardrobes, TV unit, false ceiling (cove / fluted panel / study table optional). Rates are SUGGESTED DEFAULT RATES from Tamil Nadu (Chennai / Coimbatore) public price pages, checked Nov 2026; every rate and quantity is editable and saved per project. Loose furniture, pooja unit, curtains have no searched rate – you type it. PDF (letterhead) + Excel (live formulas).
+- Electrical: points per room (lights, fans, sockets, AC, geyser, exhaust, TV …), switch boards, DB per floor, circuits with MCB / wire size, connected load, supply suggestion. PDF + DXF (layers ELEC_*).
+- Plumbing: fixtures per toilet / kitchen / utility, water riser, supply lines, drain lines to the outside wall, soil stacks, tank / sump size (same basis as Site → Water services), stack alignment check between floors. PDF + DXF (layers PLUMB_*).
+- Everything is a suggested schematic layout – the licensed electrician / plumber and the local authority decide. No materials are priced for electrical / plumbing (numbers only).
+- AI render of rooms stays in Design → 3D (AI Render), stamped "AI concept render – not to scale".

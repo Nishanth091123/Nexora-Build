@@ -9,7 +9,8 @@ const Projects = lazy(() => import("./pages/Projects"));  // loaded only when op
 const Settings = lazy(() => import("./pages/Settings"));  // loaded only when opened
 const EstimatePage = lazy(() => import("./pages/Estimate"));  // loaded only when opened
 const DesignPage = lazy(() => import("./pages/Design"));  // loaded only when opened
-const VastuPage = lazy(() => import("./pages/Vastu"));  // loaded only when opened
+const VastuPage = lazy(() => import("./pages/Vastu"));
+const InteriorPage = lazy(() => import("./pages/Interior"));  // loaded only when opened
 const SitePage = lazy(() => import("./pages/Site"));  // loaded only when opened
 const AIPage = lazy(() => import("./pages/AI"));  // loaded only when opened
 const MaterialsPage = lazy(() => import("./pages/Materials"));  // 1.18 Material Library
@@ -35,6 +36,7 @@ export default function App() {
             <Route path="design" element={<DesignPage />} />
             <Route path="site" element={<SitePage />} />
             <Route path="vastu" element={<VastuPage />} />
+            <Route path="interior" element={<InteriorPage />} />
             <Route path="estimate" element={<EstimatePage />} />
             <Route path="ai" element={<AIPage />} />
             <Route path="materials" element={<MaterialsPage />} />
