@@ -98,7 +98,7 @@ except httpx.ConnectError:
         sys.exit("[ERROR] Backend did not start in 2 minutes.")
 check("health", r.status_code == 200 and r.json().get("status") == "ok", r.text)
 _v = tuple(int(x) for x in (r.json().get("version", "0.0").split("-")[0].split(".") + ["0", "0"])[:3] if x.isdigit())
-check("backend is the 1.27 version (not an old one still running)", _v >= (1, 27, 2), r.text)
+check("backend is the 1.27 version (not an old one still running)", _v >= (1, 27, 3), r.text)
 
 login = input("Owner username [nishanth_s]: ").strip() or "nishanth_s"
 pw = getpass.getpass("Owner password (hidden): ")
@@ -363,7 +363,7 @@ if plan:
         r = c.get(f"/api/projects/{pid}/interior/pdf", timeout=120)
         check("1.27 interior PDF with selected designs", r.status_code == 200 and r.content[:4] == b"%PDF", r.text[:100])
 if QUICK:
-    print("NEXORA 1.27.2 API: QUICK CHECK GOOD  (run scripts\\update.bat now and then for the full test)")
+    print("NEXORA 1.27.3 API: QUICK CHECK GOOD  (run scripts\\update.bat now and then for the full test)")
     sys.exit(0)
 check("plan generated", bool(plan) and plan["summary"]["bedrooms"] == 2, r.text[:300])
 if plan:
@@ -1106,4 +1106,4 @@ if fail:
     print("Failed:", ", ".join(fail), "\nSend this output to Claude.")
     sys.exit(1)
 else:
-    print("NEXORA 1.27.2 API: ALL GOOD")
+    print("NEXORA 1.27.3 API: ALL GOOD")

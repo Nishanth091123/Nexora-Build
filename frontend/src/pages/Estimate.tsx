@@ -226,7 +226,7 @@ function InputsModal({ open, onClose, inputs, setInputs, state, setState, onCalc
       </div>
       <h4 className="mb-2 mt-5 text-sm font-bold text-navy-ink">4. Services & external works</h4>
       <div className="grid gap-2 sm:grid-cols-3">
-        {tog("staircase", "Staircase (upper floors / terrace)")}{tog("rwh", "Rain water harvesting")}{tog("septic_tank", "Septic tank + soak pit")}
+        {tog("staircase", "Staircase (upper floors / terrace)")}{tog("headroom", "Staircase head room (stair cover on terrace)")}{tog("rwh", "Rain water harvesting")}{tog("septic_tank", "Septic tank + soak pit")}
         {tog("compound_wall", "Compound wall")}{tog("gate", "MS gate")}
         <Field label="Sump (litres, 0 = none)"><input className="input" type="number" value={inputs.sump_litres} onChange={n("sump_litres")} /></Field>
         <Field label="Overhead tank (litres, blank = auto)"><input className="input" type="number" value={inputs.oh_tank_litres ?? ""} onChange={(e) => set("oh_tank_litres", e.target.value === "" ? null : Number(e.target.value))} /></Field>

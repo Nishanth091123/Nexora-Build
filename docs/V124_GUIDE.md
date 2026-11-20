@@ -93,3 +93,6 @@ Single-floor plots with hall + kitchen + dining + 1–2 bedrooms now try a **com
 
 ## 1.27.2 – Staircase head room in the estimate
 Plans with a staircase now cost the head room (stair cover) on the terrace: 230 mm walls (8 ft clear), lintel band, RCC roof slab, plaster, door, ventilator, waterproofing, painting, ≈ stair footprint (≈ 82 sq ft for 7.5 × 11 ft). On by default for geometry estimates; switch off with `headroom: false` in the estimate inputs ("Staircase head room" in the Excel input sheet). It is a stair cover, not a room.
+
+## 1.27.3 – Head room switch on the Estimate screen
+"Staircase head room (stair cover on terrace)" toggle added under 4. Services & external works. Tick it and press Calculate – the "staircase head room" lines appear in the BOQ. An estimate saved earlier keeps its old inputs: press Calculate again (or make a new estimate).
