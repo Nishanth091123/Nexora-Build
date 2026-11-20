@@ -62,3 +62,8 @@ It is wired into the estimate PDFs in 1.25.
 - Checks: every floor of a multi-floor house has a staircase; the car parking is on the road side with nothing in front of it; a parking bay wider than 20 ft under a room gets a "columns only at the edges" note.
 - Generator: when the common toilet needs the door cell, the filler passage cell and the toilet swap and the cell becomes a balcony (openings are re-derived on every trial).
 - Per-floor toilet counts ("1 attached, 1 common") in a floor-wise prompt are read per floor.
+
+## 1.25.0 – Building Loan Process
+- Estimate → Export → "Building Loan Process (one PDF)": cover, 2D plan, oral (quick) estimate, detailed estimate + BOQ, stage-wise payment with loan release stages, common bank document checklist (web-checked Nov 2026; the bank's own list wins).
+- Total rate per sq ft is typed by you; the whole estimate is scaled to it (quantities unchanged, a note says so). Client name, date, bank, loan %, loan amount are typed – blank stays blank.
+- Estimate PDFs (detailed, bank, client) now use the Praganya letterhead: header band on page 1, footer line + firm name on every page, one blank "Seal & Signature" box. No auto date anywhere.

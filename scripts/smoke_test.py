@@ -97,7 +97,7 @@ except httpx.ConnectError:
         sys.exit("[ERROR] Backend did not start in 2 minutes.")
 check("health", r.status_code == 200 and r.json().get("status") == "ok", r.text)
 _v = tuple(int(x) for x in (r.json().get("version", "0.0").split("-")[0].split(".") + ["0", "0"])[:3] if x.isdigit())
-check("backend is the 1.24.4 version (not an old one still running)", _v >= (1, 24, 4), r.text)
+check("backend is the 1.25 version (not an old one still running)", _v >= (1, 25, 0), r.text)
 
 login = input("Owner username [nishanth_s]: ").strip() or "nishanth_s"
 pw = getpass.getpass("Owner password (hidden): ")
@@ -244,6 +244,17 @@ check("Excel has floor-wise BOQ", r.status_code == 200 and b"Floor-wise BOQ" in 
 for kind, magic in (("bank", b"%PDF"), ("excel", b"PK")):
     r = c.post(f"/api/projects/{pid}/estimate/export?kind={kind}", json={"inputs": inp, "state": "Tamil Nadu"})
     check(f"1.13 estimate {kind} download without saving", r.status_code == 200 and r.content[:len(magic)] == magic, r.text[:200] if r.status_code != 200 else "")
+# ---------------- 1.25: Building Loan Process (one PDF) + sq-ft rate scaling ----------------
+r = c.post(f"/api/projects/{pid}/loan-pack", json={"inputs": inp, "state": "Tamil Nadu", "rate_per_sqft": 2200, "loan_pct": 70}, timeout=180)
+ok = r.status_code == 200 and r.content[:4] == b"%PDF"
+pages = 0
+if ok:
+    try:
+        from pypdf import PdfReader as _PR
+        pages = len(_PR(__import__("io").BytesIO(r.content)).pages)
+    except Exception:
+        pages = 0
+check("1.25 Building Loan Process PDF (cover, estimate, payment stages, bank checklist)", ok and pages >= 6, r.text[:200] if r.status_code != 200 else f"pages={pages}")
 # ---------------- 1.16: download under every tab + part estimate ----------------
 for tab, fmt, magic in (("overview", "pdf", b"%PDF"), ("floorboq", "excel", b"PK"), ("takeoff", "pdf", b"%PDF"), ("material", "excel", b"PK"),
                         ("cost", "pdf", b"%PDF"), ("boq", "pdf", b"%PDF"), ("payment", "pdf", b"%PDF"), ("compare", "excel", b"PK")):
@@ -1034,4 +1045,4 @@ if fail:
     print("Failed:", ", ".join(fail), "\nSend this output to Claude.")
     sys.exit(1)
 else:
-    print("NEXORA 1.24.4 API: ALL GOOD")
+    print("NEXORA 1.25 API: ALL GOOD")

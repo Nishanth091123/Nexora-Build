@@ -37,7 +37,6 @@ def header_lines(project: dict, est: dict) -> list[tuple[str, str]]:
         ("Total cost", f"Rs. {inr(t['grand_total'])}"),
         ("Cost per sq ft", f"Rs. {inr(t['cost_per_sqft'])}"),
         ("Duration", f"{t['duration_months']} months (approx.)"),
-        ("Generated", datetime.now().strftime("%d %b %Y %H:%M")),
     ]
 
 
@@ -206,7 +205,7 @@ def to_excel(project: dict, est: dict) -> bytes:
 
 
 # ------------------------------------------------------------------ PDF
-def to_pdf(project: dict, est: dict) -> bytes:
+def to_pdf(project: dict, est: dict, header: bool = True, seal: bool = True) -> bytes:
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4, landscape
     from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
@@ -247,12 +246,11 @@ def to_pdf(project: dict, est: dict) -> bytes:
         tb.setStyle(TableStyle(st))
         return tb
 
+    from .. import letterhead as lh
     co = project.get("company") or {}
-    story = [Paragraph((co.get("name") or "Praganya Construction") + " – Construction Estimate", h1)]
-    if co.get("proprietor") or co.get("phone"):
-        story.append(Paragraph(" · ".join(x for x in [f"Proprietor: {co['proprietor']}" if co.get("proprietor") else "",
-                                                       co.get("phone", ""), co.get("address", "")] if x), small))
-    story.append(Spacer(1, 4))
+    PW, PH = landscape(A4)
+    story = [Spacer(1, max(0, lh.header_height(PW) + 18 + 6 - 12 * mm))] if header else []
+    story.append(Paragraph("Construction Estimate", h1))
     info = [[Paragraph(f"<b>{k}</b>", small), Paragraph(pdf_safe(v), small)] for k, v in header_lines(project, est)]
     story.append(Table(info, colWidths=[40 * mm, 120 * mm], style=[("FONTSIZE", (0, 0), (-1, -1), 8)]))
     story.append(Spacer(1, 6))
@@ -329,20 +327,14 @@ def to_pdf(project: dict, est: dict) -> bytes:
     story += [Spacer(1, 8), Paragraph("Labour (man-days × TN day wage)", h2)]
     story.append(tbl(labs, [110 * mm, 30 * mm, 26 * mm, 32 * mm], 1))
 
-    def footer(canvas, d):
-        canvas.saveState()
-        canvas.setFont("Helvetica", 7)
-        canvas.setFillColor(colors.grey)
-        canvas.drawString(12 * mm, 7 * mm, (co.get("name") or "Praganya Construction"))
-        canvas.drawRightString(285 * mm, 7 * mm, f"Page {d.page}")
-        canvas.restoreState()
-
-    doc.build(story, onFirstPage=footer, onLaterPages=footer)
+    if seal and lh.SealSignature:
+        story += [Spacer(1, 10), lh.SealSignature(PW - 24 * mm)]
+    doc.build(story, onFirstPage=(lh.on_first(PW, PH) if header else lh.on_later(PW)), onLaterPages=lh.on_later(PW))
     return buf.getvalue()
 
 
 # ------------------------------------------------------------------ 1.8: bank-loan and client formats (A4 portrait)
-def _portrait_pdf(project: dict, est: dict, kind: str) -> bytes:
+def _portrait_pdf(project: dict, est: dict, kind: str, header: bool = True, seal: bool = True) -> bytes:
     """kind = "bank": estimate for a housing-loan application (abstract + area + stage-wise payment + signature).
     kind = "client": clean summary to give the client (work-group totals only, no item rates, no margin line)."""
     import json
@@ -390,15 +382,10 @@ def _portrait_pdf(project: dict, est: dict, kind: str) -> bytes:
     doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=15 * mm, rightMargin=15 * mm, topMargin=14 * mm,
                             bottomMargin=16 * mm, title=("Bank loan estimate" if kind == "bank" else "Estimate"))
     W = 180 * mm
-    # letterhead
-    story = [Paragraph(co.get("name") or "Praganya Construction", h1)]
-    line2 = " · ".join(x for x in [f"Proprietor: {co['proprietor']}" if co.get("proprietor") else "",
-                                    co.get("phone", ""), co.get("email", "")] if x)
-    if line2:
-        story.append(Paragraph(line2, small))
-    if co.get("address"):
-        story.append(Paragraph(co["address"], tiny))
-    story.append(Table([[""]], colWidths=[W], rowHeights=[2], style=[("LINEBELOW", (0, 0), (-1, -1), 1.2, navy)]))
+    # letterhead band is drawn on page 1 by the page callback; leave room for it
+    from .. import letterhead as lh
+    PW, PH = A4
+    story = [Spacer(1, max(0, lh.header_height(PW) + 18 + 6 - 14 * mm))] if header else []
     title = "ESTIMATE FOR HOUSING LOAN" if kind == "bank" else "CONSTRUCTION COST ESTIMATE"
     story += [Spacer(1, 6), Paragraph(f"<b>{title}</b>", ParagraphStyle("c", parent=h2, alignment=1, fontSize=12))]
 
@@ -409,7 +396,7 @@ def _portrait_pdf(project: dict, est: dict, kind: str) -> bytes:
             ["Structure", "RCC framed" if r["structure"] == "rcc_framed" else "Load bearing"],
             ["Specification", r["spec_level"].title()],
             ["Total built-up area", f"{t['builtup_sqft']:,.0f} sq ft ({t['builtup_m2']:,.1f} m2)"],
-            ["Rates", f"{est.get('rate_state', '')} market rates"], ["Date", est.get("date") or datetime.now().strftime("%d-%m-%Y")]]
+            ["Rates", f"{est.get('rate_state', '')} market rates"], ["Date", est.get("date") or ""]]
     story.append(tbl([["Particulars", "Details"]] + info, [60 * mm, 120 * mm]))
 
     if r.get("area_statement"):
@@ -458,25 +445,10 @@ def _portrait_pdf(project: dict, est: dict, kind: str) -> bytes:
         data.append(["", "Total", f"{sum(x['pct'] for x in ps):g}%", inr(sum(x.get('amount', 0) for x in ps))])
         story.append(tbl(data, [16 * mm, 106 * mm, 20 * mm, 38 * mm], 2, True))
 
-    # signature block – only the company and proprietor names (the owner signs the printed copy)
-    sig = [["", f"For {co.get('name') or ''}"], ["", ""], ["", ""],
-           ["", co.get("proprietor") and f"{co['proprietor']} (Proprietor)" or "Authorised signatory"]]
-    if co.get("registration_no"):
-        sig.append(["", f"Reg. No. {co['registration_no']}"])
-    story += [Spacer(1, 14), Table(sig, colWidths=[110 * mm, 70 * mm],
-                                   style=[("FONTSIZE", (0, 0), (-1, -1), 9), ("ALIGN", (1, 0), (1, -1), "CENTER"),
-                                          ("FONTNAME", (1, 0), (1, 0), "Helvetica-Bold")])]
-
-    def footer(canvas, d):
-        canvas.saveState()
-        canvas.setFont("Helvetica", 7)
-        canvas.setFillColor(colors.grey)
-        canvas.drawString(15 * mm, 8 * mm, f"{co.get('name') or 'Praganya Construction'} · {project.get('code', '')} · "
-                                           f"estimate v{est.get('version')}")
-        canvas.drawRightString(195 * mm, 8 * mm, f"Page {d.page}")
-        canvas.restoreState()
-
-    doc.build(story, onFirstPage=footer, onLaterPages=footer)
+    # one blank "Seal & Signature" box, right corner – the owner signs / stamps the printed copy
+    if seal and lh.SealSignature:
+        story += [Spacer(1, 14), lh.SealSignature(180 * mm)]
+    doc.build(story, onFirstPage=(lh.on_first(PW, PH) if header else lh.on_later(PW)), onLaterPages=lh.on_later(PW))
     return buf.getvalue()
 
 

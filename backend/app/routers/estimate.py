@@ -399,7 +399,7 @@ def export_payload(e: Estimate, p: Project, db: Session | None = None):
              "plot": f"{p.plot_width:g} x {p.plot_length:g} {p.unit}" if p.plot_width and p.plot_length else ""},
             {"title": e.title, "version": e.version, "rate_state": e.rate_state,
              "result": upgrade_result(db, e) if db is not None else e.result,
-             "date": e.created_at.strftime("%d-%m-%Y")})
+             "date": ""})  # 1.25: no date pre-filled; the user types it
 
 
 @router.get("/estimates/{estimate_id}/excel")
@@ -456,6 +456,45 @@ def export_unsaved(project_id: int, body: ExportIn, kind: str = "pdf", user: Use
     mt = ("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" if kind == "excel" else "application/pdf")
     name = f"{p.code}_{tag}_draft.{ext}"
     return Response(data, media_type=mt, headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"})
+
+
+class LoanPackIn(BaseModel):
+    inputs: dict
+    state: str = DEFAULT_STATE
+    rate_per_sqft: float | None = Field(default=None, ge=0, le=100000)  # typed by the user; the estimate is scaled to it
+    client_name: str = ""
+    date: str = ""                      # typed by the user – never pre-filled
+    bank_name: str = ""
+    loan_amount: float | None = Field(default=None, ge=0)
+    loan_pct: float | None = Field(default=None, ge=0, le=100)
+
+
+@router.post("/projects/{project_id}/loan-pack")
+def loan_pack(project_id: int, body: LoanPackIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """1.25 Building Loan Process: 2D plan + oral estimate + detailed estimate + stage-wise payment + bank checklist, ONE PDF."""
+    from datetime import datetime as _dt
+
+    from ..loan import build_pack
+    from ..models import Design
+    p = require_project(db, user, project_id, "estimate")
+    result, _ = run_calc(db, body.inputs, body.state, project_id)
+    tmp = Estimate(title="Loan estimate", version=0, rate_state=result["rates_state"], result=result, created_at=_dt.now())
+    proj, est = export_payload(tmp, p, db)
+    est["version"] = "draft"
+    d = db.get(Design, p.active_design_id) if getattr(p, "active_design_id", None) else None
+    if not d:
+        d = (db.query(Design).filter(Design.project_id == project_id).order_by(Design.id.desc()).first())
+    plan = d.plan if d else None
+    try:
+        data = build_pack(proj, est, plan, {"rate_per_sqft": body.rate_per_sqft, "client_name": body.client_name,
+                                            "date": body.date, "bank_name": body.bank_name,
+                                            "loan_amount": body.loan_amount, "loan_pct": body.loan_pct})
+    except Exception as e:  # never a blank 500 – say what failed
+        log.exception("loan pack failed")
+        raise HTTPException(500, f"The loan document could not be built: {e}")
+    name = f"{p.code}_Building_Loan_Process.pdf"
+    return Response(data, media_type="application/pdf",
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(name)}"})
 
 
 @router.post("/estimates/{estimate_id}/hide")

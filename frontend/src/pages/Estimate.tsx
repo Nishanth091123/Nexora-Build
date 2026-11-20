@@ -285,6 +285,9 @@ export default function EstimatePage() {
   const [open, setOpen] = useState<number | null>(null);
   const [cmp, setCmp] = useState<Record<string, Result> | null>(null);
   const [exportOpen, setExportOpen] = useState(false);
+  const [loanOpen, setLoanOpen] = useState(false);
+  const [loan, setLoan] = useState({ rate: "", client: "", date: "", bank: "", pct: "", amount: "" });
+  const [loanBusy, setLoanBusy] = useState(false);
   const [designPick, setDesignPick] = useState<any[] | null>(null);
   const [params] = useSearchParams();
   const designParam = params.get("design");
@@ -400,6 +403,18 @@ export default function EstimatePage() {
       await downloadFile(`/api/estimates/${saved.id}/${path}`, `${fileStem(currentProject?.code || "", currentProject?.name || "", tag, `v${saved.version}`)}.${ext}`);
     } catch (e: any) { toast(e.message, "err"); }
   };
+  const doLoanPack = async () => {
+    if (!result || !inputs) return toast("Calculate the estimate first", "err");
+    const n = (v: string) => (v.trim() === "" ? null : Number(v));
+    setLoanBusy(true);
+    try {
+      await downloadPost(`/api/projects/${pid}/loan-pack`, {
+        inputs, state, rate_per_sqft: n(loan.rate), client_name: loan.client, date: loan.date, bank_name: loan.bank,
+        loan_pct: n(loan.pct), loan_amount: n(loan.amount),
+      }, `${fileStem(currentProject?.code || "", currentProject?.name || "", "Building_Loan_Process", "")}.pdf`);
+      setLoanOpen(false);
+    } catch (e: any) { toast(e.message, "err"); } finally { setLoanBusy(false); }
+  };
   const applySchedule = async (stages: { stage: string; pct: number }[] | null) => {
     const inp = { ...(inputs || {}), payment_schedule: stages };
     setInputs(inp);
@@ -437,6 +452,7 @@ export default function EstimatePage() {
             <button className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-slate-50" onClick={() => doExport("pdf")}><FileText size={16} className="text-red-500" />Detailed Estimate (PDF)</button>
             <button className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-slate-50" onClick={() => doExport("bank")}><FileText size={16} className="text-brand-600" />Bank Loan Estimate (PDF)</button>
             <button className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-slate-50" onClick={() => doExport("client")}><FileText size={16} className="text-violet-600" />Client Copy (PDF, no rates)</button>
+            <button className="flex w-full items-center gap-2 rounded-lg border-t border-line px-3 py-2 text-sm font-semibold hover:bg-slate-50" onClick={() => { setExportOpen(false); setLoanOpen(true); }}><FileText size={16} className="text-brand-600" />Building Loan Process (one PDF)</button>
             <button className="flex w-full items-center gap-2 rounded-lg border-t border-line px-3 py-2 text-sm font-semibold hover:bg-slate-50" onClick={() => {
               setExportOpen(false);
               if (!saved || dirty) return toast("Save this estimate first (Save button)", "err");
@@ -775,6 +791,23 @@ export default function EstimatePage() {
         isOwner={!!currentProject?.permissions?.rates} onImported={fromExcel} onRatesChanged={() => api(`/api/rates?state=${encodeURIComponent(state)}`).then((d) => setRates(d.items)).catch(() => {})} />}
       <InputsModal open={showInputs} onClose={() => setShowInputs(false)} inputs={inputs} setInputs={(v) => { setInputs(v); }}
         state={state} setState={setState} onCalculate={() => calculate()} rates={rates} needs={needs} />
+      <Modal open={loanOpen} onClose={() => setLoanOpen(false)} title="Building Loan Process – one PDF">
+        <div className="space-y-3 p-1">
+          <p className="text-xs text-slate-500">2D plan, oral estimate, detailed estimate, stage-wise payment and the common bank document checklist in one file. Leave a box empty to keep it blank on the paper.</p>
+          <Field label="Total rate per sq ft (Rs.) – the whole estimate is scaled to it (empty = calculated rate)"><input className="input" inputMode="decimal" value={loan.rate} onChange={(e) => setLoan({ ...loan, rate: e.target.value })} /></Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Client name"><input className="input" value={loan.client} onChange={(e) => setLoan({ ...loan, client: e.target.value })} /></Field>
+            <Field label="Date"><input className="input" value={loan.date} onChange={(e) => setLoan({ ...loan, date: e.target.value })} /></Field>
+            <Field label="Bank (optional)"><input className="input" value={loan.bank} onChange={(e) => setLoan({ ...loan, bank: e.target.value })} /></Field>
+            <Field label="Loan applied, Rs. (optional)"><input className="input" inputMode="decimal" value={loan.amount} onChange={(e) => setLoan({ ...loan, amount: e.target.value })} /></Field>
+            <Field label="Bank share of each stage, % (optional)"><input className="input" inputMode="decimal" value={loan.pct} onChange={(e) => setLoan({ ...loan, pct: e.target.value })} /></Field>
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <button className="btn-outline" onClick={() => setLoanOpen(false)}>Cancel</button>
+            <button className="btn-primary" onClick={doLoanPack} disabled={loanBusy}>{loanBusy ? "Preparing…" : "Download PDF"}</button>
+          </div>
+        </div>
+      </Modal>
       <Modal open={!!designPick} onClose={() => setDesignPick(null)} title="Estimate from a 2D drawing (Design Studio)">
         <p className="mb-3 text-sm text-slate-600">Choose a saved design – walls, doors, windows, rooms and floor areas are measured from it.</p>
         <ul className="divide-y divide-line rounded-lg border border-line">
