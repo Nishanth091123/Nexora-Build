@@ -4,6 +4,7 @@ GET  /api/projects/{pid}/interior            items, rates (suggested defaults, e
 PUT  /api/projects/{pid}/interior            save edited rates / quantities / on-off (projects.site_data["interior"])
 GET  /api/projects/{pid}/interior/pdf|excel
 GET  /api/projects/{pid}/mep                 electrical + plumbing numbers and suggestions (JSON)
+PUT  /api/projects/{pid}/mep/settings        phase (auto/single/three), pump kW, demand factor, persons, litres/head, tank sizes
 GET  /api/projects/{pid}/mep/pdf?kind=both|electrical|plumbing     and  /mep/dxf
 """
 from __future__ import annotations
@@ -39,6 +40,10 @@ def _ctx(db: Session, user: User, pid: int):
     return p, copy.deepcopy(d.plan), proj
 
 
+def _mep_opts(p) -> dict:
+    return M.norm_opts((p.site_data or {}).get("mep"))
+
+
 def _saved(p) -> dict:
     return copy.deepcopy((p.site_data or {}).get("interior") or {})
 
@@ -67,7 +72,8 @@ def save_interior(pid: int, body: InteriorIn, user: User = Depends(get_current_u
         if v is not None and (v < 0 or v > 1e8):
             raise HTTPException(400, "Rates and quantities must be positive numbers")
     sd = copy.deepcopy(p.site_data or {})
-    sd["interior"] = {"rates": {k: v for k, v in body.rates.items() if v is not None}, "qty": {k: v for k, v in body.qty.items() if v is not None},
+    keep = ((p.site_data or {}).get("interior") or {}).get("picks") or {}
+    sd["interior"] = {"picks": keep, "rates": {k: v for k, v in body.rates.items() if v is not None}, "qty": {k: v for k, v in body.qty.items() if v is not None},
                       "on": body.on, "off": body.off, "loose_rates": {k: v for k, v in body.loose_rates.items() if v is not None}}
     p.site_data = sd
     flag_modified(p, "site_data")
@@ -96,10 +102,40 @@ def interior_excel(pid: int, user: User = Depends(get_current_user), db: Session
 @router.get("/projects/{pid}/mep")
 def mep_json(pid: int, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     p, plan, _ = _ctx(db, user, pid)
-    e, pl = M.electrical(plan), M.plumbing(plan)
+    o = _mep_opts(p)
+    e, pl = M.electrical(plan, o), M.plumbing(plan, o)
     strip = lambda d: {k: v for k, v in d.items() if k != "floors"} | {  # noqa: E731
         "floors": [{k: v for k, v in f.items() if k not in ("rooms", "pipes", "fixtures", "stacks")} for f in d["floors"]]}
-    return {"electrical": strip(e) | {"notes": M.electrical_notes(e, plan)}, "plumbing": strip(pl) | {"notes": M.plumbing_notes(pl, plan)}}
+    return {"electrical": strip(e) | {"notes": M.electrical_notes(e, plan)}, "plumbing": strip(pl) | {"notes": M.plumbing_notes(pl, plan)},
+            "settings": (p.site_data or {}).get("mep") or {}, "options": o}
+
+
+class MepSettingsIn(BaseModel):
+    phase: str = "auto"                  # auto | single | three
+    pump_kw: float | None = None
+    diversity: float | None = None
+    persons: float | None = None         # blank = automatic
+    lpcd: float | None = None
+    oht_l: float | None = None
+    sump_l: float | None = None
+
+
+@router.put("/projects/{pid}/mep/settings")
+def save_mep_settings(pid: int, body: MepSettingsIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    p, plan, _ = _ctx(db, user, pid)
+    if body.phase not in ("auto", "single", "three"):
+        raise HTTPException(400, "Phase must be auto, single or three")
+    for nm, lo, hi in (("pump_kw", 0, 15), ("diversity", 0.3, 1.0), ("persons", 1, 300), ("lpcd", 40, 400), ("oht_l", 0, 200000), ("sump_l", 0, 500000)):
+        v = getattr(body, nm)
+        if v is not None and not (lo <= v <= hi):
+            raise HTTPException(400, f"{nm} must be between {lo} and {hi}")
+    sd = copy.deepcopy(p.site_data or {})
+    sd["mep"] = {k: v for k, v in body.model_dump().items() if v is not None}
+    p.site_data = sd
+    flag_modified(p, "site_data")
+    db.commit()
+    log_action(db, user, "updated", "mep", p.id, "electrical / plumbing settings", project_id=p.id)
+    return mep_json(pid, user, db)
 
 
 @router.get("/projects/{pid}/mep/pdf")
@@ -108,7 +144,7 @@ def mep_pdf(pid: int, kind: str = "both", user: User = Depends(get_current_user)
         raise HTTPException(400, "kind must be both, electrical or plumbing")
     p, plan, proj = _ctx(db, user, pid)
     tag = {"both": "Electrical_Plumbing", "electrical": "Electrical", "plumbing": "Plumbing"}[kind]
-    return _file(M.to_pdf(plan, proj, kind), "application/pdf", f"{p.code}_{tag}_Layout.pdf")
+    return _file(M.to_pdf(plan, proj, kind, _mep_opts(p)), "application/pdf", f"{p.code}_{tag}_Layout.pdf")
 
 
 @router.get("/projects/{pid}/mep/dxf")
@@ -117,4 +153,4 @@ def mep_dxf(pid: int, kind: str = "both", user: User = Depends(get_current_user)
         raise HTTPException(400, "kind must be both, electrical or plumbing")
     p, plan, proj = _ctx(db, user, pid)
     tag = {"both": "Electrical_Plumbing", "electrical": "Electrical", "plumbing": "Plumbing"}[kind]
-    return _file(M.to_dxf(plan, proj, kind), "application/dxf", f"{p.code}_{tag}_Layout.dxf")
+    return _file(M.to_dxf(plan, proj, kind, _mep_opts(p)), "application/dxf", f"{p.code}_{tag}_Layout.dxf")

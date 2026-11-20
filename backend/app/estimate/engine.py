@@ -117,6 +117,8 @@ class Inputs:
     plot_width_ft: float | None = None
     plot_length_ft: float | None = None
     staircase: bool = True                    # to upper floors / terrace
+    headroom: bool = False                    # 1.27.2: staircase head room (stair cover) on the terrace
+    headroom_m2: float | None = None          # its footprint (default = staircase footprint)
     compound_wall: bool = False
     compound_wall_length_m: float | None = None  # default: plot perimeter minus gate
     gate: bool = False
@@ -141,9 +143,9 @@ class Inputs:
     def from_dict(d: dict) -> "Inputs":
         """Accepts form data: blank strings become defaults, numbers given as text are converted."""
         ints = {"bedrooms", "halls", "kitchens", "toilets", "sump_litres", "oh_tank_litres"}
-        floats = {"floor_height_ft", "plot_width_ft", "plot_length_ft", "compound_wall_length_m", "parking_area_sqft",
+        floats = {"floor_height_ft", "plot_width_ft", "plot_length_ft", "compound_wall_length_m", "headroom_m2", "parking_area_sqft",
                   "approval_fees", "contractor_margin_pct", "gst_pct", "contingency_pct"}
-        bools = {"stilt", "staircase", "compound_wall", "gate", "septic_tank", "rwh"}
+        bools = {"stilt", "staircase", "headroom", "compound_wall", "gate", "septic_tank", "rwh"}
         out = {}
         for k, v in (d or {}).items():
             if k not in Inputs.__dataclass_fields__:
@@ -628,6 +630,34 @@ def calculate(inputs: dict, rates: dict[str, dict]) -> dict:
               {"elec_point": points}, "elec_point")
         c.add("Electrical", "Distribution board with MCBs", fl, 1, "nos", {"elec_db": 1},
               None, None, {"electrician": 1})
+
+    # ------------- 1.27.2 staircase head room (stair cover) on the terrace -------------
+    if inp.headroom and inp.staircase and not sheet_mumty and not (sheet_top and levels >= 1):
+        fl = names[-1]
+        hm2 = float(inp.headroom_m2 or 7.6)           # ≈ 82 sq ft
+        side = math.sqrt(hm2)
+        per = 4 * side
+        hh = 2.44                                     # 8 ft clear
+        door_a = 0.9 * 2.1
+        vol230 = max(0.0, per * 0.23 * hh - door_a * 0.23 - 0.6 * 0.6 * 0.23)
+        c.masonry_wall("staircase head room walls", fl, vol230, 0.0)
+        c.rcc("staircase head room lintel band 230×150", fl, per * 0.23 * 0.15, "band", per * 0.53)
+        sl = hm2 * 1.2                                # 600 mm projection all round
+        c.rcc(f"staircase head room roof slab {int(slab_t*1000)} mm", fl, sl * slab_t, "slab", sl)
+        c.plaster("int", "staircase head room walls", fl, per * hh - door_a)
+        c.plaster("ext", "staircase head room outer walls", fl, per * (hh + 0.15))
+        c.plaster("ceil", "staircase head room ceiling", fl, hm2)
+        c.add("Doors & Windows", "Staircase head room door (MS / PVC) with frame & hardware", fl, 1, "nos",
+              {"door_internal": 1, "hardware": 1}, "door")
+        c.add("Doors & Windows", "Staircase head room ventilator with glass", fl, 0.36, "m²", {"window": 0.36}, "window")
+        wpr = sl + per * 0.3
+        c.add("Waterproofing", "Waterproofing – staircase head room roof", fl, wpr, "m²", {"waterproof": wpr}, "waterproof")
+        pi = per * hh - door_a + hm2
+        c.add("Painting", "Staircase head room – interior painting (walls + ceiling)", fl, pi, "m²", {"paint_int": pi}, "paint_int")
+        pe = per * (hh + 0.15)
+        c.add("Painting", "Staircase head room – exterior painting", fl, pe, "m²", {"paint_ext": pe}, "paint_ext")
+        c.assumptions.append(f"Staircase head room included: ≈ {hm2 * 10.764:.0f} sq ft, 8 ft clear height, 230 mm walls, RCC roof slab, "
+                             "one door and one ventilator. It is a stair cover, not a room.")
 
     # 1.17 roofing sheets
     for k, rs in enumerate(sheets):

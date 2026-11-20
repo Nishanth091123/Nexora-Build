@@ -10,12 +10,12 @@ import { stampLabel, stampPlanLabels, type Stamp } from "./house3d/postfx";
 type Res = { url: string; provider: string; model: string };
 const LABEL = "AI concept render – not to scale";
 
-export default function AIRender({ pid, base, kind, style, light, stamps, onClose }: {
-  pid: number; base: string; kind: "exterior" | "interior" | "plan"; style: string; light: string;
+export default function AIRender({ pid, base, kind, style, light, stamps, onClose, extra0 }: {
+  pid: number; base: string; extra0?: string; kind: "exterior" | "interior" | "plan"; style: string; light: string;
   /** 1.21 plan polish: room names + sizes from the drawing, written on the result (the AI gets a picture without words) */
   stamps?: Stamp[] | null; onClose: () => void;
 }) {
-  const [extra, setExtra] = useState("");
+  const [extra, setExtra] = useState(extra0 || "");
   const [keep, setKeep] = useState(kind === "plan" ? 80 : 55);  // % how much of my design to keep (a plan must keep its walls)
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");

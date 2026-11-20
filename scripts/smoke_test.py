@@ -98,7 +98,7 @@ except httpx.ConnectError:
         sys.exit("[ERROR] Backend did not start in 2 minutes.")
 check("health", r.status_code == 200 and r.json().get("status") == "ok", r.text)
 _v = tuple(int(x) for x in (r.json().get("version", "0.0").split("-")[0].split(".") + ["0", "0"])[:3] if x.isdigit())
-check("backend is the 1.26 version (not an old one still running)", _v >= (1, 26, 0), r.text)
+check("backend is the 1.27 version (not an old one still running)", _v >= (1, 27, 2), r.text)
 
 login = input("Owner username [nishanth_s]: ").strip() or "nishanth_s"
 pw = getpass.getpass("Owner password (hidden): ")
@@ -321,8 +321,49 @@ if plan:
     r = c.get(f"/api/projects/{pid}/mep")
     mj = r.json() if r.status_code == 200 else {}
     check("1.26 electrical + plumbing numbers", bool(mj.get("electrical", {}).get("totals")) and bool(mj.get("plumbing", {}).get("totals")), r.text[:200])
+    for ph, want in (("single", "single-phase"), ("three", "three-phase")):
+        r = c.put(f"/api/projects/{pid}/mep/settings", json={"phase": ph, "pump_kw": 1.0, "persons": 6})
+        check(f"1.26.1 supply set to {ph} is used", r.status_code == 200 and r.json()["electrical"]["phase"] == want and r.json()["plumbing"]["water"]["persons"] == 6, r.text[:200])
+    r = c.get(f"/api/projects/{pid}/mep/pdf?kind=both", timeout=120)
+    check("1.26.1 detailed electrical / plumbing PDF (schedules, single-line, riser)", r.status_code == 200 and r.content[:4] == b"%PDF" and len(r.content) > 20000, str(len(r.content)))
+    # ---------------- 1.27.2: staircase head room in the estimate ----------------
+    r = c.post(f"/api/projects/{pid}/estimate/calculate", json={"inputs": {**inp, "staircase": True, "headroom": True}, "state": "Tamil Nadu"})
+    its = r.json().get("items", []) if r.status_code == 200 else []
+    check("1.27.2 staircase head room costed (walls, slab, plaster, door, waterproofing)", sum(1 for i in its if "head room" in i.get("description", "")) >= 8, str(len(its)))
+    # ---------------- 1.27.1: compact (no-passage) plan for a small single floor ----------------
+    r = c.post(f"/api/projects/{pid}/design/parse", json={"text": "30x40 north facing, road 11 ft, ground floor only with staircase, 2 bedrooms 2 attached toilets, 1 common toilet, hall, kitchen, dining, soil 200 kN/m2, zone 3"})
+    rqc = r.json().get("requirements") if r.status_code == 200 else None
+    if rqc:
+        r = c.post(f"/api/projects/{pid}/design/generate", json={"requirements": rqc}, timeout=120)
+        pc = (r.json().get("plan") or r.json()) if r.status_code == 200 else {}
+        tys = [x["type"] for x in (pc.get("levels") or [{}])[0].get("rooms", [])]
+        check("1.27.1 compact plan: no passage, common toilet + 2 attached toilets + staircase", r.status_code == 200 and "passage" not in tys and "common_toilet" in tys and tys.count("toilet") == 2 and "stair" in tys, str(tys))
+    # ---------------- 1.27: design catalog (elevation styles + interior designs) ----------------
+    r = c.get(f"/api/projects/{pid}/catalog/elevation?page=1&size=12", timeout=60)
+    ej = r.json() if r.status_code == 200 else {}
+    check("1.27 elevation catalog (1000+ styles, pictures)", ej.get("total", 0) >= 1000 and len(ej.get("items", [])) == 12 and "<svg" in ej["items"][0].get("svg", ""), r.text[:200])
+    if ej.get("items"):
+        eid = ej["items"][0]["id"]
+        r = c.post(f"/api/projects/{pid}/catalog/elevation/{eid}/apply", json={}, timeout=120)
+        check("1.27 elevation style applied to the drawing (new version)", r.status_code == 200 and r.json().get("elevation", {}).get("id") == eid, r.text[:300])
+        r = c.get(f"/api/projects/{pid}/active-design")
+        ap = (r.json().get("design") or {}) if r.status_code == 200 else {}
+        r = c.get(f"/api/projects/{pid}/catalog/elevation?page=1&size=6")
+        check("1.27 the chosen style is the one in use", r.status_code == 200 and (r.json().get("current") or {}).get("id") == eid, r.text[:200])
+    r = c.get(f"/api/projects/{pid}/catalog/interior?type=kitchen&page=1&size=6", timeout=60)
+    ij = r.json() if r.status_code == 200 else {}
+    check("1.27 interior designs listed with rooms", ij.get("total", 0) >= 100 and any(x["type"] == "kitchen" for x in ij.get("rooms", [])), r.text[:200])
+    kr = next((x for x in ij.get("rooms", []) if x["type"] == "kitchen"), None)
+    if kr and ij.get("items"):
+        did = ij["items"][0]["id"]
+        r = c.put(f"/api/projects/{pid}/catalog/interior/picks", json={"picks": {f"{kr['id']}|kitchen": did}})
+        check("1.27 kitchen design chosen", r.status_code == 200, r.text[:200])
+        r = c.get(f"/api/projects/{pid}/interior")
+        check("1.27 interior estimate uses the chosen design", r.status_code == 200 and any(i.get("design_id") == did for i in r.json()["items"]), r.text[:200])
+        r = c.get(f"/api/projects/{pid}/interior/pdf", timeout=120)
+        check("1.27 interior PDF with selected designs", r.status_code == 200 and r.content[:4] == b"%PDF", r.text[:100])
 if QUICK:
-    print("NEXORA 1.26 API: QUICK CHECK GOOD  (run scripts\\update.bat now and then for the full test)")
+    print("NEXORA 1.27.2 API: QUICK CHECK GOOD  (run scripts\\update.bat now and then for the full test)")
     sys.exit(0)
 check("plan generated", bool(plan) and plan["summary"]["bedrooms"] == 2, r.text[:300])
 if plan:
@@ -1065,4 +1106,4 @@ if fail:
     print("Failed:", ", ".join(fail), "\nSend this output to Claude.")
     sys.exit(1)
 else:
-    print("NEXORA 1.26 API: ALL GOOD")
+    print("NEXORA 1.27.2 API: ALL GOOD")

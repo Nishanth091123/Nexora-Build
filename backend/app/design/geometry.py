@@ -587,6 +587,11 @@ def estimate_inputs(plan: dict, base: dict | None = None) -> dict:
         "staircase": any(l["summary"]["stair"] for l in lv) or len(lv) > 1,
         "geometry": estimate_geometry(plan),
     })
+    if inp.get("staircase"):  # 1.27.2 staircase head room (stair cover) – on unless the user switched it off
+        inp["headroom"] = bool((base or {}).get("headroom", plan.get("headroom", True)))
+        st = [r for r in lv[0]["rooms"] if r["type"] == "stair"]
+        if st:
+            inp["headroom_m2"] = round(st[0]["w"] * st[0]["d"] * 0.0929, 2)
     if plan.get("roof_sheets"):  # 1.17
         from .roof import estimate_rows
         inp["roof_sheets"] = estimate_rows(plan)

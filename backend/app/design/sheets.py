@@ -660,6 +660,11 @@ def front_openings(lv: dict) -> list[dict]:
 def front_elevation(plan: dict) -> Dwg:
     from .roof import draw_side, full_roof, headroom_sheet
     d = Dwg("Front Elevation")
+    from .catalog import PALETTES, clean_elev
+    ev = clean_elev(plan.get("elev"))          # 1.27: chosen elevation style (None = the plain drawing as before)
+    WALL = PALETTES[ev["palette"]][1] if ev else "#fafaf9"
+    TRIM = PALETTES[ev["palette"]][2] if ev else "#a1a1aa"
+    DOORC = PALETTES[ev["palette"]][3] if ev else "#d6b48a"
     zs = _levels_z(plan)
     n = len(plan["levels"])
     no_top_slab, sheet_mumty = full_roof(plan), headroom_sheet(plan)
@@ -680,26 +685,41 @@ def front_elevation(plan: dict) -> Dwg:
                 d.rect(r["x"] + 0.75, z0, r["w"] - 1.5, z1 - z0 - SLAB - 1.25, "SHADOW", "#f4f4f5", 0)
             for r in lv["rooms"]:
                 if r["y"] <= y0 + 0.1 and r["type"] != "parking":
-                    d.rect(r["x"], z0, r["w"], z1 - z0 - SLAB, "OUTLINE", "#fafaf9")
+                    d.rect(r["x"], z0, r["w"], z1 - z0 - SLAB, "OUTLINE", WALL)
         else:
-            d.rect(x0, z0, x1 - x0, z1 - z0 - SLAB, "OUTLINE", "#fafaf9")
+            d.rect(x0, z0, x1 - x0, z1 - z0 - SLAB, "OUTLINE", WALL)
         if not (no_top_slab and i == n - 1):  # 1.17: a full sheet roof has no RCC slab on the top floor
-            d.rect(x0 - 0.5, z1 - SLAB, x1 - x0 + 1.0, SLAB, "SLAB", "#a1a1aa")
+            d.rect(x0 - 0.5, z1 - SLAB, x1 - x0 + 1.0, SLAB, "SLAB", TRIM)
         d.line(x0, z0 + 7.5, x1, z0 + 7.5, "HATCH")  # lintel band line
         for o in front_openings(lv):
             ox0, ox1 = min(o["x1"], o["x2"]), max(o["x1"], o["x2"])
             if o["type"] in ("window", "vent"):
                 sz = z0 + SILL[o["type"]]
                 _window_elev(d, ox0, ox1, sz, o["h"], o["type"] == "vent")
+                if ev and o["type"] == "window":
+                    if ev["win"] == "frame":
+                        for (fx_, fy_, fw_, fh_) in ((ox0 - 0.4, sz - 0.4, ox1 - ox0 + 0.8, 0.4), (ox0 - 0.4, sz + o["h"], ox1 - ox0 + 0.8, 0.4),
+                                                     (ox0 - 0.4, sz, 0.4, o["h"]), (ox1, sz, 0.4, o["h"])):
+                            d.rect(fx_, fy_, fw_, fh_, "OUTLINE", TRIM)
+                    elif ev["win"] == "arch":
+                        r_ = (ox1 - ox0) / 2
+                        d.arc((ox0 + ox1) / 2, sz + o["h"], r_, 0, 180, "OUTLINE")
+                    elif ev["win"] == "louver":
+                        zz = sz + 0.5
+                        while zz < sz + o["h"] - 0.2:
+                            d.line(ox0 + 0.2, zz, ox1 - 0.2, zz, "HATCH")
+                            zz += 0.45
                 mz = sz - 1.0
             elif o["type"] == "main_door":
                 d.rect(ox0 - 0.25, z0, ox1 - ox0 + 0.5, o["h"] + 0.25, "DOOR", "#fde68a")
-                d.rect(ox0, z0, (ox1 - ox0) / 2, o["h"], "DOOR", "#d6b48a")
-                d.rect((ox0 + ox1) / 2, z0, (ox1 - ox0) / 2, o["h"], "DOOR", "#d6b48a")
+                d.rect(ox0, z0, (ox1 - ox0) / 2, o["h"], "DOOR", DOORC)
+                d.rect((ox0 + ox1) / 2, z0, (ox1 - ox0) / 2, o["h"], "DOOR", DOORC)
                 for k in (0.25, 0.55):
                     d.rect(ox0 + 0.25, z0 + o["h"] * k, (ox1 - ox0) / 2 - 0.5, o["h"] * 0.22, "DOOR")
                     d.rect((ox0 + ox1) / 2 + 0.25, z0 + o["h"] * k, (ox1 - ox0) / 2 - 0.5, o["h"] * 0.22, "DOOR")
                 mz = z0 + o["h"] + 0.5
+                if ev and ev["canopy"] == "slab" and i == 0:
+                    d.rect(ox0 - 1.6, z0 + o["h"] + 0.9, ox1 - ox0 + 3.2, 0.5, "SLAB", TRIM)
             elif o["type"] in ("door", "pooja_door", "toilet_door"):  # single shutter
                 d.rect(ox0 - 0.2, z0, ox1 - ox0 + 0.4, o["h"] + 0.2, "DOOR", "#fde68a")
                 d.rect(ox0, z0, ox1 - ox0, o["h"], "DOOR", "#d6b48a")
@@ -715,15 +735,65 @@ def front_elevation(plan: dict) -> Dwg:
     roof = zs[-1]
     stair = next((r for r in plan["levels"][-1]["rooms"] if r["type"] == "stair"), None)
     if not no_top_slab:
-        d.rect(tx0, roof, tx1 - tx0, PARAPET, "PARAPET", "#fafaf9")
-        d.rect(tx0 - 0.25, roof + PARAPET, tx1 - tx0 + 0.5, 0.3, "PARAPET", "#a1a1aa")  # coping
+        d.rect(tx0, roof, tx1 - tx0, PARAPET, "PARAPET", WALL)
+        d.rect(tx0 - 0.25, roof + PARAPET, tx1 - tx0 + 0.5, 0.3, "PARAPET", TRIM)  # coping
         if stair and n > 1:
-            d.rect(stair["x"], roof, stair["w"], HEADROOM, "OUTLINE", "#fafaf9")
+            d.rect(stair["x"], roof, stair["w"], HEADROOM, "OUTLINE", WALL)
             if not sheet_mumty:
-                d.rect(stair["x"] - 0.6, roof + HEADROOM, stair["w"] + 1.2, SLAB + 0.15, "SLAB", "#a1a1aa")
+                d.rect(stair["x"] - 0.6, roof + HEADROOM, stair["w"] + 1.2, SLAB + 0.15, "SLAB", TRIM)
             d.text(stair["x"] + stair["w"] / 2, roof + HEADROOM / 2, "HEAD ROOM", 0.55, layer="DIM")
     top = roof + (0.3 if no_top_slab else HEADROOM + SLAB if stair and n > 1 else PARAPET + 0.3)
     top = max(top, draw_side(d, plan, "front"))  # 1.17 sheet roofs
+    if ev:
+        w_ = tx1 - tx0
+        if not no_top_slab:
+            if ev["top"] == "jali":
+                xx = tx0 + 0.5
+                while xx < tx1 - 0.4:
+                    d.rect(xx, roof + 1.0, 0.3, 1.6, "OUTLINE", "#e2e8f0")
+                    xx += 0.8
+            elif ev["top"] == "glass":
+                d.rect(tx0, roof + 1.2, w_, 1.8, "WINDOW", "#bae6fd")
+                xx = tx0
+                while xx <= tx1 + 0.01:
+                    d.line(xx, roof + 1.2, xx, roof + 3.0, "WINDOW")
+                    xx += w_ / max(4, round(w_ / 5))
+            elif ev["top"] == "stepped":
+                d.rect(tx0, roof + PARAPET, w_ * 0.4, 2.6, "PARAPET", WALL)
+                d.rect(tx0 - 0.3, roof + PARAPET + 2.6, w_ * 0.4 + 0.6, 0.4, "PARAPET", TRIM)
+                top = max(top, roof + PARAPET + 3.0)
+            elif ev["top"] == "pergola":
+                pw = w_ * 0.45
+                for xx in (tx0 + 0.3, tx0 + pw - 0.6):
+                    d.rect(xx, roof + PARAPET, 0.35, 8.0, "COLUMN", "#e5e7eb")
+                d.rect(tx0, roof + PARAPET + 7.6, pw, 0.5, "SLAB", TRIM)
+                xx = tx0 + 0.4
+                while xx < tx0 + pw:
+                    d.rect(xx, roof + PARAPET + 8.1, 0.3, 0.5, "OUTLINE", "#d6b48a")
+                    xx += 0.9
+                top = max(top, roof + PARAPET + 8.6)
+        if ev["clad"] != "none":
+            door_o = next((o for o in front_openings(plan["levels"][0]) if o["type"] == "main_door"), None)
+            bw_ = 4.5
+            bx = (max(door_o["x1"], door_o["x2"]) + 1.0) if door_o else tx1 - bw_ - 0.3
+            if bx + bw_ > tx1 - 0.2:
+                bx = (min(door_o["x1"], door_o["x2"]) - 1.0 - bw_) if door_o else tx0 + 0.3
+            bx = max(tx0 + 0.2, min(bx, tx1 - bw_ - 0.2))
+            colr = {"stone": "#9ca3af", "wood": "#b4783c", "brick": "#b4532a"}[ev["clad"]]
+            d.rect(bx, PLINTH, bw_, roof - PLINTH, "OUTLINE", colr)
+            gap = 1.0 if ev["clad"] == "stone" else 0.5
+            if ev["clad"] == "wood":
+                xx = bx + 0.5
+                while xx < bx + bw_:
+                    d.line(xx, PLINTH, xx, roof, "HATCH")
+                    xx += 0.5
+            else:
+                zz = PLINTH + gap
+                while zz < roof:
+                    d.line(bx, zz, bx + bw_, zz, "HATCH")
+                    zz += gap
+            d.text(bx + bw_ / 2, roof + 0.5, ev["clad"].upper() + " CLADDING", 0.5, layer="DIM")
+        d.text((gx0 + gx1) / 2, -6.0, f"Elevation style: {ev['name']}", 0.55)
     d.level(tx1 + 1.5, roof, f"+{roof * FT_M:.2f} m  {'EAVE (SHEET ROOF)' if no_top_slab else 'TERRACE'}")
     d.level(gx1 + 1.5, 0, "±0.00 m  G.L.")
     d.dim_v(gx0 - 3.0, 0, top, f"{top * FT_M:.2f} m", ext_from=gx0 - 0.5)

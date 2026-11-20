@@ -48,17 +48,32 @@ def compute(plan: dict, saved: dict | None = None) -> dict:
     items = []
     qty_over = saved.get("qty") or {}
 
+    from . import catalog as CAT
+    picks = saved.get("picks") or {}
+    picked = []
+    cur = {"li": 0}      # room ids repeat between floors (bedroom_1 on both) - so keys carry the floor number
+
     def add(lv, room, key, qty, note):
         rt = rates[key]
         if not rt["on"]:
             return
-        q = qty_over.get(f"{room['id']}|{key}")
+        uid = f"{cur['li']}:{room['id']}"
+        dz = CAT.interior_get(picks.get(f"{uid}|{next((t for t, k in CAT.PRICE_KEY.items() if k == key), '')}", ""))
+        rate, name = rt["rate"], ""
+        if dz:   # a chosen design sets the layout quantity and, unless you edited the rate, the price tier
+            qty, extra = CAT.qty_for(dz, qty, room)
+            note = extra or note
+            if not rt["edited"]:
+                rate = float((rt["low"], rt["default"], rt["high"])[CAT.TIER[dz["tier"]]])
+            name = dz["name"]
+        q = qty_over.get(f"{uid}|{key}", qty_over.get(f"{room['id']}|{key}") if cur["li"] == 0 else None)
         q = float(q) if q not in (None, "") else round(qty, 1)
-        items.append({"id": f"{room['id']}|{key}", "floor": lv["name"], "room": room["name"], "key": key, "item": rt["label"],
-                      "unit": rt["unit"], "qty": q, "auto_qty": round(qty, 1), "rate": rt["rate"], "amount": round(q * rt["rate"]),
-                      "note": note})
+        items.append({"id": f"{uid}|{key}", "floor": lv["name"], "room": room["name"], "key": key, "item": rt["label"],
+                      "unit": rt["unit"], "qty": q, "auto_qty": round(qty, 1), "rate": rate, "amount": round(q * rate),
+                      "note": note, "design": name, "design_id": dz["id"] if dz else "", "tier": dz["tier"] if dz else ""})
 
-    for lv in plan["levels"]:
+    for li_, lv in enumerate(plan["levels"]):
+        cur["li"] = li_
         for r in lv["rooms"]:
             t = r["type"]
             if t == "kitchen":
@@ -82,6 +97,13 @@ def compute(plan: dict, saved: dict | None = None) -> dict:
                     add(lv, r, "ceiling_gypsum", r["w"] * r["d"], f"room area {r['w'] * r['d']:.0f} sq ft")
             elif t == "dining":
                 add(lv, r, "ceiling_gypsum", r["w"] * r["d"], f"room area {r['w'] * r['d']:.0f} sq ft")
+    rooms_by_id = {f"{li_}:{r['id']}": (lv["name"], r) for li_, lv in enumerate(plan["levels"]) for r in lv["rooms"]}
+    for k, did in picks.items():
+        rid, _, t = k.partition("|")
+        dz, rr = CAT.interior_get(did), rooms_by_id.get(rid)
+        if dz and rr:
+            picked.append({"key": k, "room_id": rid, "floor": rr[0], "room": rr[1]["name"], "type": t, "type_label": CAT.TYPES.get(t, t),
+                           "design_id": did, "name": dz["name"], "tier": dz["tier"], "priced": t in CAT.PRICE_KEY})
     loose = []
     types = {r["type"] for lv in plan["levels"] for r in lv["rooms"]}
     n_bed = sum(1 for lv in plan["levels"] for r in lv["rooms"] if r["type"] == "bedroom")
@@ -98,7 +120,7 @@ def compute(plan: dict, saved: dict | None = None) -> dict:
     floors = {}
     for i in items:
         floors[i["floor"]] = floors.get(i["floor"], 0) + i["amount"]
-    return {"items": items, "loose": loose, "rates": list(rates.values()), "totals": {
+    return {"picked": picked, "items": items, "loose": loose, "rates": list(rates.values()), "totals": {
         "searched_items": searched, "loose_entered": loose_total, "grand": searched + loose_total, "by_floor": floors,
         "gst_note": "Rates are GST-inclusive where the source says so; confirm with the vendor quote."},
         "checked": CHECKED,
@@ -172,7 +194,35 @@ def to_pdf(plan: dict, project: dict, res: dict) -> bytes:
     story.append(Paragraph("Notes", h2))
     for n in res["notes"]:
         story.append(Paragraph(S("- " + n), body))
-    story += [Spacer(1, 10), lh.SealSignature(180 * mm)]
+    if not res.get("picked"):
+        story += [Spacer(1, 10), lh.SealSignature(180 * mm)]
+    if res.get("picked"):
+        from reportlab.platypus import Flowable, PageBreak
+        from . import catalog as CAT
+
+        class Pic(Flowable):
+            def __init__(self, scene, w, h):
+                super().__init__()
+                self.scene, self.w, self.h = scene, w, h
+
+            def wrap(self, aw, ah):
+                return self.w, self.h
+
+            def draw(self):
+                self.scene.pdf(self.canv, 0, 0, self.w, self.h)
+        story += [PageBreak(), Paragraph("SELECTED DESIGNS", h1),
+                  Paragraph(S("Pictures drawn by Nexora for the design you chose in each room. Final shop-drawing, finish and colour are confirmed with the vendor."), body),
+                  Spacer(1, 6)]
+        seen = set()
+        for pk in res["picked"]:
+            if pk["design_id"] in seen:
+                continue
+            seen.add(pk["design_id"])
+            rooms_ = ", ".join(f"{x['floor']} - {x['room']}" for x in res["picked"] if x["design_id"] == pk["design_id"])
+            dz = CAT.interior_get(pk["design_id"])
+            story += [Paragraph(S(f"{pk['type_label']}: {pk['name']}"), h2), Paragraph(S(f"Rooms: {rooms_}. Price tier: {pk['tier']}" +
+                      ("" if pk["priced"] else " (not priced - no searched rate)")), body), Spacer(1, 3), Pic(CAT.draw_interior(dz), 110 * mm, 62 * mm), Spacer(1, 6)]
+        story += [Spacer(1, 6), lh.SealSignature(180 * mm)]
     doc.build(story, onFirstPage=lh.on_first(PW, PH), onLaterPages=lh.on_later(PW))
     return buf.getvalue()
 

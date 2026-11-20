@@ -57,6 +57,7 @@ def r2(v: float) -> float:
 
 
 SPINE_FRAC = 0.0  # ground floor made at least this share of the buildable depth (upper floors reuse it)
+COMPACT_K = None  # 1.27.1: compact (no-passage) generator variant for small single-floor plots
 SPINE_K = None  # 1.24.2: None = row-zoning generator, 0..n = spine generator variant
 TIGHT = False  # 1.24: compact attached toilet (4 ft) + slightly smaller bedroom minimum, used before dropping a toilet
 
@@ -851,7 +852,7 @@ def _pipeline(req: dict, orig: dict, adjust: bool):
     """Try every layout engine in order. Returns (plan | None, best_dev, best_bad, first_err).
     A plan is accepted only if it passes the automatic check AND keeps exactly what the user chose
     (unless the user allowed adjusting)."""
-    global BENIGN_ONLY, SPINE_K, SPINE_FRAC
+    global BENIGN_ONLY, SPINE_K, SPINE_FRAC, COMPACT_K
     from . import geometry
     from .validate import check, compliance
     first_err, best_bad, best_dev = None, None, None
@@ -940,6 +941,22 @@ def _pipeline(req: dict, orig: dict, adjust: bool):
         out["checks"] = {"passed": True, "soft": res["soft"]}
         return out
 
+    # 0. compact engine (1.27.1): single floor, no passage at all – rooms open from the hall / dining
+    if len(req.get("levels") or []) == 1 and not any(lv.get("stilt") or lv.get("units") for lv in req["levels"]):
+        for k in range(4):
+            COMPACT_K = k
+            try:
+                out = _generate(req, True)
+            except LayoutError as e:
+                if any("not used" in q for q in e.questions):
+                    break
+                continue
+            finally:
+                COMPACT_K = None
+            got = judge(out)
+            if got:
+                got["notes"] = list(got.get("notes") or []) + ["Compact layout: no passage – bedrooms open from the dining, toilets from the hall / dining."]
+                return got, best_dev, best_bad, first_err
     # 1. spine engine: every room opens from a hall / dining / passage by construction
     if not any(lv.get("stilt") or lv.get("units") for lv in (req.get("levels") or [])):
         gname = ((req.get("levels") or [{}])[0].get("name") or "Ground Floor")
@@ -1098,6 +1115,9 @@ def _generate(req: dict, _probe: bool = False) -> dict:
             if lv.get("units"):  # 1.19 several houses on this floor
                 from .units import build_units_level
                 rooms, info = build_units_level(lv, bw, bd, comp, template, i)
+            elif COMPACT_K is not None and n == 1 and not lv.get("stilt"):
+                from . import compact
+                rooms, info = compact.build(lv, bw, bd, multi, COMPACT_K)
             elif SPINE_K is not None and not lv.get("stilt"):
                 from . import spine
                 rooms, info = spine.build(lv, bw, bd, multi or n > 1, template if i > 0 else None, SPINE_K, SPINE_FRAC)
@@ -1106,7 +1126,7 @@ def _generate(req: dict, _probe: bool = False) -> dict:
             else:
                 rooms, info = build_level(lv, bw, bd, comp, multi, template)
         except LayoutError as e:
-            if SPINE_K is not None:  # spine layouts never change what the user chose – the caller asks instead
+            if SPINE_K is not None or COMPACT_K is not None:  # spine layouts never change what the user chose – the caller asks instead
                 raise
             if lv.get("units"):
                 err = LayoutError(e.questions)

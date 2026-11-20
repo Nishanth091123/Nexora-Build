@@ -75,3 +75,21 @@ It is wired into the estimate PDFs in 1.25.
 - Plumbing: fixtures per toilet / kitchen / utility, water riser, supply lines, drain lines to the outside wall, soil stacks, tank / sump size (same basis as Site → Water services), stack alignment check between floors. PDF + DXF (layers PLUMB_*).
 - Everything is a suggested schematic layout – the licensed electrician / plumber and the local authority decide. No materials are priced for electrical / plumbing (numbers only).
 - AI render of rooms stays in Design → 3D (AI Render), stamped "AI concept render – not to scale".
+
+## 1.26.1 – Editable supply + detailed Electrical / Plumbing
+- Electrical tab: Supply = Auto / Single phase / Three phase (your choice is used everywhere), water-pump kW, demand factor. Main MCB/MCCB, incoming cable, RCCB and floor DB incomers are sized from it; three-phase circuits are balanced over R/Y/B.
+- Electrical PDF: numbered circuits on every point, DB-to-switch-board conduit, switch / socket legs, DB schedule per floor (MCB, wire, phase), switch board schedule, single-line diagram with earth pit. DXF has wiring + circuit-tag layers.
+- Plumbing tab: persons, litres per person, overhead tank, sump are editable (blank = automatic).
+- Plumbing PDF: pipe sizes, cold and hot lines (geyser), stop-cocks, soil stacks SS1…, waste lines with fall arrows, inspection chambers, fixture / pipe schedule, riser diagram (sump – pump – tank – stack – IC – septic – soak pit).
+
+## 1.27.0 – Design catalog (Interior & Services → "Elevation styles" and "Interior designs")
+- Elevation styles: 1,600 styles (5 tops x 4 claddings x 4 window styles x 2 canopies x 10 colour schemes), filter by family / colour / top / cladding / windows. Each picture is drawn on YOUR house (width, floors). "Use this elevation" writes the colours + style into the active drawing as a NEW version: 2D front elevation (coloured wall, cladding band, window frames / arches / louvres, parapet type, canopy), 3D model colours + style and the PDFs follow it. Cladding / pergola are quantities only.
+- Interior designs: 636 designs – wardrobe 168, TV unit 144, modular kitchen 180, pooja unit 72, false ceiling 72. Pick per room (floor-wise). Wardrobe / TV unit / kitchen change the quantity (layout) and the price tier of the interior estimate: economy = low, standard = default, premium = high of the searched rate (a rate you typed always wins). Pooja unit and ceiling are shown in the PDF only.
+- Pictures are original drawings made by Nexora (no copied photos). "AI photo-like render" sends the picture to the existing free AI render service and marks the result "AI concept render - not to scale".
+- Interior estimate PDF gets a "Selected designs" page with the pictures.
+
+## 1.27.1 – Compact layout (no passage)
+Single-floor plots with hall + kitchen + dining + 1–2 bedrooms now try a **compact** plan first: front row hall + staircase, middle row kitchen | dining | common toilet, rear row bedrooms with attached toilets. No passage cell; both bedroom doors open from the dining. Four variants (mirrored / kitchen-dining swapped); each is validated, otherwise the old spine layout is used. Not used for car/bike parking in rooms, lounge, pooja, 3+ bedrooms or upper floors.
+
+## 1.27.2 – Staircase head room in the estimate
+Plans with a staircase now cost the head room (stair cover) on the terrace: 230 mm walls (8 ft clear), lintel band, RCC roof slab, plaster, door, ventilator, waterproofing, painting, ≈ stair footprint (≈ 82 sq ft for 7.5 × 11 ft). On by default for geometry estimates; switch off with `headroom: false` in the estimate inputs ("Staircase head room" in the Excel input sheet). It is a stair cover, not a room.

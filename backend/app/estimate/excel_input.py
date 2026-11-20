@@ -28,6 +28,7 @@ FIELDS = [
     ("plot_width_ft", "Plot width (ft)", "float", "Needed for compound wall"),
     ("plot_length_ft", "Plot length (ft)", "float", ""),
     ("staircase", "Staircase", "bool", "Yes / No"),
+    ("headroom", "Staircase head room", "bool", "Yes / No"),
     ("compound_wall", "Compound wall", "bool", "Yes / No"),
     ("gate", "Gate", "bool", "Yes / No"),
     ("sump_litres", "Sump (litres)", "int", "0 = none"),

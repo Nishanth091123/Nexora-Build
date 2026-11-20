@@ -111,6 +111,13 @@ def clean_plan(plan: dict) -> dict:
             plants[kind] = one
         clean["plants"] = plants
     plan["finishes"] = clean
+    # 1.27 chosen elevation style (known values only)
+    from .catalog import clean_elev
+    _ev = clean_elev(plan.get("elev"))
+    if _ev:
+        plan["elev"] = _ev
+    else:
+        plan.pop("elev", None)
     # 1.17 roofing sheets (full roof / on terrace / head room / part of a floor)
     from .roof import clean as clean_roof
     if "roof_sheets" in plan:
