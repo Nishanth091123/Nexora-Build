@@ -33,6 +33,7 @@ import time
 from pathlib import Path
 
 CLEANUP: list[dict] = []  # test items in the Recycle Bin, purged together at the end (one safety backup)
+QUICK = "--quick" in sys.argv  # newest version checks only (update_quick.bat) – the full run stays the default
 FULL = "--full" in sys.argv  # also test the live AI providers (slow: free AI services can take minutes)
 T_START = time.perf_counter()
 TIMES: list[tuple[float, str]] = []
@@ -255,6 +256,9 @@ if ok:
     except Exception:
         pages = 0
 check("1.25 Building Loan Process PDF (cover, estimate, payment stages, bank checklist)", ok and pages >= 6, r.text[:200] if r.status_code != 200 else f"pages={pages}")
+if QUICK:
+    print("NEXORA 1.25 API: QUICK CHECK GOOD  (run scripts\\update.bat now and then for the full test)")
+    sys.exit(0)
 # ---------------- 1.16: download under every tab + part estimate ----------------
 for tab, fmt, magic in (("overview", "pdf", b"%PDF"), ("floorboq", "excel", b"PK"), ("takeoff", "pdf", b"%PDF"), ("material", "excel", b"PK"),
                         ("cost", "pdf", b"%PDF"), ("boq", "pdf", b"%PDF"), ("payment", "pdf", b"%PDF"), ("compare", "excel", b"PK")):

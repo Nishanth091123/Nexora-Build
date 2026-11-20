@@ -697,6 +697,16 @@ export default function EstimatePage() {
                 </div>
               )}
               {result && (
+                <div className="mt-3 flex flex-wrap items-end gap-3 rounded-xl border-2 border-dashed border-brand-300 bg-brand-50/50 p-3">
+                  <div className="min-w-[220px] flex-1">
+                    <div className="text-sm font-bold text-navy-ink">Your total rate per sq ft (Rs.)</div>
+                    <div className="text-xs text-slate-500">Type your rate (ex: 2200). The loan PDF total becomes built-up sq ft × this rate. Empty = calculated rate ({rupees(tt!.cost_per_sqft)}).</div>
+                  </div>
+                  <input className="input w-36" inputMode="decimal" placeholder="e.g. 2200" value={loan.rate} onChange={(e) => setLoan({ ...loan, rate: e.target.value })} />
+                  <button className="btn-primary" onClick={() => setLoanOpen(true)}><FileText size={16} />Building Loan Process PDF</button>
+                </div>
+              )}
+              {result && (
                 <div className="mt-3 grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
                   {[["Steel", `${inr(tt!.steel_kg)} kg`], ["Bricks", `${inr(tt!.bricks)} nos`], ["M-Sand", `${tt!.msand_m3} m³`], ["Labour", `${inr(tt!.man_days)} man-days`]].map(([k, v]) => (
                     <div key={k} className="rounded-lg bg-slate-50 px-3 py-2"><div className="text-slate-500">{k}</div><div className="font-bold text-navy-ink">{v}</div></div>
