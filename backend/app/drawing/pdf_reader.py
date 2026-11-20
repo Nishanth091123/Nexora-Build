@@ -184,7 +184,7 @@ def render_page(data: bytes, page_no: int = 0, max_px: int = 2200) -> tuple[byte
         return None
 
 
-def parse(data: bytes, page_no: int | None = None) -> dict:
+def _parse_page(data: bytes, page_no: int | None = None) -> dict:
     try:
         from pypdf import PdfReader
     except ImportError as e:  # pragma: no cover
@@ -328,3 +328,61 @@ def largest_image(data: bytes, page_no: int = 0) -> tuple[bytes, str] | None:
         return best.data, mime
     except Exception:
         return None
+
+
+def parse(data: bytes, page_no: int | None = None) -> dict:
+    """1.24.4: a PDF with the floors on SEPARATE pages is read page by page and every floor is kept (side by side, so
+    the floor grouping finds each one). A page chosen by the user, or a one-plan PDF, is read as before."""
+    first = _parse_page(data, page_no)
+    pages = sorted((first.get("info") or {}).get("pages_with_plans") or [])
+    if (page_no is not None and 0 <= page_no) or len(pages) < 2 or not first.get("vector_ok"):
+        return first
+    if first["info"]["page"] + 1 != pages[0]:   # floors go in page order (page 1 = lowest floor)
+        first = _parse_page(data, pages[0] - 1)
+        if not first.get("vector_ok"):
+            return first
+    merged = dict(first)
+    rooms = list(first["rooms_raw"])
+    k0 = first.get("scale_ft_per_unit") or first["to_ft"]
+    shift = max([r["x"] + r["w"] for r in rooms], default=0) + 400.0
+    titles = list(first.get("titles", []))
+    preview = list(first.get("preview_raw", []))
+    unplaced = list(first.get("unplaced", []))
+    warns = list(first.get("warnings", []))
+    texts = list(first.get("texts", []))
+    done = [first["info"]["page"] + 1]
+    for pn in pages:
+        if pn in done:
+            continue
+        try:
+            e = _parse_page(data, pn - 1)
+        except PdfError:
+            continue
+        if not e.get("vector_ok") or not e.get("rooms_raw"):
+            warns.append(f"PDF page {pn}: no readable plan on it (skipped).")
+            continue
+        k = e.get("scale_ft_per_unit") or e["to_ft"]
+        f = k / k0 if k0 and k else 1.0   # bring every page to the first page's scale
+        for r in e["rooms_raw"]:
+            r = dict(r)
+            for key in ("x", "y", "w", "d", "lx", "ly"):
+                if key in r:
+                    r[key] = r[key] * f + (shift if key in ("x", "lx") else 0.0)
+            if r.get("size_xy"):
+                r["size_xy"] = (r["size_xy"][0] * f + shift, r["size_xy"][1] * f)
+            r["page"] = pn
+            rooms.append(r)
+        titles += [{"text": t["text"], "x": t["x"] * f + shift, "y": t["y"] * f} for t in e.get("titles", [])]
+        preview += [[a * f + shift, b * f, c * f + shift, d * f] for a, b, c, d in e.get("preview_raw", [])]
+        unplaced += e.get("unplaced", [])
+        warns += [f"Page {pn}: {w}" for w in e.get("warnings", [])]
+        texts += e.get("texts", [])
+        shift = max(r["x"] + r["w"] for r in rooms) + 400.0
+        done.append(pn)
+    for r in rooms[:len(first["rooms_raw"])]:
+        r.setdefault("page", first["info"]["page"] + 1)
+    merged.update({"rooms_raw": rooms, "titles": titles, "preview_raw": preview, "unplaced": unplaced,
+                   "warnings": warns + [f"Floors read from PDF pages {', '.join(map(str, done))} – one floor per page."],
+                   "texts": texts[:400]})
+    merged["info"] = {**first["info"], "pages_read": done}
+    return merged

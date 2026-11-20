@@ -56,3 +56,9 @@ It is wired into the estimate PDFs in 1.25.
 - Import of a DXF / PDF no longer needs scipy; numpy is now in requirements.txt (the wall-based placement needs it; without it the old method is used and a note is added instead of failing).
 - Options for a request with several houses on one floor are no longer searched (took ~3 min) – the message lists the options. Other option searches stop after 15 s.
 - Smoke test reads the 422 body correctly (`detail.questions`).
+
+## 1.24.4
+- PDF import: a PDF with the floors on separate pages is read page by page – every floor becomes its own drawing group (page order = floor order).
+- Checks: every floor of a multi-floor house has a staircase; the car parking is on the road side with nothing in front of it; a parking bay wider than 20 ft under a room gets a "columns only at the edges" note.
+- Generator: when the common toilet needs the door cell, the filler passage cell and the toilet swap and the cell becomes a balcony (openings are re-derived on every trial).
+- Per-floor toilet counts ("1 attached, 1 common") in a floor-wise prompt are read per floor.

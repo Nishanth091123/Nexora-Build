@@ -85,9 +85,10 @@ def run_analysis(f: StoredFile, data: bytes, page: int = 0) -> tuple[str, str, d
 def _finish(db: Session, user: User, f: StoredFile, page: int) -> dict:
     data = backend_for(f.storage_backend).read(f.storage_key)
     method, model, ext, res = run_analysis(f, data, page)
-    pw = (ext.get("info") or {}).get("pages_with_plans") or []
-    if len(pw) > 1:
-        ext.setdefault("warnings", []).append(f"Plans found on PDF pages {', '.join(map(str, pw))} – page {(ext.get('info') or {}).get('page', 0) + 1} was read. "
+    info = ext.get("info") or {}
+    pw = info.get("pages_with_plans") or []
+    if len(pw) > 1 and not info.get("pages_read"):
+        ext.setdefault("warnings", []).append(f"Plans found on PDF pages {', '.join(map(str, pw))} – page {info.get('page', 0) + 1} was read. "
                                               "Choose another page and press Analyse again for the other floors (then “Add to design”).")
     qs = list(ext.get("questions", []))
     if not any(r["placed"] for r in res["rooms"]):

@@ -30,6 +30,28 @@ def check(plan: dict) -> dict:
         ops = [o for o in (lv.get("openings") or []) if o.get("type") in DOORS]
         door_rooms = {o["room"] for o in ops}
 
+        # 0. 1.24.4 (Nishanth): a multi-floor house always has a staircase on every floor, and the car parking opens
+        #    straight to the road side (nothing in front of it) so the car can drive in / out from the gate
+        if len(plan.get("levels") or []) > 1 and not lv.get("stilt") and not any(r["type"] == "stair" for r in rooms):
+            hard.append(f"{nm}: no staircase – every floor of a multi-floor house needs one.")
+        if li == 0 and rooms:
+            y_front = min(r["y"] for r in rooms)
+            for pk in (r for r in rooms if r["type"] == "parking"):
+                if pk["y"] - y_front > 0.3:
+                    hard.append(f"{nm}: {pk['name']} is not on the road side – the car cannot drive in from the gate.")
+                    continue
+                for o in rooms:
+                    if o is not pk and o["type"] != "parking" and _overlap(o, {**pk, "y": pk["y"] - 6.0, "d": 6.0}) > 0.5:
+                        hard.append(f"{nm}: {o['name']} is in front of the {pk['name']} – keep the car entry clear.")
+                        break
+            if len(plan["levels"]) > 1:
+                for pk in (r for r in rooms if r["type"] == "parking"):
+                    upper = [r for r in plan["levels"][1]["rooms"] if r["type"] not in ("terrace", "balcony", "sitout")
+                             and _overlap(r, pk) > 4]
+                    if upper and min(pk["w"], pk["d"]) > 20.5:
+                        soft.append(f"{nm}: {pk['name']} is {min(pk['w'], pk['d']):g} ft clear under a room above – "
+                                    "columns only at its edges (none inside the bay); the beam needs the structural engineer's size.")
+
         # 1. rooms overlapping
         for i, a in enumerate(rooms):
             for b in rooms[i + 1:]:

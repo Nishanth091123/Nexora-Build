@@ -872,6 +872,45 @@ def _pipeline(req: dict, orig: dict, adjust: bool):
                            * max(0.0, min(r["y"] + r["d"], q["y"] + q["d"]) - max(r["y"], q["y"])) for q in park)
                 if area and over >= 0.6 * area and sum(1 for x in lv["rooms"] if x["type"] == "passage") > 1:
                     r["type"], r["name"] = "terrace", "Open Terrace (above car park)"
+            # any other second passage cell on the outer wall is a balcony, not a passage (the biggest cell stays the passage)
+            from .geometry import add_openings as _ao
+
+            def _chk(o):  # doors / walls must be re-derived after every trial change
+                _ao(o)
+                return check(o)
+
+            ps = sorted((r for r in lv["rooms"] if r["type"] == "passage"), key=lambda r: -r["w"] * r["d"])
+            if len(ps) > 1:
+                mx = max(r["x"] + r["w"] for r in lv["rooms"])
+                my = max(r["y"] + r["d"] for r in lv["rooms"])
+                import copy as _cp
+                for r in ps[1:]:
+                    if not (min(r["x"], r["y"], mx - r["x"] - r["w"], my - r["y"] - r["d"]) <= 0.3 and r["w"] * r["d"] >= 12):
+                        continue
+                    base_bad = len(_chk(out)["hard"])
+                    snap = _cp.deepcopy(lv["rooms"])
+                    r["type"], r["name"] = "terrace", "Balcony"
+                    if len(_chk(out)["hard"]) <= base_bad - 1 or not _chk(out)["hard"]:
+                        continue
+                    # a toilet above / below the cell needs the cell for its door: swap them (toilet next to the lounge / passage)
+                    lv["rooms"][:] = snap
+                    r = next(q for q in lv["rooms"] if q["id"] == r["id"])
+                    for t in [q for q in lv["rooms"] if q["type"] in ("toilet", "common_toilet", "dress")
+                              and abs(q["x"] - r["x"]) < 0.05 and abs(q["w"] - r["w"]) < 0.05]:
+                        if abs(t["y"] - (r["y"] + r["d"])) < 0.05:      # toilet above the cell
+                            y0 = r["y"]
+                            t["y"], r["y"] = y0, y0 + t["d"]
+                        elif abs(t["y"] + t["d"] - r["y"]) < 0.05:      # toilet below the cell
+                            t["y"], r["y"] = r["y"] + r["d"] - t["d"], t["y"]
+                        else:
+                            continue
+                        r["type"], r["name"] = "terrace", "Balcony"
+                        if not _chk(out)["hard"]:
+                            break
+                        lv["rooms"][:] = _cp.deepcopy(snap)
+                        r = next(q for q in lv["rooms"] if q["id"] == r["id"])
+                    else:
+                        lv["rooms"][:] = snap
 
     def judge(out, relax=False):
         nonlocal best_bad, best_dev

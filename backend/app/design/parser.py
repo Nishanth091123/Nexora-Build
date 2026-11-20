@@ -383,6 +383,15 @@ def _floor_spec(seg: str) -> dict:
     m = re.search(NUM + r"\s*(?:toilets?|bathrooms?|baths?)", seg)
     if m:
         sp["toilets"] = int(_num(m.group(1)) or 0)
+    # 1.24.3 toilets written for THIS floor ("1 bedroom attached toilet", "1 attached, 1 common toilet")
+    _TOI = r"(?:toilets?|bath\s*rooms?|baths?|wash\s*rooms?|restrooms?)?"
+    _ATT = r"(?:attached|attach|attch|atached|அட்டாச்டு|அட்டாச்|அட்டாச்சுடு)"
+    _COM = r"(?:common|comman|காமன்)"
+    if re.search(_ATT, seg) or re.search(_COM, seg):
+        ma = re.search(NUM + r"\s*" + _ATT, seg) or re.search(_ATT + r"\s*" + _TOI + r"\s*(?:x|=|:)\s*" + NUM + r"(?!\d)", seg)
+        mc = re.search(NUM + r"\s*" + _COM, seg) or re.search(_COM + r"\s*" + _TOI + r"\s*(?:x|=|:)\s*" + NUM + r"(?!\d)", seg)
+        sp["attached_toilets"] = int(_num(ma.group(1)) or 1) if ma else (1 if re.search(_ATT, seg) else 0)
+        sp["common_toilets"] = int(_num(mc.group(1)) or 1) if mc else (1 if re.search(_COM, seg) else 0)
     if re.search(r"car\s*(?:parking|park)?|\bcar\b|கார்", seg):
         sp["parking_car"] = True
     if re.search(r"bike|two.?wheeler|scooter", seg):
@@ -503,6 +512,8 @@ def levels_from_specs(d: dict) -> list[dict]:
             if sp.get("toilets") is not None:
                 t_ = int(sp["toilets"])
                 att, com = min(b, max(0, t_ - 1)) if t_ > 1 else 0, (1 if t_ >= 1 else 0) if t_ <= b else t_ - min(b, t_ - 1)
+            if sp.get("attached_toilets") is not None or sp.get("common_toilets") is not None:  # the floor's own words win
+                att, com = min(int(sp.get("attached_toilets") or 0), b), int(sp.get("common_toilets") or 0)
             home = bool(sp.get("home") or sp.get("kitchen") or first_home)
             lv.update({"bedrooms": b, "attached_toilets": att, "common_toilets": com, "kitchen": home, "hall": home,
                        "dining": home and (b >= 2 or bool(sp.get("dining"))), "lounge": not home})
