@@ -547,6 +547,19 @@ def site_plan(plan: dict) -> Dwg:
     d.rect(bx0 + 0.6, by0 - 0.6, bx1 - bx0, by1 - by0, "SHADOW", "#e4e4e7", 0)  # shadow
     d.rect(bx0, by0, bx1 - bx0, by1 - by0, "BUILDING", "#ffffff")
     d.hatch(bx0, by0, bx1 - bx0, by1 - by0, 1.0)
+    es = plan.get("ext_stair")
+    if es and es.get("on"):   # 1.27.4 staircase outside the building
+        sw_, sl_ = float(es["w"]), float(es["len"])
+        sx_ = bx1 + 0.05 if es["side"] == "right" else bx0 - 0.05 - sw_
+        sy_ = by0 + 2.0
+        d.rect(sx_, sy_, sw_, sl_, "BUILDING", "#f5f5f4")
+        n_ = max(4, int(es.get("risers", 20)) - 1)
+        for k_ in range(1, n_):
+            yy_ = sy_ + (sl_ - 3.0) * k_ / n_
+            d.line(sx_, yy_, sx_ + sw_, yy_, "HATCH")
+        d.rect(sx_, sy_ + sl_ - 3.0, sw_, 3.0, "BUILDING", "#e7e5e4")
+        d.text(sx_ + sw_ / 2, sy_ - 0.9, "EXTERNAL STAIR (UP)", 0.5, layer="ROOMTEXT", bold=True)
+        d.text(sx_ + sw_ / 2, sy_ + sl_ + 0.6, "to terrace", 0.45, layer="ROOMTEXT")
     d.rect(bx0 + (bx1 - bx0) / 2 - 7, (by0 + by1) / 2 - 2.2, 14, 3.6, "BUILDING", "#ffffff")
     d.text((bx0 + bx1) / 2, (by0 + by1) / 2, "PROPOSED BUILDING", 0.9, layer="ROOMTEXT", bold=True)
     d.text((bx0 + bx1) / 2, (by0 + by1) / 2 - 1.5, f"{len(plan['levels'])} floor(s)", 0.7, layer="ROOMTEXT")
@@ -673,6 +686,7 @@ def front_elevation(plan: dict) -> Dwg:
     _ground(d, gx0 - 5, gx1 + 5)
     d.rect(gx0 - 0.4, 0, gx1 - gx0 + 0.8, PLINTH, "OUTLINE", "#d4d4d8")
     d.hatch(gx0 - 0.4, 0, gx1 - gx0 + 0.8, PLINTH, 0.5)
+    door_x = None
     for i, lv in enumerate(plan["levels"]):
         x0, x1, y0, _ = _extent(lv)
         z0, z1 = zs[i], zs[i + 1]
@@ -720,6 +734,15 @@ def front_elevation(plan: dict) -> Dwg:
                 mz = z0 + o["h"] + 0.5
                 if ev and ev["canopy"] == "slab" and i == 0:
                     d.rect(ox0 - 1.6, z0 + o["h"] + 0.9, ox1 - ox0 + 3.2, 0.5, "SLAB", TRIM)
+                if ev and i == 0:
+                    door_x = (ox0 + ox1) / 2
+                    if ev.get("feature") in ("sitout", "portico"):
+                        half = (ox1 - ox0) / 2 + (2.6 if ev["feature"] == "sitout" else 3.6)
+                        for px in (door_x - half + 0.3, door_x + half - 0.7):
+                            d.rect(px, z0, 0.4 if ev["feature"] == "sitout" else 0.7, 8.6, "COLUMN", TRIM)
+                        d.rect(door_x - half - 0.3, z0 + 8.6, 2 * half + 0.6, 0.6, "SLAB", TRIM)
+                        if ev["feature"] == "portico":
+                            d.rect(door_x - half, z0 - 0.5, 2 * half, 0.5, "OUTLINE", "#d4d4d8")
             elif o["type"] in ("door", "pooja_door", "toilet_door"):  # single shutter
                 d.rect(ox0 - 0.2, z0, ox1 - ox0 + 0.4, o["h"] + 0.2, "DOOR", "#fde68a")
                 d.rect(ox0, z0, ox1 - ox0, o["h"], "DOOR", "#d6b48a")
@@ -730,19 +753,34 @@ def front_elevation(plan: dict) -> Dwg:
                 continue
             if o.get("mark"):
                 d.text((ox0 + ox1) / 2, mz, o["mark"], 0.55, layer="MARK")
+        if ev and i == 1 and ev.get("feature") in ("balcony", "balcony_glass"):
+            bx = next((r_ for r_ in plan["levels"][0]["rooms"] if r_["type"] in ("hall", "lounge") and r_["y"] <= y0 + 0.1), None)
+            bcx = door_x if door_x is not None else ((bx["x"] + bx["w"] / 2) if bx else (x0 + x1) / 2)
+            d.rect(bcx - 4.2, z0 - 0.2, 8.4, 0.6, "SLAB", TRIM)
+            if ev["feature"] == "balcony_glass":
+                d.rect(bcx - 4.2, z0 + 0.4, 8.4, 3.0, "SHADOW", "#bae6fd")
+            else:
+                d.rect(bcx - 4.2, z0 + 3.1, 8.4, 0.25, "SLAB", TRIM)
+                xx = bcx - 4.0
+                while xx < bcx + 4.1:
+                    d.rect(xx, z0 + 0.4, 0.15, 2.7, "OUTLINE", TRIM)
+                    xx += 0.7
         d.level(x1 + 1.5, z0, f"+{z0 * FT_M:.2f} m  {lv['name'].upper()}")
     tx0, tx1, _, _ = _extent(plan["levels"][-1])
     roof = zs[-1]
     stair = next((r for r in plan["levels"][-1]["rooms"] if r["type"] == "stair"), None)
+    if stair is None and n == 1:
+        stair = next((r for r in plan["levels"][0]["rooms"] if r["type"] == "stair"), None)
+    hr_on = bool(stair) and (n > 1 or plan.get("headroom", True))   # 1.27.4: a single floor with a staircase shows its head room too
     if not no_top_slab:
         d.rect(tx0, roof, tx1 - tx0, PARAPET, "PARAPET", WALL)
         d.rect(tx0 - 0.25, roof + PARAPET, tx1 - tx0 + 0.5, 0.3, "PARAPET", TRIM)  # coping
-        if stair and n > 1:
+        if stair and hr_on:
             d.rect(stair["x"], roof, stair["w"], HEADROOM, "OUTLINE", WALL)
             if not sheet_mumty:
                 d.rect(stair["x"] - 0.6, roof + HEADROOM, stair["w"] + 1.2, SLAB + 0.15, "SLAB", TRIM)
             d.text(stair["x"] + stair["w"] / 2, roof + HEADROOM / 2, "HEAD ROOM", 0.55, layer="DIM")
-    top = roof + (0.3 if no_top_slab else HEADROOM + SLAB if stair and n > 1 else PARAPET + 0.3)
+    top = roof + (0.3 if no_top_slab else HEADROOM + SLAB if stair and hr_on else PARAPET + 0.3)
     top = max(top, draw_side(d, plan, "front"))  # 1.17 sheet roofs
     if ev:
         w_ = tx1 - tx0
@@ -1091,10 +1129,13 @@ def sheet_set_pdf(plan: dict, project: dict, meta: dict, style: str = "paper") -
             c.drawString(x + 3 * mm, yy + 1.8 * mm, str(v)[:60])
         # signature boxes – left empty on purpose (signed by hand)
         yy -= 4 * mm
-        for lab in ("Prepared by (signature)", "Owner (signature)", "Licensed engineer / architect (signature & reg. no.)"):
+        for k_, lab in enumerate(("Prepared by (signature)", "Owner (signature)", "Licensed engineer / architect (signature & reg. no.)")):
             c.setFont("Helvetica", 7)
             c.setFillColor(colors.HexColor("#475569"))
             c.drawString(x + 3 * mm, yy - 3.5 * mm, lab)
+            if k_ == 0:   # 1.27.5: the owner's own stamp + signature (only when he switched it on in Settings)
+                from .. import letterhead as _lh
+                _lh.stamp(c, W - M - 54 * mm, yy - 16.2 * mm, 52 * mm, 12.5 * mm)
             yy -= 17 * mm
             c.line(x, yy, W - M, yy)
         c.setFont("Helvetica-Oblique", 6.5)

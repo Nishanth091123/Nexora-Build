@@ -96,3 +96,14 @@ Plans with a staircase now cost the head room (stair cover) on the terrace: 230 
 
 ## 1.27.3 – Head room switch on the Estimate screen
 "Staircase head room (stair cover on terrace)" toggle added under 4. Services & external works. Tick it and press Calculate – the "staircase head room" lines appear in the BOQ. An estimate saved earlier keeps its old inputs: press Calculate again (or make a new estimate).
+
+## 1.27.4 – Elevation by floors, foundation options, external staircase
+- Elevation catalog (1,600): 800 styles for a ground-floor-only house (sit-out / portico / plain), 800 for G+1 and above (first-floor balcony, railing or glass). The list follows the active drawing; untick "Only styles made for this plan" to see all. A single floor with a staircase now shows the head room in the elevation.
+- Estimate → Services & external works: plinth height, foundation depth, future floors provision (foundation & columns designed for G+1 / G+2 – extra cost shown now), basement (rough allowance, what is NOT included is stated in the notes).
+- External staircase (ground-floor-only plans): say "external staircase" in the prompt. No stair room inside the house, the stair is drawn on the site plan, costed (RCC, railing, finish, paint) and the head room becomes a small door cover. It sits in the side setback – needs local body permission. G+1 with an external stair is not built yet (the stair stays inside).
+
+## 1.27.5 – Owner's seal & signature on the PDFs
+Settings → Company → "Seal & signature on PDFs" (owner only). Upload a photo of your signature on white paper, switch "Print seal & signature on PDFs" on. The seal reads PROPRIETOR / your signature / PRAGANYA CONSTRUCTION and replaces the blank "Seal & Signature" box in the estimate, loan, interior, electrical-plumbing PDFs and the first signature slot ("Prepared by") of the drawing title block. Off = the boxes stay blank for hand signing (default). The signature is stored in the database (not in the code / GitHub).
+
+## 1.27.6 – Signature photo cleaning
+Works with grey / unevenly lit paper (phone photos): the paper is removed locally, the ink becomes one dark-blue colour, photo edges are ignored.

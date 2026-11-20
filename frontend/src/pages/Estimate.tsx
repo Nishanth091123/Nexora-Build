@@ -230,6 +230,11 @@ function InputsModal({ open, onClose, inputs, setInputs, state, setState, onCalc
         {tog("compound_wall", "Compound wall")}{tog("gate", "MS gate")}
         <Field label="Sump (litres, 0 = none)"><input className="input" type="number" value={inputs.sump_litres} onChange={n("sump_litres")} /></Field>
         <Field label="Overhead tank (litres, blank = auto)"><input className="input" type="number" value={inputs.oh_tank_litres ?? ""} onChange={(e) => set("oh_tank_litres", e.target.value === "" ? null : Number(e.target.value))} /></Field>
+        <Field label="Plinth height (ft, blank = 1.5)"><input className="input" type="number" step="0.5" value={inputs.plinth_ft ?? ""} onChange={(e) => set("plinth_ft", e.target.value === "" ? null : Number(e.target.value))} /></Field>
+        <Field label="Foundation depth (m, blank = 1.5)"><input className="input" type="number" step="0.1" value={inputs.foundation_depth_m ?? ""} onChange={(e) => set("foundation_depth_m", e.target.value === "" ? null : Number(e.target.value))} /></Field>
+        <Field label="Future floors provision (foundation & columns)"><select className="input" value={inputs.future_floors ?? 0} onChange={(e) => set("future_floors", Number(e.target.value))}><option value={0}>None</option><option value={1}>1 floor (G+1)</option><option value={2}>2 floors (G+2)</option></select></Field>
+        {tog("basement", "Basement (rough allowance)")}
+        {inputs.basement && <Field label="Basement clear height (ft, blank = 8)"><input className="input" type="number" step="0.5" value={inputs.basement_height_ft ?? ""} onChange={(e) => set("basement_height_ft", e.target.value === "" ? null : Number(e.target.value))} /></Field>}
         {inputs.compound_wall && <Field label="Compound wall length (m, blank = plot)"><input className="input" type="number" value={inputs.compound_wall_length_m ?? ""} onChange={(e) => set("compound_wall_length_m", e.target.value === "" ? null : Number(e.target.value))} /></Field>}
       </div>
       <h4 className="mb-2 mt-5 text-sm font-bold text-navy-ink">5. Extras</h4>

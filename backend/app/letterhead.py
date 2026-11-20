@@ -3,7 +3,7 @@
 Rules (agreed with the owner):
   * header band (logo, firm name, services, proprietor + phone) on the FIRST page only
   * footer on EVERY page: a straight line, then "Praganya Construction" centred
-  * no barcode / QR, no invented address, no fake seal or signature
+  * no barcode / QR, no invented address; the seal & signature box is BLANK unless the owner uploads his own signature and switches it on
   * client name and date are typed by the user - never pre-filled
 Works with a raw reportlab canvas (``first_page`` / ``later_page``) and with
 platypus (``on_first`` / ``on_later`` page callbacks).
@@ -87,6 +87,53 @@ def client_block(c, y: float, page_w: float, client: str = "", date: str = "", m
 
 SEAL_W, SEAL_H = 170.0, 64.0
 
+# ---- owner's seal & signature (1.27.5) ----------------------------------------------------
+# OFF by default: the box stays blank and labelled. The owner uploads HIS OWN signature (Settings → Company) and
+# switches "print seal & signature" on; then the box shows the company stamp:
+#   PROPRIETOR / (gap for the signature) / PRAGANYA CONSTRUCTION
+_STAMP = {"on": False, "sig": None}
+
+
+def configure(on: bool = False, sig_png: bytes | None = None) -> None:
+    import io
+    _STAMP["on"] = bool(on)
+    _STAMP["sig"] = ImageReader(io.BytesIO(sig_png)) if sig_png else None
+
+
+def stamp(c, x: float, y: float, w: float, h: float) -> bool:
+    """Draw the owner's stamp in this box if it is switched on. Returns True when drawn."""
+    if not stamp_on():
+        return False
+    _draw_stamp(c, x, y, w, h)
+    return True
+
+
+def stamp_on() -> bool:
+    return bool(_STAMP["on"])
+
+
+def _draw_stamp(c, x: float, y: float, w: float, h: float) -> None:
+    c.saveState()
+    ink = HexColor("#1E3A8A")
+    c.setStrokeColor(ink)
+    c.setFillColor(ink)
+    fs = max(4.5, min(8.5, h * 0.135))
+    c.setLineWidth(max(0.8, h * 0.02))
+    c.roundRect(x, y, w, h, h * 0.09)
+    c.setLineWidth(0.4)
+    c.roundRect(x + h * 0.05, y + h * 0.05, w - h * 0.1, h - h * 0.1, h * 0.06)
+    c.setFont("Helvetica-Bold", fs)
+    c.drawCentredString(x + w / 2, y + h - h * 0.07 - fs, "PROPRIETOR")
+    c.drawCentredString(x + w / 2, y + h * 0.1, FIRM.upper())
+    sig = _STAMP["sig"]
+    if sig:
+        iw, ih = sig.getSize()
+        gy0, gy1 = y + h * 0.1 + fs + h * 0.03, y + h - h * 0.07 - fs - h * 0.03
+        gh, gw = gy1 - gy0, w - h * 0.3
+        k = min(gw / iw, gh / ih)
+        c.drawImage(sig, x + (w - iw * k) / 2, gy0 + (gh - ih * k) / 2, width=iw * k, height=ih * k, mask="auto")
+    c.restoreState()
+
 
 def seal_box(c, page_w: float, y: float, margin: float = 28, w: float = SEAL_W, h: float = SEAL_H) -> None:
     """ONE blank box, right corner, labelled "Seal & Signature". y = bottom of box.
@@ -96,6 +143,10 @@ def seal_box(c, page_w: float, y: float, margin: float = 28, w: float = SEAL_W, 
     c.setStrokeColor(GREY)
     c.setLineWidth(0.6)
     x = page_w - margin - w
+    if stamp_on():
+        _draw_stamp(c, x, y, w, h)
+        c.restoreState()
+        return
     c.rect(x, y, w, h)
     c.setFont("Helvetica", 8)
     c.setFillColor(GREY)
@@ -124,6 +175,10 @@ try:  # platypus flowable: right-aligned, kept together, flows after the body (n
             c.setStrokeColor(GREY)
             c.setLineWidth(0.6)
             x = self.width - SEAL_W
+            if stamp_on():
+                _draw_stamp(c, x, 14, SEAL_W, SEAL_H)
+                c.restoreState()
+                return
             c.rect(x, 14, SEAL_W, SEAL_H)
             c.setFont("Helvetica", 8)
             c.setFillColor(GREY)

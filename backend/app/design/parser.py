@@ -130,7 +130,11 @@ def parse(text: str, defaults: dict | None = None) -> dict:
             understood.append(f"{d['common_count']} common toilet(s) – small, opens from the hall / passage")
         else:
             understood.append("Common toilet (small, opens from the hall / passage)")
-    if re.search(r"\bstair\w*|\bsteps\b|படிக்கட்டு|padikattu|\bmetti", t) and not re.search(r"\bno\s+stair|without\s+stair|stair\w*\s+(?:venda|vendam)", t):
+    if re.search(r"(?:external|exterior|outside|outer|open)\s+(?:stair\w*|steps)|stair\w*\s+(?:outside|external|exterior)|வெளி\w*\s*(?:ஸ்டேர்|படிக்கட்டு)|veliya\s*stair", t):
+        d["external_stair"] = True
+        understand_ = "Staircase OUTSIDE the building (external, to the terrace) – no stair room inside"
+        understood.append(understand_)
+    elif re.search(r"\bstair\w*|\bsteps\b|படிக்கட்டு|padikattu|\bmetti", t) and not re.search(r"\bno\s+stair|without\s+stair|stair\w*\s+(?:venda|vendam)", t):
         d["staircase_asked"] = True
         understood.append("Staircase (kept even on a ground-floor-only plan)")
 
@@ -282,8 +286,9 @@ def build_requirements(d: dict) -> dict:
         "road_width_m": d.get("road_width_m"), "area_type": d.get("area_type", "other"),
         "corner": bool(d.get("corner")), "side_road_width_m": d.get("side_road_width_m"),
         "floor_height_ft": float(d.get("floor_height_ft") or 10), "stilt": stilt,
-        "staircase": n > 1 or bool(d.get("staircase", True)), "levels": levels,
-        "staircase_asked": bool(d.get("staircase_asked")),
+        "staircase": (n > 1 or bool(d.get("staircase", True))) and not (d.get("external_stair") and n == 1), "levels": levels,
+        "staircase_asked": bool(d.get("staircase_asked")) and not (d.get("external_stair") and n == 1),
+        "external_stair": bool(d.get("external_stair")) and n == 1,
         "room_sizes": d.get("room_sizes") or {}, "explicit": list(dict.fromkeys(d.get("_explicit", []))),
         "assumptions": list(dict.fromkeys(d.get("_notes", []))),
     }

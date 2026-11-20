@@ -117,6 +117,12 @@ class Inputs:
     plot_width_ft: float | None = None
     plot_length_ft: float | None = None
     staircase: bool = True                    # to upper floors / terrace
+    plinth_ft: float | None = None            # 1.27.4: plinth height above ground (default 1.5 ft)
+    foundation_depth_m: float | None = None   # 1.27.4: depth of footing bottom below ground (default 1.5 m)
+    future_floors: int = 0                    # 1.27.4: footings / columns designed for this many extra floors (not built now)
+    basement: bool = False                    # 1.27.4: basement under the building (rough allowance)
+    basement_height_ft: float | None = None   # clear height, default 8 ft
+    ext_stair: dict | None = None             # 1.27.4: staircase outside the building {floors, w_m}
     headroom: bool = False                    # 1.27.2: staircase head room (stair cover) on the terrace
     headroom_m2: float | None = None          # its footprint (default = staircase footprint)
     compound_wall: bool = False
@@ -142,10 +148,10 @@ class Inputs:
     @staticmethod
     def from_dict(d: dict) -> "Inputs":
         """Accepts form data: blank strings become defaults, numbers given as text are converted."""
-        ints = {"bedrooms", "halls", "kitchens", "toilets", "sump_litres", "oh_tank_litres"}
-        floats = {"floor_height_ft", "plot_width_ft", "plot_length_ft", "compound_wall_length_m", "headroom_m2", "parking_area_sqft",
+        ints = {"bedrooms", "halls", "kitchens", "toilets", "sump_litres", "oh_tank_litres", "future_floors"}
+        floats = {"floor_height_ft", "plot_width_ft", "plot_length_ft", "compound_wall_length_m", "headroom_m2", "plinth_ft", "foundation_depth_m", "basement_height_ft", "parking_area_sqft",
                   "approval_fees", "contractor_margin_pct", "gst_pct", "contingency_pct"}
-        bools = {"stilt", "staircase", "headroom", "compound_wall", "gate", "septic_tank", "rwh"}
+        bools = {"stilt", "staircase", "headroom", "basement", "compound_wall", "gate", "septic_tank", "rwh"}
         out = {}
         for k, v in (d or {}).items():
             if k not in Inputs.__dataclass_fields__:
@@ -432,8 +438,11 @@ def calculate(inputs: dict, rates: dict[str, dict]) -> dict:
     else:
         w0, l0 = dims(A0)
     P0 = 2 * (w0 + l0)
+    plinth_m = max(0.3, min(1.5, float(inp.plinth_ft or 1.5) * 0.3048))
+    fdepth = max(1.0, min(3.0, float(inp.foundation_depth_m or 1.5)))
+    fut = max(0, min(2, int(inp.future_floors or 0)))
     c.assumptions += [
-        f"Floor height {inp.floor_height_ft:g} ft; plinth 1.5 ft above ground; foundation depth 1.5 m.",
+        f"Floor height {inp.floor_height_ft:g} ft; plinth {plinth_m / 0.3048:.1f} ft above ground; foundation depth {fdepth:g} m.",
         ("Internal walls measured from the drawing" if G else "Internal walls ≈ 0.28 m per m² of floor")
         + "; toilet partitions 115 mm; external walls 230 mm.",
         "Door / window sizes: main 1.0×2.1 m, room 0.9×2.1 m, toilet 0.75×2.1 m; bedroom window 1.5×1.2 m.",
@@ -447,18 +456,19 @@ def calculate(inputs: dict, rates: dict[str, dict]) -> dict:
     if rcc_frame:
         nx, ny = math.ceil(w0 / 3.6) + 1, math.ceil(l0 / 3.6) + 1
         ncol = nx * ny
-        if levels == 1:
+        lv_d = levels + fut          # footings / column size follow the floors they are designed for
+        if lv_d == 1:
             col_b, col_d, fs, fd = 0.23, 0.30, 1.2, 0.35
-        elif levels == 2:
+        elif lv_d == 2:
             col_b, col_d, fs, fd = 0.23, 0.38, 1.5, 0.40
-        elif levels == 3:
+        elif lv_d == 3:
             col_b, col_d, fs, fd = 0.23, 0.45, 1.8, 0.45
         else:
             col_b, col_d, fs, fd = 0.30, 0.45, 2.1, 0.50
         c.assumptions.append(
             f"RCC frame: {ncol} columns ({nx}×{ny} grid, ≈3.6 m spacing), column {int(col_b*1000)}×{int(col_d*1000)} mm, "
             f"footing {fs}×{fs}×{fd} m – preliminary sizes, final sizes from structural design.")
-        exc = ncol * (fs + 0.6) ** 2 * 1.5
+        exc = ncol * (fs + 0.6) ** 2 * fdepth
         pb_len = P0 + 0.28 * A0 * 0.6
         exc += pb_len * 0.6 * 0.45
         c.add("Earthwork", "Excavation for footings & plinth beam (JCB + manual dressing)", F, exc, "m³",
@@ -467,7 +477,7 @@ def calculate(inputs: dict, rates: dict[str, dict]) -> dict:
         c.pcc("under footings", F, ncol * (fs + 0.2) ** 2 * 0.1)
         foot_vol = ncol * fs * fs * fd
         c.rcc("Footings", F, foot_vol, "footing", ncol * 4 * fs * fd)
-        sub_h = 1.5 - fd + 0.45
+        sub_h = fdepth - fd + plinth_m
         c.rcc("Columns up to plinth", F, ncol * col_b * col_d * sub_h, "column", ncol * 2 * (col_b + col_d) * sub_h)
         c.rcc("Plinth beam 230×300", PL, pb_len * 0.23 * 0.30, "plinth_beam", pb_len * 0.30 * 2)
         back = exc - ncol * (fs + 0.2) ** 2 * 0.1 - foot_vol - ncol * col_b * col_d * sub_h
@@ -492,8 +502,27 @@ def calculate(inputs: dict, rates: dict[str, dict]) -> dict:
         c.add("Earthwork", "Backfilling with excavated earth, compacted", F, back, "m³", None, "backfill")
         exc_total, back_total = exc, back
 
-    fill = A0 * 0.30
-    c.add("Earthwork", "Plinth filling (earth/gravel) 300 mm, compacted", PL, fill, "m³",
+    if fut and rcc_frame:
+        c.assumptions.append(f"Foundation & columns are designed for {levels + fut} floors ({fut} future floor{'s' if fut > 1 else ''} not built now): "
+                             "footings and columns are sized for the full height; starter bars are left at the top – extra cost when the floors are built.")
+    if inp.basement:
+        bh = max(2.0, min(3.3, float(inp.basement_height_ft or 8.0) * 0.3048))
+        exc_b = A0 * (bh + 0.2) * 1.15
+        c.add("Earthwork", f"Basement excavation ({bh / 0.3048:.0f} ft deep, with working space)", F, exc_b, "m³", None, "excavation",
+              {"jcb": max(3, exc_b / 25)})
+        c.pcc("under basement raft", F, A0 * 0.1)
+        c.rcc("Basement raft slab 200 mm", F, A0 * 0.20, "slab", A0 * 0.05, steel_kg=A0 * 0.20 * 110)
+        rw = P0 * bh * 0.23
+        c.rcc(f"Basement retaining wall 230 mm ({bh / 0.3048:.0f} ft)", F, rw, "slab", P0 * bh * 2, steel_kg=rw * 100)
+        wpb = P0 * bh + A0
+        c.add("Waterproofing", "Basement waterproofing – walls & floor (membrane + protection)", F, wpb, "m²", {"waterproof": wpb}, "waterproof")
+        c.plaster("int", "basement walls", F, P0 * bh)
+        exc_total += exc_b
+        c.assumptions.append(f"Basement allowance: {bh / 0.3048:.0f} ft clear height under the whole footprint – excavation, raft, 230 mm retaining wall, "
+                             "waterproofing, plaster. NOT included: stair/ramp to the basement, sump & pump, ventilation, lighting, finishes, "
+                             "dewatering, shoring of neighbouring plots – get a structural design before quoting.")
+    fill = A0 * max(0.0, plinth_m - 0.15)
+    c.add("Earthwork", f"Plinth filling (earth/gravel) {int(max(0.0, plinth_m - 0.15) * 1000)} mm, compacted", PL, fill, "m³",
           {"filling_soil": fill}, "filling")
     c.pcc("flooring bed 75 mm at ground level", PL, A0 * 0.85 * 0.075)
     surplus = max(0.0, exc_total - back_total)
@@ -557,7 +586,7 @@ def calculate(inputs: dict, rates: dict[str, dict]) -> dict:
                     - g["win_area"] - 2 * g["door_area"])
         ext_area = g["ext"] * (g["h"] + beam_d) - g["win_area"]
         if i == 0:
-            ext_area += P0 * 0.45  # plinth face
+            ext_area += P0 * plinth_m  # plinth face
         ceil_area = 0.0 if (sheet_top and i == levels - 1) else a * 0.92  # under a sheet roof: no RCC ceiling
         c.plaster("int", "walls", fl, max(0, int_area))
         c.plaster("ext", "outer walls", fl, max(0, ext_area))
@@ -631,8 +660,31 @@ def calculate(inputs: dict, rates: dict[str, dict]) -> dict:
         c.add("Electrical", "Distribution board with MCBs", fl, 1, "nos", {"elec_db": 1},
               None, None, {"electrician": 1})
 
+    # ------------- 1.27.4 staircase outside the building -------------
+    if inp.ext_stair:
+        es = inp.ext_stair
+        fl = names[-1]
+        nfl = max(1, int(es.get("floors") or 1))
+        w = max(0.75, float(es.get("w_m") or 0.9))
+        rise = float(inp.floor_height_ft) * 0.3048 + slab_t
+        risers = max(8, round(rise / 0.165))
+        run = (risers - 1) * 0.25
+        slope = math.hypot(rise, run)
+        vol = nfl * (w * slope * 0.15 + 0.5 * 0.165 * 0.25 * (risers - 1) * w + 1.0 * w * 0.15 + 0.5)
+        c.rcc(f"external staircase – {nfl} floor(s), {w:.2f} m wide flight, landing, 2 columns with footings per floor", fl, vol, "stair",
+              nfl * (w * slope * 1.3 + 2 * slope * 0.15 + 6.0))
+        rail = nfl * (2 * slope + 2.0)
+        c.add("Doors & Windows", "External staircase railing with handrail (MS, both sides)", fl, rail, "rmt", {"stair_railing": rail})
+        tile = nfl * (run * w + 1.0 * w)
+        c.add("Flooring & Tiling", "External staircase treads & landing – anti-skid tiles / granite", fl, tile * 1.08, "m²",
+              {"floor_tile": tile * 1.08, "tile_adhesive": tile}, "floor_tile")
+        pa = nfl * (2 * slope * 0.3 + w * slope)
+        c.add("Painting", "External staircase – exterior painting (sides & soffit)", fl, pa, "m²", {"paint_ext": pa}, "paint_ext")
+        c.assumptions.append(f"Staircase OUTSIDE the building: {nfl} floor(s), {risers} risers of 165 mm per floor, {w:.2f} m wide, "
+                             "RCC waist slab, MS railing both sides, anti-skid finish. Footings/columns allowed as a lump in the RCC line.")
+
     # ------------- 1.27.2 staircase head room (stair cover) on the terrace -------------
-    if inp.headroom and inp.staircase and not sheet_mumty and not (sheet_top and levels >= 1):
+    if inp.headroom and (inp.staircase or inp.ext_stair) and not sheet_mumty and not (sheet_top and levels >= 1):
         fl = names[-1]
         hm2 = float(inp.headroom_m2 or 7.6)           # ≈ 82 sq ft
         side = math.sqrt(hm2)

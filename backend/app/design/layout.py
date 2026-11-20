@@ -1161,6 +1161,18 @@ def _generate(req: dict, _probe: bool = False) -> dict:
         "levels": out_levels, "notes": notes,
         "requirements": {**req, "levels": levels},
     }
+    if req.get("external_stair") and n == 1:   # 1.27.4: staircase outside the building (to the terrace)
+        ft = sb.get("ft") or {}
+        side = "right" if ft.get("right", 0) >= ft.get("left", 0) else "left"
+        w_ = 3.0
+        rise = float(req.get("floor_height_ft") or 10) + 0.7
+        risers = round(rise / 0.54)
+        plan["ext_stair"] = {"on": True, "side": side, "w": w_, "floors": 1, "risers": risers, "len": round((risers - 1) * 0.83 + 3.0, 1)}
+        gap = ft.get(side, 0)
+        plan["notes"] = list(plan.get("notes") or []) + [
+            f"External staircase on the {side} side: {w_:g} ft wide, ≈ {plan['ext_stair']['len']:g} ft long, {risers} risers to the terrace. "
+            + ("It sits inside the side setback – an open stair there needs the local body's permission."
+               if gap and gap < 6 else "Check its position against the setbacks with the local body.")]
     from .geometry import add_openings
     out = add_openings(plan)
     out["notes"] = list(out.get("notes") or []) + size_report(req, out_levels)

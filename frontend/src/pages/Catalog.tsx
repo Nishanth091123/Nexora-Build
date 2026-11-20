@@ -47,7 +47,8 @@ export function useFacets() {
 export function ElevationCatalog({ pid }: { pid: number }) {
   const nav = useNavigate();
   const facets = useFacets();
-  const [flt, setFlt] = useState({ family: "", palette: "", top: "", clad: "", win: "" });
+  const [flt, setFlt] = useState({ family: "", palette: "", top: "", clad: "", win: "", feature: "" });
+  const [fit, setFit] = useState(true);
   const [page, setPage] = useState(1);
   const [data, setData] = useState<any>(null);
   const [err, setErr] = useState("");
@@ -56,7 +57,7 @@ export function ElevationCatalog({ pid }: { pid: number }) {
   const [busy, setBusy] = useState(false);
   const [render, setRender] = useState<{ base: string; prompt: string; style: string } | null>(null);
   const [done, setDone] = useState<any>(null);
-  const q = useMemo(() => new URLSearchParams({ ...flt, page: String(page), size: "24" }).toString(), [flt, page]);
+  const q = useMemo(() => new URLSearchParams({ ...flt, fit: String(fit), page: String(page), size: "24" }).toString(), [flt, page, fit]);
   const load = useCallback(async () => {
     try { setData(await api<any>(`/api/projects/${pid}/catalog/elevation?${q}`)); setErr(""); } catch (e: any) { setErr(e.message || "Could not load"); }
   }, [pid, q]);
@@ -82,12 +83,18 @@ export function ElevationCatalog({ pid }: { pid: number }) {
   return (
     <Card title={`Elevation styles${data ? ` – ${data.total} of ${facets?.elevation?.total ?? 1600}` : ""}`} icon={<Sparkles size={20} />}>
       <p className="mb-3 text-sm text-slate-600">Every picture is drawn on <b>your house</b> ({data?.floors ?? "–"} floor{data?.floors === 1 ? "" : "s"}, {Math.round(data?.width_ft ?? 0)} ft wide). Pick one – the front elevation drawing, the 3D model and the PDFs follow it. Applying saves a <b>new version</b> of the drawing; nothing is overwritten.</p>
-      <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
+      {data?.has_drawing && (
+        <label className="mb-3 flex items-center gap-2 text-sm text-slate-700">
+          <input type="checkbox" checked={fit} onChange={(e) => { setFit(e.target.checked); setPage(1); }} />
+          Only styles made for this plan ({data.floors === 1 ? "ground floor only" : `G+${data.floors - 1} and above`}) – untick to see all {facets?.elevation?.total ?? 1600}
+        </label>)}
+      <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-6">
         <select className={SEL} value={flt.family} onChange={setF("family")}><option value="">All families</option>{facets?.elevation.families.map((x: any) => <option key={x.id} value={x.id}>{x.label}</option>)}</select>
         <select className={SEL} value={flt.palette} onChange={setF("palette")}><option value="">All colours</option>{facets?.elevation.palettes.map((x: any) => <option key={x.id} value={x.id}>{x.label}</option>)}</select>
         <select className={SEL} value={flt.top} onChange={setF("top")}><option value="">Any top</option>{facets?.elevation.tops.map((x: any) => <option key={x.id} value={x.id}>{x.label}</option>)}</select>
         <select className={SEL} value={flt.clad} onChange={setF("clad")}><option value="">Any cladding</option>{facets?.elevation.claddings.map((x: any) => <option key={x.id} value={x.id}>{x.label}</option>)}</select>
         <select className={SEL} value={flt.win} onChange={setF("win")}><option value="">Any windows</option>{facets?.elevation.windows.map((x: any) => <option key={x.id} value={x.id}>{x.label}</option>)}</select>
+        <select className={SEL} value={flt.feature} onChange={setF("feature")}><option value="">Any feature</option>{facets?.elevation.features?.map((x: any) => <option key={x.id} value={x.id}>{x.label}</option>)}</select>
       </div>
       {!data?.has_drawing && data && <p className="mb-2 rounded-lg bg-amber-50 p-2 text-xs text-amber-800">No saved drawing yet – pictures use a sample 30 ft, 2-floor house. Save a drawing in Design to apply a style.</p>}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-4">

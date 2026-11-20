@@ -118,6 +118,17 @@ def clean_plan(plan: dict) -> dict:
         plan["elev"] = _ev
     else:
         plan.pop("elev", None)
+    # 1.27.4 external staircase (known values only)
+    _es = plan.get("ext_stair")
+    if isinstance(_es, dict) and _es.get("on"):
+        try:
+            plan["ext_stair"] = {"on": True, "side": _es.get("side") if _es.get("side") in ("left", "right") else "right",
+                                 "w": max(2.5, min(4.0, float(_es.get("w") or 3.0))), "floors": max(1, min(4, int(_es.get("floors") or 1))),
+                                 "risers": max(8, min(40, int(_es.get("risers") or 20))), "len": max(8.0, min(60.0, float(_es.get("len") or 19)))}
+        except (TypeError, ValueError):
+            plan.pop("ext_stair", None)
+    else:
+        plan.pop("ext_stair", None)
     # 1.17 roofing sheets (full roof / on terrace / head room / part of a floor)
     from .roof import clean as clean_roof
     if "roof_sheets" in plan:

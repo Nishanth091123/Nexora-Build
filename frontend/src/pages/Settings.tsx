@@ -475,6 +475,49 @@ function ProfileSection() {
 }
 
 // ---------------- Page ----------------
+// 1.27.5 – the owner's own seal & signature for the PDFs (blank box until he uploads his signature and switches it on)
+function SealSection() {
+  const [st, setSt] = useState<any>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { api<any>("/api/branding").then(setSt).catch(() => {}); }, []);
+  const upload = (file?: File | null) => {
+    if (!file) return;
+    const rd = new FileReader();
+    rd.onload = () => {
+      const img = new Image();
+      img.onload = async () => {   // phone photos are big: shrink to ≤ 800 px before sending
+        const k = Math.min(1, 800 / img.width);
+        const cv = document.createElement("canvas");
+        cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k);
+        const cx = cv.getContext("2d"); if (!cx) return;
+        cx.fillStyle = "#fff"; cx.fillRect(0, 0, cv.width, cv.height); cx.drawImage(img, 0, 0, cv.width, cv.height);
+        setBusy(true);
+        try { setSt(await api<any>("/api/branding/signature", { method: "PUT", body: { image: cv.toDataURL("image/jpeg", 0.9) } })); toast("Signature saved"); }
+        catch (e: any) { toast(e.message || "Could not save", "err"); }
+        setBusy(false);
+      };
+      img.onerror = () => toast("That file is not a readable image", "err");
+      img.src = String(rd.result);
+    };
+    rd.readAsDataURL(file);
+  };
+  const toggle = async (on: boolean) => { try { setSt(await api<any>("/api/branding/enabled", { method: "PUT", body: { on } })); toast(on ? "Seal & signature will print on PDFs" : "Seal & signature box stays blank"); } catch (e: any) { toast(e.message || "Failed", "err"); } };
+  const remove = async () => { try { setSt(await api<any>("/api/branding/signature", { method: "DELETE" })); toast("Signature removed"); } catch (e: any) { toast(e.message || "Failed", "err"); } };
+  return (
+    <Card title="Seal & signature on PDFs" icon={<Building2 size={20} />}>
+      <p className="mb-3 text-sm text-slate-600">Seal reads <b>PROPRIETOR</b> – your signature – <b>PRAGANYA CONSTRUCTION</b>. Upload a photo of your own signature on white paper (JPG / PNG). It is used only in the “Seal &amp; Signature” box of the estimate, loan, interior, electrical–plumbing PDFs and the drawing title block. While it is switched off the box stays blank for hand signing.</p>
+      {st && <div className="mb-3 rounded-lg border border-line bg-white p-3" dangerouslySetInnerHTML={{ __html: st.preview }} />}
+      <div className="flex flex-wrap items-center gap-3">
+        <label className="btn-outline btn-sm cursor-pointer">{busy ? "Saving…" : st?.has_signature ? "Replace signature photo" : "Upload signature photo"}
+          <input type="file" accept="image/*" className="hidden" onChange={(e) => upload(e.target.files?.[0])} /></label>
+        {st?.has_signature && <button className="btn-outline btn-sm" onClick={remove}>Remove signature</button>}
+        <div className="ml-auto flex items-center gap-2 text-sm"><span>Print seal &amp; signature on PDFs</span><Toggle checked={!!st?.on} onChange={toggle} /></div>
+      </div>
+      {st?.on && !st?.has_signature && <p className="mt-2 text-xs text-amber-700">The seal prints with an empty gap – upload your signature to fill it.</p>}
+    </Card>
+  );
+}
+
 export default function Settings() {
   const { t } = useI18n();
   const { user } = useAuth();
@@ -515,7 +558,7 @@ export default function Settings() {
               <AuditSection compact />
             </div>
           )}
-          {tab === "company" && <div className="grid gap-4 lg:grid-cols-2"><CompanySection isOwner /><ProfileSection /></div>}
+          {tab === "company" && <div className="grid gap-4 lg:grid-cols-2"><CompanySection isOwner /><ProfileSection /><SealSection /></div>}
           {tab === "users" && <div className="grid gap-4 xl:grid-cols-[2fr_1fr]"><div className="min-w-0 space-y-4"><UsersSection /><InviteLinks /></div><RolesSection counts={userCounts} /></div>}
           {tab === "access" && <div className="space-y-4"><OwnerOnlySection /><AccessSection /></div>}
           {tab === "units" && <div className="grid gap-4 lg:grid-cols-2"><UnitsSection s={s} save={save} /><div className="space-y-4"><EstimateDefaultsCard /><RatesSection /></div></div>}

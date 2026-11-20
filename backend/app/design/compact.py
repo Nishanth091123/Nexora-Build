@@ -33,7 +33,7 @@ def build(lv: dict, bw: float, bd: float, multi: bool, k: int) -> tuple[list[dic
             or att > beds or k >= 4:
         raise LayoutError([f"{nm}: compact layout is not used for these rooms."])
     mirror, swap = bool(k & 1), bool(k & 2)
-    hd = STAIR_D if multi else 12.0
+    hd = 11.0
     best = None
     for md in (9.5, 10.0, 10.5, 9.0):
         rd = r2(bd - hd - md)

@@ -138,6 +138,10 @@ TOPS = {"plain": "Plain parapet", "stepped": "Stepped parapet", "jali": "Jali pa
 CLADS = {"none": "Plain walls", "stone": "Stone feature wall", "wood": "Wood-texture feature wall", "brick": "Brick-tile feature wall"}
 WINS = {"plain": "Plain windows", "frame": "Framed windows", "arch": "Arched windows", "louver": "Louvre windows"}
 CANOPY = {"none": "No canopy", "slab": "Door canopy slab"}
+FEATURE_G = ("none", "sitout", "portico")          # styles for a ground-floor-only house
+FEATURE_M = ("none", "balcony", "balcony_glass")   # styles for G+1 and above
+FEATURES = {"none": "No extra feature", "sitout": "Sit-out with pillars", "portico": "Portico with step",
+            "balcony": "First-floor balcony (railing)", "balcony_glass": "First-floor balcony (glass)"}
 FAM_TITLE = {"basic": "Basic", "modern": "Modern", "contemporary": "Contemporary", "traditional": "Traditional", "luxury": "Luxury"}
 
 
@@ -162,6 +166,10 @@ def _elev_all() -> list[dict]:
     random.Random(27).shuffle(rows)
     for i, r in enumerate(rows, 1):
         r["id"] = f"E{i:04d}"
+        r["fgroup"] = "G" if i % 2 else "G+"                     # 800 styles for ground-only, 800 for G+1 and above
+        opts = FEATURE_G if r["fgroup"] == "G" else FEATURE_M
+        r["feature"] = opts[(i // 2) % len(opts)]
+        r["name"] += f", {FEATURES[r['feature']].lower()}" if r["feature"] != "none" else ""
     return rows
 
 
@@ -173,11 +181,15 @@ def elevation_facets() -> dict:
     return {"families": [{"id": k, "label": v} for k, v in FAM_TITLE.items()],
             "palettes": [{"id": k, "label": v[0], "ext": v[1], "trim": v[2], "door": v[3]} for k, v in PALETTES.items()],
             "tops": [{"id": k, "label": v} for k, v in TOPS.items()], "claddings": [{"id": k, "label": v} for k, v in CLADS.items()],
-            "windows": [{"id": k, "label": v} for k, v in WINS.items()], "total": len(_ELEV)}
+            "windows": [{"id": k, "label": v} for k, v in WINS.items()],
+            "features": [{"id": k, "label": v} for k, v in FEATURES.items()], "total": len(_ELEV),
+            "groups": {"G": sum(1 for r in _ELEV if r["fgroup"] == "G"), "G+": sum(1 for r in _ELEV if r["fgroup"] == "G+")}}
 
 
-def elevation_list(family_: str = "", palette: str = "", top: str = "", clad: str = "", win: str = "", page: int = 1, size: int = 24) -> dict:
+def elevation_list(family_: str = "", palette: str = "", top: str = "", clad: str = "", win: str = "", page: int = 1, size: int = 24,
+                   fgroup: str = "", feature: str = "") -> dict:
     rows = [r for r in _ELEV if (not family_ or r["family"] == family_) and (not palette or r["palette"] == palette)
+            and (not fgroup or r["fgroup"] == fgroup) and (not feature or r["feature"] == feature)
             and (not top or r["top"] == top) and (not clad or r["clad"] == clad) and (not win or r["win"] == win)]
     size = max(6, min(60, size))
     page = max(1, page)
@@ -208,7 +220,7 @@ def _stone_lines(S, x, y, w, h, kind):
         row += 1
 
 
-def draw_elevation(p: dict, bw: float = 30.0, n: int = 2, door_at: float = 0.5) -> Scene:
+def draw_elevation(p: dict, bw: float = 30.0, n: int = 2, door_at: float = 0.5, stair: bool = False) -> Scene:
     """One elevation picture on the project's proportions (bw = building width in ft, n = floors)."""
     pal = PALETTES[p["palette"]]
     ext, trim, door, plinth, roof_c, accent = pal[1], pal[2], pal[3], pal[4], pal[5], pal[6]
@@ -246,6 +258,14 @@ def draw_elevation(p: dict, bw: float = 30.0, n: int = 2, door_at: float = 0.5) 
                 S.circle(cx + 0.35, z0 + 3.4, 0.14, "#fde68a")
                 if p["canopy"] == "slab":
                     S.rect(cx - dw / 2 - 1.6, z0 + 7.9, dw + 3.2, 0.55, trim, "#44403c", 0.05)
+                ft = p.get("feature", "none")
+                if ft in ("sitout", "portico"):
+                    half = dw / 2 + (2.6 if ft == "sitout" else 3.6)
+                    for px in (cx - half + 0.3, cx + half - 0.7):
+                        S.rect(px, z0, 0.4 if ft == "sitout" else 0.7, 8.6, trim, "#44403c", 0.05)
+                    S.rect(cx - half - 0.3, z0 + 8.6, 2 * half + 0.6, 0.6, trim, "#44403c", 0.05)
+                    if ft == "portico":
+                        S.rect(cx - half, z0 - 0.5, 2 * half, 0.5, "#D6D3D1", "#44403c", 0.04)
                 continue
             ww = min(4.5, slot * 0.55)
             wh = 4.5
@@ -269,6 +289,19 @@ def draw_elevation(p: dict, bw: float = 30.0, n: int = 2, door_at: float = 0.5) 
             S.rect(wx - 0.3, sz - 0.28, ww + 0.6, 0.28, trim, "#44403c", 0.03)
             if p["win"] in ("plain", "louver"):
                 S.rect(wx - 0.6, sz + wh + 0.25, ww + 1.2, 0.25, trim, "#44403c", 0.03)
+    ft = p.get("feature", "none")
+    if ft in ("balcony", "balcony_glass") and n >= 2:
+        bz = G + PL + (FH + SL)
+        bcx = X0 + (ds + 0.5) * slot
+        S.rect(bcx - 4.2, bz - 0.2, 8.4, 0.6, trim, "#44403c", 0.05)
+        if ft == "balcony_glass":
+            S.rect(bcx - 4.2, bz + 0.4, 8.4, 3.0, "#7DD3FC", "#334155", 0.05, 0.5)
+        else:
+            S.rect(bcx - 4.2, bz + 3.1, 8.4, 0.25, trim, "#44403c", 0.04)
+            xx = bcx - 4.0
+            while xx < bcx + 4.1:
+                S.rect(xx, bz + 0.4, 0.15, 2.7, "#44403c")
+                xx += 0.7
     if p["clad"] != "none":
         cc = {"stone": "#9CA3AF", "wood": "#B4783C", "brick": "#B4532A"}[p["clad"]]
         S.rect(band_x, G + PL, band_w, roof - G - PL, cc, "#44403c", 0.05)
@@ -306,9 +339,10 @@ def draw_elevation(p: dict, bw: float = 30.0, n: int = 2, door_at: float = 0.5) 
         while xx < X0 + pw:
             S.rect(xx, roof + pr + 8.1, 0.3, 0.5, "#B45309")
             xx += 0.9
-    elif n > 1:
+    elif n > 1 or stair:
         S.rect(X0 + bw - 9, roof + pr, 7, 7.5, ext, "#44403c", 0.05)
         S.rect(X0 + bw - 9.5, roof + pr + 7.5, 8, 0.5, trim, "#44403c", 0.04)
+        S.text(X0 + bw - 5.5, roof + pr + 3.2, "HEAD ROOM", 0.7, "#44403c")
     # trees
     for tx in (3.2, S.w - 3.2):
         S.rect(tx - 0.2, G, 0.4, 3.5, "#78350F")
@@ -326,7 +360,9 @@ def elevation_apply(plan: dict, eid: str) -> dict:
     fin = dict(plan.get("finishes") or {})
     fin.update({"ext": pal[1], "frame": pal[2], "door": pal[3], "plinth": pal[4], "roof": pal[5], "style": e["family"]})
     plan["finishes"] = fin
-    plan["elev"] = {k: e[k] for k in ("id", "top", "clad", "win", "canopy", "palette", "family", "name")}
+    plan["elev"] = {k: e[k] for k in ("id", "top", "clad", "win", "canopy", "palette", "family", "name", "feature", "fgroup")}
+    if e["feature"] in ("balcony", "balcony_glass") and len(plan["levels"]) < 2:
+        plan["elev"]["feature"] = "none"   # a balcony needs a first floor
     notes = []
     if e["clad"] != "none":
         h = sum(10.7 for _ in plan["levels"])
@@ -344,8 +380,10 @@ def clean_elev(v) -> dict | None:
     if not ok:
         return None
     fam = family(v["top"], v["clad"], v["win"], v["canopy"])
+    ft = v.get("feature") if v.get("feature") in FEATURES else "none"
     return {"id": str(v.get("id", ""))[:6], "top": v["top"], "clad": v["clad"], "win": v["win"], "canopy": v["canopy"],
-            "palette": v["palette"], "family": fam, "name": str(v.get("name", ""))[:140]}
+            "palette": v["palette"], "family": fam, "name": str(v.get("name", ""))[:140], "feature": ft,
+            "fgroup": "G+" if ft in ("balcony", "balcony_glass") else "G"}
 
 
 # ================================================================ INTERIOR DESIGNS

@@ -42,6 +42,10 @@ def _shape(plan: dict | None) -> tuple[float, int]:
     return float(b.get("w") or 30), max(1, len(plan.get("levels") or [1, 2]))
 
 
+def _has_stair(plan: dict | None) -> bool:
+    return bool(plan) and any(r.get("type") == "stair" for lv in plan.get("levels", []) for r in lv.get("rooms", []))
+
+
 @router.get("/catalog/facets")
 def facets(user: User = Depends(get_current_user)):
     return {"elevation": C.elevation_facets(), "interior": C.interior_facets()}
@@ -49,14 +53,16 @@ def facets(user: User = Depends(get_current_user)):
 
 @router.get("/projects/{pid}/catalog/elevation")
 def elevation(pid: int, family: str = "", palette: str = "", top: str = "", clad: str = "", win: str = "", page: int = 1, size: int = 24,
-              user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+              fit: bool = True, feature: str = "", user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     p, d = _plan(db, user, pid)
     bw, n = _shape(d.plan if d else None)
-    res = C.elevation_list(family, palette, top, clad, win, page, size)
+    grp = ("G" if n == 1 else "G+") if (fit and d) else ""   # 1.27.4: only styles made for this many floors (switchable)
+    res = C.elevation_list(family, palette, top, clad, win, page, size, grp, feature)
+    stair = _has_stair(d.plan if d else None)
     for it in res["items"]:
-        it["svg"] = C.draw_elevation(it, bw, n).svg(360)
+        it["svg"] = C.draw_elevation(it, bw, n, 0.5, stair).svg(360)
     cur = (d.plan or {}).get("elev") if d else None
-    return res | {"current": cur, "has_drawing": bool(d), "floors": n, "width_ft": bw}
+    return res | {"current": cur, "has_drawing": bool(d), "floors": n, "width_ft": bw, "fit": bool(grp), "group": grp or None}
 
 
 @router.get("/projects/{pid}/catalog/elevation/{eid}/svg")
@@ -66,7 +72,7 @@ def elevation_svg(pid: int, eid: str, user: User = Depends(get_current_user), db
     if not e:
         raise HTTPException(404, "Unknown elevation style")
     bw, n = _shape(d.plan if d else None)
-    return {"svg": C.draw_elevation(e, bw, n).svg(900), "item": e, "prompt": C.elevation_prompt(e)}
+    return {"svg": C.draw_elevation(e, bw, n, 0.5, _has_stair(d.plan if d else None)).svg(900), "item": e, "prompt": C.elevation_prompt(e)}
 
 
 @router.post("/projects/{pid}/catalog/elevation/{eid}/apply")

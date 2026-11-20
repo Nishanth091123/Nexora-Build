@@ -98,7 +98,7 @@ except httpx.ConnectError:
         sys.exit("[ERROR] Backend did not start in 2 minutes.")
 check("health", r.status_code == 200 and r.json().get("status") == "ok", r.text)
 _v = tuple(int(x) for x in (r.json().get("version", "0.0").split("-")[0].split(".") + ["0", "0"])[:3] if x.isdigit())
-check("backend is the 1.27 version (not an old one still running)", _v >= (1, 27, 3), r.text)
+check("backend is the 1.27 version (not an old one still running)", _v >= (1, 27, 6), r.text)
 
 login = input("Owner username [nishanth_s]: ").strip() or "nishanth_s"
 pw = getpass.getpass("Owner password (hidden): ")
@@ -338,8 +338,37 @@ if plan:
         pc = (r.json().get("plan") or r.json()) if r.status_code == 200 else {}
         tys = [x["type"] for x in (pc.get("levels") or [{}])[0].get("rooms", [])]
         check("1.27.1 compact plan: no passage, common toilet + 2 attached toilets + staircase", r.status_code == 200 and "passage" not in tys and "common_toilet" in tys and tys.count("toilet") == 2 and "stair" in tys, str(tys))
+    # ---------------- 1.27.5: owner's seal & signature (off by default, owner only) ----------------
+    r = c.get("/api/branding")
+    check("1.27.5 seal & signature settings (off by default)", r.status_code == 200 and r.json().get("on") is False and "PROPRIETOR" in r.json().get("preview", ""), r.text[:150])
+    import base64 as _b64, io as _io
+    from PIL import Image as _Im, ImageDraw as _Dr
+    _sg = _Im.new("RGB", (300, 120), "white"); _Dr.Draw(_sg).line([(10, 90), (80, 20), (150, 100), (290, 40)], fill=(20, 20, 90), width=4)
+    _bf = _io.BytesIO(); _sg.save(_bf, "PNG")
+    r = c.put("/api/branding/signature", json={"image": "data:image/png;base64," + _b64.b64encode(_bf.getvalue()).decode()})
+    check("1.27.5 signature photo saved", r.status_code == 200 and r.json().get("has_signature") is True, r.text[:150])
+    r = c.put("/api/branding/enabled", json={"on": True})
+    check("1.27.5 stamp switched on", r.status_code == 200 and r.json().get("on") is True, r.text[:150])
+    r = c.get(f"/api/projects/{pid}/mep/pdf?kind=both", timeout=120)
+    check("1.27.5 PDF still builds with the stamp on", r.status_code == 200 and r.content[:4] == b"%PDF", str(r.status_code))
+    c.put("/api/branding/enabled", json={"on": False})
+    c.delete("/api/branding/signature")
+    # ---------------- 1.27.4: elevation fits the floors, estimate foundation options, external staircase ----------------
+    r = c.get(f"/api/projects/{pid}/catalog/elevation?page=1&size=6", timeout=60)
+    ej2 = r.json() if r.status_code == 200 else {}
+    check("1.27.4 elevation list follows the plan's floors (800 styles for this many floors)", ej2.get("fit") is True and 600 <= ej2.get("total", 0) <= 1000 and ej2.get("group") in ("G", "G+"), r.text[:200])
+    base_t = c.post(f"/api/projects/{pid}/estimate/calculate", json={"inputs": inp, "state": "Tamil Nadu"}).json()["totals"]["grand_total"]
+    for k_, v_ in (("plinth_ft", 2.5), ("future_floors", 1), ("basement", True)):
+        r = c.post(f"/api/projects/{pid}/estimate/calculate", json={"inputs": {**inp, k_: v_}, "state": "Tamil Nadu"})
+        check(f"1.27.4 estimate option {k_} raises the cost", r.status_code == 200 and r.json()["totals"]["grand_total"] > base_t, r.text[:150])
+    r = c.post(f"/api/projects/{pid}/design/parse", json={"text": "30x40 north facing, road 11 ft, ground floor only with external staircase, 2 bedrooms 2 attached toilets, 1 common toilet, hall, kitchen, dining"})
+    rqx = r.json().get("requirements") if r.status_code == 200 else None
+    if rqx:
+        r = c.post(f"/api/projects/{pid}/design/generate", json={"requirements": rqx}, timeout=120)
+        px = (r.json().get("plan") or r.json()) if r.status_code == 200 else {}
+        check("1.27.4 external staircase: no stair room inside, stair drawn outside", r.status_code == 200 and (px.get("ext_stair") or {}).get("on") and not any(x["type"] == "stair" for x in px["levels"][0]["rooms"]), r.text[:200])
     # ---------------- 1.27: design catalog (elevation styles + interior designs) ----------------
-    r = c.get(f"/api/projects/{pid}/catalog/elevation?page=1&size=12", timeout=60)
+    r = c.get(f"/api/projects/{pid}/catalog/elevation?page=1&size=12&fit=false", timeout=60)
     ej = r.json() if r.status_code == 200 else {}
     check("1.27 elevation catalog (1000+ styles, pictures)", ej.get("total", 0) >= 1000 and len(ej.get("items", [])) == 12 and "<svg" in ej["items"][0].get("svg", ""), r.text[:200])
     if ej.get("items"):
@@ -363,7 +392,7 @@ if plan:
         r = c.get(f"/api/projects/{pid}/interior/pdf", timeout=120)
         check("1.27 interior PDF with selected designs", r.status_code == 200 and r.content[:4] == b"%PDF", r.text[:100])
 if QUICK:
-    print("NEXORA 1.27.3 API: QUICK CHECK GOOD  (run scripts\\update.bat now and then for the full test)")
+    print("NEXORA 1.27.6 API: QUICK CHECK GOOD  (run scripts\\update.bat now and then for the full test)")
     sys.exit(0)
 check("plan generated", bool(plan) and plan["summary"]["bedrooms"] == 2, r.text[:300])
 if plan:
@@ -1106,4 +1135,4 @@ if fail:
     print("Failed:", ", ".join(fail), "\nSend this output to Claude.")
     sys.exit(1)
 else:
-    print("NEXORA 1.27.3 API: ALL GOOD")
+    print("NEXORA 1.27.6 API: ALL GOOD")
