@@ -107,3 +107,14 @@ Settings → Company → "Seal & signature on PDFs" (owner only). Upload a photo
 
 ## 1.27.6 – Signature photo cleaning
 Works with grey / unevenly lit paper (phone photos): the paper is removed locally, the ink becomes one dark-blue colour, photo edges are ignored.
+
+## 1.27.7 – Site plan: septic tank, soak pit, sump, rain-water pit, gate
+The site plan now shows (indicative sizes, found in the free yard, never forced): septic tank + soak pit (IS 2470 size by users), sump, rain-water recharge pit and a 10 ft gate, with a list on the sheet. What does not fit is listed ("does not fit … not drawn"). Write "UGD" / "underground drainage" in the prompt and the septic tank is replaced by a sewer-connection note. Rain-water pit on small plots: if it does not fit, use the sump overflow / borewell recharge – confirm with the local body.
+
+## 1.27.8 – Outside staircase in every drawing, soak pit placement
+The outside staircase (prompt: "external staircase") now shows in the floor plan (flight + landing + UP arrow), the front elevation (end view with railing), the 2D plan, the rendered plan, the 3D massing and the 3D house view (steps, landing, steel railing, gap in the terrace parapet where it lands). On the site plan the septic tank / soak pit / sump / rain-water pit are labelled by name on the drawing; if a pit does not fit at full size a smaller standard size is tried (soak pit 1.0 m, rain-water pit 0.8 m) before it is reported as "does not fit".
+
+## 1.27.9 – Optional drawings: key plan, column & footing layout + calculation
+Design → Drawing Sheets → "Optional drawings (add only if the client asks)". Both are switches, off by default; when off the drawing set is exactly as before. Press Apply, then save the design.
+- **Key plan / Location plan**: type place, taluk, district, survey no., plot no., ward, the road in front, other roads (name + compass direction) and landmarks (name + direction + metres). The sheet is drawn only from these entries (a sketch, "not to scale"); empty fields print as blank lines.
+- **Column position + footing layout + design calculation**: 3 sheets (column layout with grid, footing layout, column & footing schedule with worked checks). The safe bearing capacity (soil report) and seismic zone MUST be typed – they are never assumed; without them the sheet lists what is missing. The licensed engineer's signature box stays blank. This is a preliminary gravity-load design for approval drawings – the engineer checks and signs.

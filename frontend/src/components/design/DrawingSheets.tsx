@@ -9,12 +9,74 @@ import type { Plan } from "../../lib/plan";
 
 type Sched = { mark: string; type: string; label: string; w_ft: number; h_ft: number; size: string; sill_ft: number; material: string; per_level: Record<string, number>; count: number; rooms: string };
 type Row = { w_ft: string; h_ft: string; material: string };
-type Preview = { schedule: Sched[]; area: any; svgs: Record<string, string>; svgs_cad?: Record<string, string>; levels: string[]; warnings: string[] };
+type Preview = { addon_questions?: string[]; schedule: Sched[]; area: any; svgs: Record<string, string>; svgs_cad?: Record<string, string>; levels: string[]; warnings: string[] };
 const TYPE_LABEL: Record<string, string> = { main_door: "Main door", door: "Room door", pooja_door: "Pooja door", toilet_door: "Toilet door", opening: "Opening", window: "Window (all)", vent: "Ventilator" };
 
-export default function DrawingSheets({ pid, plan, saved, dirty, code, onSpecs }: {
+const DIRS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+type KP = { on: boolean; place: string; taluk: string; district: string; survey_no: string; plot_no: string; ward: string; road_name: string;
+  roads: { name: string; dir: string }[]; landmarks: { name: string; dir: string; dist_m: string }[] };
+type CA = { on: boolean; sbc_kn_m2: string; seismic_zone: string; foundation_depth_m: string; fck: string; fy: string };
+
+/** 1.27.9 – optional drawings, each switched on only when the client asks: key plan / location plan and column & footing layout + calculation */
+function AddonsCard({ plan, questions, onApply }: { plan: Plan; questions: string[]; onApply: (a: { keyplan: any; column_addon: any }) => void }) {
+  const k0: any = plan.keyplan || {}, c0: any = plan.column_addon || {};
+  const [kp, setKp] = useState<KP>({ on: !!k0.on, place: k0.place || "", taluk: k0.taluk || "", district: k0.district || "", survey_no: k0.survey_no || "", plot_no: k0.plot_no || "",
+    ward: k0.ward || "", road_name: k0.road_name || "", roads: k0.roads || [], landmarks: (k0.landmarks || []).map((m: any) => ({ ...m, dist_m: m.dist_m == null ? "" : String(m.dist_m) })) });
+  const [ca, setCa] = useState<CA>({ on: !!c0.on, sbc_kn_m2: c0.sbc_kn_m2 != null ? String(c0.sbc_kn_m2) : "", seismic_zone: c0.seismic_zone || "",
+    foundation_depth_m: c0.foundation_depth_m != null ? String(c0.foundation_depth_m) : "", fck: c0.fck ? String(c0.fck) : "", fy: c0.fy ? String(c0.fy) : "" });
+  const apply = () => {
+    const keyplan = kp.on ? { ...kp, landmarks: kp.landmarks.map((m) => ({ ...m, dist_m: m.dist_m === "" ? null : Number(m.dist_m) })) } : null;
+    const column_addon = ca.on ? Object.fromEntries(Object.entries(ca).filter(([, v]) => v !== "" && v !== undefined).map(([k, v]) => [k, k === "on" || k === "seismic_zone" ? v : Number(v)])) : null;
+    onApply({ keyplan, column_addon });
+    toast("Add-on drawings updated – they are in the drawing set only while switched on. Save the design to keep them.");
+  };
+  const Sw = ({ on, set, label }: { on: boolean; set: (v: boolean) => void; label: string }) => (
+    <label className="flex cursor-pointer items-center gap-2 text-sm font-semibold text-navy-ink"><input type="checkbox" checked={on} onChange={(e) => set(e.target.checked)} />{label}</label>);
+  const f = (k: keyof KP, label: string) => (
+    <label className="text-xs text-slate-600">{label}<input className="input mt-0.5 py-1 text-xs" value={(kp as any)[k]} onChange={(e) => setKp({ ...kp, [k]: e.target.value })} /></label>);
+  return (
+    <Card title="Optional drawings (add only if the client asks)" icon={<FileText size={20} />}
+      action={<button className="btn-primary btn-sm" onClick={apply}><Save size={14} />Apply</button>}>
+      <div className="grid gap-4 xl:grid-cols-2">
+        <div className="rounded-lg border border-line p-3">
+          <Sw on={kp.on} set={(v) => setKp({ ...kp, on: v })} label="Key plan / Location plan" />
+          <p className="mt-1 text-[11px] text-slate-500">Drawn only from what you type here (direction + distance as you enter them). It is a sketch, not to scale – nothing is guessed.</p>
+          {kp.on && <div className="mt-2 space-y-2">
+            <div className="grid grid-cols-2 gap-2">{f("place", "Place / village")}{f("taluk", "Taluk")}{f("district", "District")}{f("survey_no", "Survey no.")}{f("plot_no", "Plot no.")}{f("ward", "Ward / block")}</div>
+            {f("road_name", "Name of the road in front of the plot")}
+            <div className="text-xs font-semibold text-navy-ink">Other roads <button className="btn-ghost btn-sm" onClick={() => setKp({ ...kp, roads: [...kp.roads, { name: "", dir: "E" }].slice(0, 6) })}>+ add</button></div>
+            {kp.roads.map((r, i) => <div key={i} className="grid grid-cols-[2fr_1fr_auto] gap-1.5">
+              <input className="input py-1 text-xs" placeholder="Road name" value={r.name} onChange={(e) => setKp({ ...kp, roads: kp.roads.map((q, j) => j === i ? { ...q, name: e.target.value } : q) })} />
+              <select className="input py-1 text-xs" value={r.dir} onChange={(e) => setKp({ ...kp, roads: kp.roads.map((q, j) => j === i ? { ...q, dir: e.target.value } : q) })}>{DIRS.map((d) => <option key={d}>{d}</option>)}</select>
+              <button className="btn-ghost btn-sm" onClick={() => setKp({ ...kp, roads: kp.roads.filter((_, j) => j !== i) })}>✕</button></div>)}
+            <div className="text-xs font-semibold text-navy-ink">Landmarks <button className="btn-ghost btn-sm" onClick={() => setKp({ ...kp, landmarks: [...kp.landmarks, { name: "", dir: "N", dist_m: "" }].slice(0, 12) })}>+ add</button></div>
+            {kp.landmarks.map((m, i) => <div key={i} className="grid grid-cols-[2fr_1fr_1fr_auto] gap-1.5">
+              <input className="input py-1 text-xs" placeholder="Landmark (school, temple…)" value={m.name} onChange={(e) => setKp({ ...kp, landmarks: kp.landmarks.map((q, j) => j === i ? { ...q, name: e.target.value } : q) })} />
+              <select className="input py-1 text-xs" value={m.dir} onChange={(e) => setKp({ ...kp, landmarks: kp.landmarks.map((q, j) => j === i ? { ...q, dir: e.target.value } : q) })}>{DIRS.map((d) => <option key={d}>{d}</option>)}</select>
+              <input className="input py-1 text-xs" type="number" min="0" placeholder="metres" value={m.dist_m} onChange={(e) => setKp({ ...kp, landmarks: kp.landmarks.map((q, j) => j === i ? { ...q, dist_m: e.target.value } : q) })} />
+              <button className="btn-ghost btn-sm" onClick={() => setKp({ ...kp, landmarks: kp.landmarks.filter((_, j) => j !== i) })}>✕</button></div>)}
+          </div>}
+        </div>
+        <div className="rounded-lg border border-line p-3">
+          <Sw on={ca.on} set={(v) => setCa({ ...ca, on: v })} label="Column position + footing layout + design calculation" />
+          <p className="mt-1 text-[11px] text-slate-500">Adds 3 sheets (column layout, footing layout, calculation). The soil bearing capacity and seismic zone are NOT assumed – enter them from the soil report / local code. The engineer's signature box stays blank.</p>
+          {ca.on && <div className="mt-2 grid grid-cols-2 gap-2">
+            <label className="text-xs text-slate-600">Safe bearing capacity (kN/m²) *<input className="input mt-0.5 py-1 text-xs" type="number" min="40" max="600" value={ca.sbc_kn_m2} onChange={(e) => setCa({ ...ca, sbc_kn_m2: e.target.value })} /></label>
+            <label className="text-xs text-slate-600">Seismic zone *<select className="input mt-0.5 py-1 text-xs" value={ca.seismic_zone} onChange={(e) => setCa({ ...ca, seismic_zone: e.target.value })}><option value="">– select –</option>{["II", "III", "IV", "V"].map((z) => <option key={z}>{z}</option>)}</select></label>
+            <label className="text-xs text-slate-600">Foundation depth (m)<input className="input mt-0.5 py-1 text-xs" type="number" step="0.1" min="0.9" max="4" placeholder="1.5" value={ca.foundation_depth_m} onChange={(e) => setCa({ ...ca, foundation_depth_m: e.target.value })} /></label>
+            <label className="text-xs text-slate-600">Concrete / steel<span className="flex gap-1"><select className="input mt-0.5 py-1 text-xs" value={ca.fck} onChange={(e) => setCa({ ...ca, fck: e.target.value })}><option value="">M20</option><option>25</option><option>30</option></select><select className="input mt-0.5 py-1 text-xs" value={ca.fy} onChange={(e) => setCa({ ...ca, fy: e.target.value })}><option value="">Fe500</option><option>415</option><option>550</option></select></span></label>
+          </div>}
+          {questions.length > 0 && <ul className="mt-2 list-disc space-y-1 pl-5 text-[11px] text-amber-700">{questions.map((q) => <li key={q}>{q}</li>)}</ul>}
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+export default function DrawingSheets({ pid, plan, saved, dirty, code, onSpecs, onAddons }: {
   pid: number; plan: Plan; saved: { id: number; version: number } | null; dirty: boolean; code: string;
   onSpecs: (specs: Record<string, { w_ft?: number; h_ft?: number; material?: string }>) => void;
+  onAddons: (a: { keyplan: any; column_addon: any }) => void;
 }) {
   const [pv, setPv] = useState<Preview | null>(null);
   const [sheet, setSheet] = useState("elevation");
@@ -27,7 +89,7 @@ export default function DrawingSheets({ pid, plan, saved, dirty, code, onSpecs }
     timer.current = window.setTimeout(() => {
       api<Preview>(`/api/projects/${pid}/design/sheets-preview`, { body: { plan } }).then(setPv).catch((e) => toast(e.message, "err"));
     }, 400);
-  }, [pid, JSON.stringify(plan.levels.map((l) => l.rooms)), JSON.stringify(plan.opening_specs || {})]);
+  }, [pid, JSON.stringify(plan.levels.map((l) => l.rooms)), JSON.stringify(plan.opening_specs || {}), JSON.stringify(plan.keyplan || null), JSON.stringify(plan.column_addon || null), JSON.stringify(plan.ext_stair || null)]);
 
   useEffect(() => {  // one editable row per opening TYPE (all windows share one size row)
     const s = plan.opening_specs || {};
@@ -66,6 +128,8 @@ export default function DrawingSheets({ pid, plan, saved, dirty, code, onSpecs }
   const sheets: [string, string][] = [["site", "A-02 Site Plan"], ...pv.levels.map((l, i) => [`plan_${i}`, `A-${String(3 + i).padStart(2, "0")} ${l} Plan`] as [string, string]),
     ["elevation", `A-${String(3 + pv.levels.length).padStart(2, "0")} Front Elevation`], ["section", `A-${String(4 + pv.levels.length).padStart(2, "0")} Section A-A`],
     ...(pv.svgs.roof ? [["roof", `A-${String(5 + pv.levels.length).padStart(2, "0")} Roof Plan (sheet roof)`], ["truss", `A-${String(6 + pv.levels.length).padStart(2, "0")} Truss & Purlin Detail`]] as [string, string][] : []),
+    ...(pv.svgs.keyplan ? [["keyplan", "Key Plan / Location Plan"]] as [string, string][] : []),
+    ...(pv.svgs.column ? [["column", "Column Position Layout"], ["footing", "Footing Layout"]] as [string, string][] : []),
     ...(pv.svgs.stair ? [["stair", `A-${String(5 + pv.levels.length + (pv.svgs.roof ? 2 : 0)).padStart(2, "0")} Staircase Detail`]] as [string, string][] : [])];
   const a = pv.area;
   return (
@@ -99,6 +163,8 @@ export default function DrawingSheets({ pid, plan, saved, dirty, code, onSpecs }
         </div>
         <p className="mt-2 text-xs text-slate-500">The PDF set also has A-01 Title sheet (drawing list, area statement, FSI, coverage) and the Door &amp; Window Schedule sheet, with your firm's title block on every sheet. Signature boxes are left empty to sign by hand.</p>
       </Card>
+
+      <AddonsCard key={JSON.stringify([plan.keyplan || null, plan.column_addon || null])} plan={plan} questions={pv.addon_questions || []} onApply={onAddons} />
 
       <div className="grid gap-4 xl:grid-cols-[1.5fr_1fr]">
         <Card title="Door & Window Schedule" icon={<Ruler size={20} />}

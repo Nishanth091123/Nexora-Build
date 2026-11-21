@@ -115,6 +115,23 @@ export default function PlanSvg({ plan, level, editable = false, selected, onSel
         );
       })}
 
+      {/* 1.27.8 staircase outside the building (ground floor only), set in the side setback */}
+      {level === 0 && (plan as any).ext_stair?.on && (() => {
+        const e = (plan as any).ext_stair;
+        const xs = rooms.flatMap((r) => [r.x, r.x + r.w]), ys = rooms.map((r) => r.y);
+        const sw = Number(e.w) || 3, sl = Number(e.len) || 18.8, N = Math.max(8, Number(e.risers) || 20);
+        const sx = b.x + (e.side === "left" ? Math.min(...xs) - 0.05 - sw : Math.max(...xs) + 0.05), sy = b.y + Math.min(...ys) + 2.0;
+        const run = (sl - 3.0) / (N - 1);
+        return <g pointerEvents="none">
+          <rect x={sx} y={Y(sy + sl)} width={sw} height={sl} fill="#f1f5f9" stroke="#475569" strokeWidth="0.12" />
+          {Array.from({ length: N - 1 }, (_, k) => <line key={k} x1={sx} x2={sx + sw} y1={Y(sy + k * run)} y2={Y(sy + k * run)} stroke="#94a3b8" strokeWidth="0.06" />)}
+          <rect x={sx} y={Y(sy + sl)} width={sw} height={3} fill="#e2e8f0" stroke="#475569" strokeWidth="0.12" />
+          <line x1={sx + sw / 2} x2={sx + sw / 2} y1={Y(sy + 0.6)} y2={Y(sy + sl - 3.4)} stroke="#b45309" strokeWidth="0.14" />
+          <path d={`M${sx + sw / 2 - 0.5} ${Y(sy + sl - 4.0)} L${sx + sw / 2} ${Y(sy + sl - 3.2)} L${sx + sw / 2 + 0.5} ${Y(sy + sl - 4.0)}`} fill="none" stroke="#b45309" strokeWidth="0.14" />
+          <text x={sx + sw / 2} y={Y(sy) + 1.3} fontSize={fs * 0.62} fontWeight="800" textAnchor="middle" fill="#7c2d12">EXT. STAIR (UP)</text>
+        </g>;
+      })()}
+
       {/* walls & openings (derived) */}
       {!stale && <g pointerEvents="none">
         {lv.walls.map((w, i) => wallRect(w, `w${i}`, w.kind === "parapet" ? "#65a30d" : w.kind === "int115" ? "#475569" : "#1e293b"))}

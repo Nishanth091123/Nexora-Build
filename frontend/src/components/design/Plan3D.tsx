@@ -80,6 +80,17 @@ export default function Plan3D({ plan, showRoof = false, visibleLevels }: { plan
         }
         seg(cur, a1, z, top, col);
       }
+      // 1.27.8 staircase outside the building (plan.ext_stair): solid steps along the depth + landing at the terrace
+      const es: any = (plan as any).ext_stair;
+      if (li === 0 && es?.on) {
+        const xr = lv.rooms.flatMap((r) => [r.x, r.x + r.w]), yr = lv.rooms.map((r) => r.y);
+        const sw = Number(es.w) || 3, sl = Number(es.len) || 18.8, N = Math.max(8, Number(es.risers) || 20);
+        const sx = es.side === "left" ? Math.min(...xr) - 0.05 - sw : Math.max(...xr) + 0.05, sy = Math.min(...yr) + 2.0;
+        const topZ = plan.levels.length * H, rh = topZ / N, run = (sl - 3.0) / (N - 1);
+        for (let k = 0; k < N - 1; k++) box(sx, sy + k * run, sx + sw, sy + (k + 1) * run, 0, (k + 1) * rh, "#e7e5e4", li);
+        box(sx, sy + sl - 3.0, sx + sw, sy + sl, topZ - 0.45, topZ, "#d6d3d1", li);
+        box(sx + 0.1, sy + sl - 0.85, sx + 0.85, sy + sl - 0.1, 0, topZ - 0.45, "#f1e4d3", li);
+      }
       // slab above this floor (only for upper floors' floors or roof)
       const showSlab = li < nLv - 1 ? false : showRoof;
       if (showSlab) box(0, 0, plan.building.w, plan.building.d, z + H - 0.4, z + H, "#d6d3d1", li + 0.5);

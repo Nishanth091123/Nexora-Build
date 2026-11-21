@@ -418,6 +418,34 @@ def wall_body(lv: dict, kinds=("ext", "int230", "int115")) -> tuple[list[tuple],
     return segs, strips
 
 
+def ext_stair_geom(plan: dict):
+    """1.27.8 outside staircase in building-local feet (None when off): x, y, w, len, risers, side, top landing height."""
+    es = plan.get("ext_stair")
+    if not es or not es.get("on") or not plan.get("levels"):
+        return None
+    rooms = plan["levels"][0]["rooms"]
+    x0 = min(r["x"] for r in rooms); x1 = max(r["x"] + r["w"] for r in rooms); y0 = min(r["y"] for r in rooms)
+    w, ln = float(es.get("w", 3.0)), float(es.get("len", 18.8))
+    left = es.get("side") == "left"
+    return {"x": (x0 - 0.05 - w) if left else (x1 + 0.05), "y": y0 + 2.0, "w": w, "len": ln,
+            "risers": max(8, int(es.get("risers", 20))), "left": left}
+
+
+def _draw_ext_stair_plan(d, g: dict):
+    sx, sy, sw, sl, N = g["x"], g["y"], g["w"], g["len"], g["risers"]
+    d.rect(sx, sy, sw, sl, "BUILDING", "#f5f5f4")
+    run = (sl - 3.0) / (N - 1)
+    for k in range(1, N - 1):
+        d.line(sx, sy + k * run, sx + sw, sy + k * run, "HATCH")
+    d.rect(sx, sy + sl - 3.0, sw, 3.0, "BUILDING", "#e7e5e4")
+    d.line(sx + sw / 2, sy + 0.6, sx + sw / 2, sy + sl - 3.6, "MARK")
+    d.line(sx + sw / 2 - 0.5, sy + sl - 4.4, sx + sw / 2, sy + sl - 3.6, "MARK")
+    d.line(sx + sw / 2 + 0.5, sy + sl - 4.4, sx + sw / 2, sy + sl - 3.6, "MARK")
+    d.text(sx + sw / 2, sy - 0.9, "EXTERNAL STAIR (UP)", 0.5, layer="ROOMTEXT", bold=True)
+    d.text(sx + sw / 2, sy + sl + 0.6, "to terrace", 0.45, layer="ROOMTEXT")
+    d.text(sx + sw / 2, sy + sl - 1.5, "LANDING", 0.4, layer="ROOMTEXT")
+
+
 def floor_plan(plan: dict, li: int) -> Dwg:
     lv = plan["levels"][li]
     d = Dwg(f"{lv['name']} Plan")
@@ -518,18 +546,81 @@ def floor_plan(plan: dict, li: int) -> Dwg:
     xs_all = [r["x"] for r in lv["rooms"]] + [r["x"] + r["w"] for r in lv["rooms"]]
     ys_all = [r["y"] for r in lv["rooms"]] + [r["y"] + r["d"] for r in lv["rooms"]]
     x0, x1, y0, y1 = min(xs_all), max(xs_all), min(ys_all), max(ys_all)
+    _eg = ext_stair_geom(plan) if li == 0 else None
+    if _eg:
+        _draw_ext_stair_plan(d, _eg)
+    lo = (_eg["w"] + 0.8) if (_eg and _eg["left"]) else 0.0   # keep the left dimension lines clear of the outside stair
     top = sorted({round(v, 2) for r in lv["rooms"] if abs(r["y"] + r["d"] - y1) < 0.05 for v in (r["x"], r["x"] + r["w"])})
     left = sorted({round(v, 2) for r in lv["rooms"] if abs(r["x"] - x0) < 0.05 for v in (r["y"], r["y"] + r["d"])})
     for a, b in zip(top, top[1:]):
         d.dim_h(a, b, y1 + 2.0, ext_from=y1 + 0.5)
     d.dim_h(x0, x1, y1 + 4.0, ext_from=y1 + 0.5)
     for a, b in zip(left, left[1:]):
-        d.dim_v(x0 - 2.0, a, b, ext_from=x0 - 0.5)
-    d.dim_v(x0 - 4.5, y0, y1, ext_from=x0 - 0.5)
+        d.dim_v(x0 - 2.0 - lo, a, b, ext_from=x0 - 0.5)
+    d.dim_v(x0 - 4.5 - lo, y0, y1, ext_from=x0 - 0.5)
     d.text((x0 + x1) / 2, y0 - 3.2, "FRONT  (ROAD SIDE)", 0.75, layer="TEXT", bold=True)
     d.line((x0 + x1) / 2 - 2.5, y0 - 2.0, (x0 + x1) / 2 + 2.5, y0 - 2.0, "TEXT")
     _north(d, plan, x1 + 4.5, y1 - 2.5)
     return d
+
+
+def site_items(plan: dict, bx0: float, bx1: float, by0: float, by1: float) -> tuple[list[dict], list[str]]:
+    """1.27.7 septic tank + soak pit (or UGD connection), sump, rain-water pit and gate on the site plan.
+    Sizes are indicative (IS 2470 septic tank, 1.2 m sump / 1.0 m recharge pit); positions are found in the free yard
+    (front → rear → sides), never inside the building. What does not fit is reported, never forced."""
+    plot = plan["plot"]
+    site = plan.get("site") or {}
+    W, D = float(plot["w"]), float(plot["d"])
+    beds = sum(1 for lv in plan["levels"] for r in lv["rooms"] if r["type"] == "bedroom")
+    users = max(3, beds * 2 + 1)
+    sw, sd = (4.9, 2.5) if users <= 5 else (6.6, 3.0) if users <= 10 else (9.5, 3.3)
+    items: list[dict] = []
+    if not site.get("ugd"):
+        items.append({"kind": "septic", "w": sw, "d": sd, "label": f"SEPTIC TANK {sw * 0.3048:.1f}x{sd * 0.3048:.2f} m ({users} users)"})
+        items.append({"kind": "soak", "w": 4.0, "d": 4.0, "round": True, "label": "SOAK PIT 1.2 m dia", "alts": [(3.3, "SOAK PIT 1.0 m dia")]})
+    sump_l = int(site.get("sump_l") or (4000 if beds >= 2 else 2000))
+    if site.get("sump", True):
+        items.append({"kind": "sump", "w": 3.94, "d": 3.94, "label": f"SUMP {sump_l:g} L"})
+    if site.get("rwh", True):
+        items.append({"kind": "rwh", "w": 3.3, "d": 3.3, "round": True, "label": "RAIN WATER PIT 1.0 m dia", "alts": [(2.6, "RAIN WATER PIT 0.8 m dia")]})
+    gate_w = 10.0 if site.get("gate", True) else 0.0
+    es = plan.get("ext_stair") or {}
+    rx0 = bx1 + (float(es.get("w", 0)) if es.get("on") and es.get("side") == "right" else 0.0)
+    lx1 = bx0 - (float(es.get("w", 0)) if es.get("on") and es.get("side") == "left" else 0.0)
+    regions = [  # (x0, y0, x1, y1, axis)
+        (0.0, 0.0, W, by0, "x"),                       # front yard
+        (0.0, by1, W, D, "x"),                         # rear yard
+        (0.0, by0, lx1, by1, "y"), (rx0, by0, W, by1, "y"),
+    ]
+    cur = [gate_w + 0.8 if r[4] == "x" and r[1] == 0.0 else 0.0 for r in regions]   # keep the gate opening free
+    placed, notes = [], []
+    for it in items:
+        done = False
+        sizes = [(it["w"], it["d"], it["label"])] + [(a, a, lab) for a, lab in it.get("alts", [])]
+        for (sw_, sd_, lab_) in sizes:                       # biggest size first, then the smaller one
+            for ri, (x0, y0, x1, y1, ax) in enumerate(regions):
+                for (w, d) in ((sw_, sd_), (sd_, sw_)):
+                    m = 0.3
+                    if ax == "x":
+                        x, y = x0 + max(cur[ri], m), y0 + m
+                    else:
+                        x, y = x0 + m, y0 + max(cur[ri], m)
+                    if x + w <= x1 - m + 1e-6 and y + d <= y1 - m + 1e-6:
+                        placed.append({**it, "x": x, "y": y, "w": w, "d": d, "label": lab_})
+                        cur[ri] = (x - x0 + w + 1.0) if ax == "x" else (y - y0 + d + 1.0)
+                        done = True
+                        break
+                if done:
+                    break
+            if done:
+                break
+        if not done:
+            notes.append(f"{it['label']} does not fit in the open yard – place it under the porch / change the size (not drawn).")
+    if plan.get("site", {}).get("ugd"):
+        notes.append("Sewage: connection to the underground drainage (UGD) – no septic tank drawn.")
+    else:
+        notes.append("Septic tank + soak pit: keep ≥ 1 m from the boundary / 7.5 m from any well, confirm with the local body.")
+    return placed, notes + (["Gate 10 ft at the front."] if gate_w else [])
 
 
 def site_plan(plan: dict) -> Dwg:
@@ -563,6 +654,27 @@ def site_plan(plan: dict) -> Dwg:
     d.rect(bx0 + (bx1 - bx0) / 2 - 7, (by0 + by1) / 2 - 2.2, 14, 3.6, "BUILDING", "#ffffff")
     d.text((bx0 + bx1) / 2, (by0 + by1) / 2, "PROPOSED BUILDING", 0.9, layer="ROOMTEXT", bold=True)
     d.text((bx0 + bx1) / 2, (by0 + by1) / 2 - 1.5, f"{len(plan['levels'])} floor(s)", 0.7, layer="ROOMTEXT")
+    placed, snotes = ([], [])
+    if not plot.get("poly"):
+        placed, snotes = site_items(plan, bx0, bx1, by0, by1)
+        for it in placed:
+            fill = {"septic": "#e0f2fe", "soak": "#ecfccb", "sump": "#cffafe", "rwh": "#dbeafe"}[it["kind"]]
+            if it.get("round"):
+                d.arc(it["x"] + it["w"] / 2, it["y"] + it["d"] / 2, it["w"] / 2, 0, 360, "BUILDING")
+            else:
+                d.rect(it["x"], it["y"], it["w"], it["d"], "BUILDING", fill)
+            d.text(it["x"] + it["w"] / 2, it["y"] + it["d"] / 2 - 0.2, {"septic": "SEPTIC TANK", "soak": "SOAK PIT", "sump": "SUMP", "rwh": "RWH PIT"}[it["kind"]], 0.4, layer="ROOMTEXT", bold=True)
+        if (plan.get("site") or {}).get("gate", True):
+            d.line(0.5, 0.0, 10.5, 0.0, "SETBACK")
+            d.text(5.5, -0.9, "GATE (10 ft)", 0.5, layer="ROOMTEXT", bold=True)
+        import textwrap
+        ly = plot["d"] - 9.0
+        d.text(plot["w"] + 6, ly + 1.6, "SITE ITEMS (indicative)", 0.55, anchor="start", layer="ROOMTEXT", bold=True)
+        for t_ in [f"{it['label']}" for it in placed] + snotes:
+            for k_, ln_ in enumerate(textwrap.wrap(("- " if True else "") + t_, 46)):
+                d.text(plot["w"] + 6, ly, ln_, 0.45, anchor="start", layer="ROOMTEXT")
+                ly -= 1.0
+            ly -= 0.3
     d.rect(-3, -8, plot["w"] + 6, 5, "ROAD", "#f1f5f9")
     d.line(-3, -5.5, plot["w"] + 3, -5.5, "CENTRE")
     road = (plan.get("requirements") or {}).get("road_width_m") or sb.get("road_width_m")
@@ -765,7 +877,8 @@ def front_elevation(plan: dict) -> Dwg:
                 while xx < bcx + 4.1:
                     d.rect(xx, z0 + 0.4, 0.15, 2.7, "OUTLINE", TRIM)
                     xx += 0.7
-        d.level(x1 + 1.5, z0, f"+{z0 * FT_M:.2f} m  {lv['name'].upper()}")
+        _eg0 = ext_stair_geom(plan)
+        d.level(x1 + 1.5 + ((_eg0["w"] + 0.8) if (_eg0 and not _eg0["left"]) else 0.0), z0, f"+{z0 * FT_M:.2f} m  {lv['name'].upper()}")
     tx0, tx1, _, _ = _extent(plan["levels"][-1])
     roof = zs[-1]
     stair = next((r for r in plan["levels"][-1]["rooms"] if r["type"] == "stair"), None)
@@ -832,11 +945,25 @@ def front_elevation(plan: dict) -> Dwg:
                     zz += gap
             d.text(bx + bw_ / 2, roof + 0.5, ev["clad"].upper() + " CLADDING", 0.5, layer="DIM")
         d.text((gx0 + gx1) / 2, -6.0, f"Elevation style: {ev['name']}", 0.55)
-    d.level(tx1 + 1.5, roof, f"+{roof * FT_M:.2f} m  {'EAVE (SHEET ROOF)' if no_top_slab else 'TERRACE'}")
-    d.level(gx1 + 1.5, 0, "±0.00 m  G.L.")
-    d.dim_v(gx0 - 3.0, 0, top, f"{top * FT_M:.2f} m", ext_from=gx0 - 0.5)
+    _eg = ext_stair_geom(plan)     # 1.27.8 outside staircase seen from the front (flight rises away from the viewer)
+    ro = (_eg["w"] + 0.8) if (_eg and not _eg["left"]) else 0.0
+    lo = (_eg["w"] + 0.8) if (_eg and _eg["left"]) else 0.0
+    if _eg:
+        ex, ew, N_ = _eg["x"], _eg["w"], _eg["risers"]
+        d.rect(ex, 0, ew, roof, "OUTLINE", "#f4f4f5")
+        for k_ in range(1, N_ - 1):
+            d.line(ex, k_ * roof / (N_ - 1), ex + ew, k_ * roof / (N_ - 1), "HATCH")
+        d.rect(ex, roof - 0.45, ew, 0.45, "SLAB", TRIM)
+        for xr_ in (ex + 0.12, ex + ew - 0.12):                       # steel railing: end-on sloping rail + landing rail
+            d.line(xr_, 3.0 + roof / (N_ - 1), xr_, roof + 3.0, "WINDOW")
+            d.line(xr_, 0.0, xr_, 3.0 + roof / (N_ - 1), "WINDOW")
+        d.line(ex + 0.12, roof + 3.0, ex + ew - 0.12, roof + 3.0, "WINDOW")
+        d.text(ex + ew / 2, roof + 4.0, "EXTERNAL STAIR", 0.5, layer="DIM", bold=True)
+    d.level(tx1 + 1.5 + ro, roof, f"+{roof * FT_M:.2f} m  {'EAVE (SHEET ROOF)' if no_top_slab else 'TERRACE'}")
+    d.level(gx1 + 1.5 + ro, 0, "±0.00 m  G.L.")
+    d.dim_v(gx0 - 3.0 - lo, 0, top, f"{top * FT_M:.2f} m", ext_from=gx0 - 0.5)
     for i in range(n):
-        d.dim_v(gx0 - 1.5, zs[i], zs[i + 1], ft_in(zs[i + 1] - zs[i]))
+        d.dim_v(gx0 - 1.5 - lo, zs[i], zs[i + 1], ft_in(zs[i + 1] - zs[i]))
     d.dim_h(gx0, gx1, -2.5, ext_from=-0.2)
     d.text((gx0 + gx1) / 2, -4.6, "FRONT ELEVATION  (ROAD SIDE)", 0.85, bold=True)
     d.line((gx0 + gx1) / 2 - 6.5, -4.9, (gx0 + gx1) / 2 + 6.5, -4.9, "TEXT")
@@ -1086,6 +1213,21 @@ def sheet_set_pdf(plan: dict, project: dict, meta: dict, style: str = "paper") -
     if has_stair(plan):
         drawings += [(f"A-{n0 + 2:02d}", "Staircase Detail", stair_detail(plan))]
         n0 += 1
+    from . import addons   # 1.27.9 optional sheets
+    _extra = 0
+    if (plan.get("keyplan") or {}).get("on"):
+        drawings += [(f"A-{len(drawings) + 2:02d}", "Key Plan / Location Plan", addons.key_plan(plan))]
+        _extra += 1
+    col_res, col_q = addons.column_result(plan)
+    if col_res:
+        cdw, fdw = addons.column_dwgs(col_res, plan)
+        drawings += [(f"A-{len(drawings) + 2:02d}", "Column Position Layout", cdw), (f"A-{len(drawings) + 3:02d}", "Footing Layout", fdw),
+                     (f"A-{len(drawings) + 4:02d}", "Column & Footing Design Calculation", lambda: calc_page())]
+        _extra += 3
+    elif col_q:
+        drawings += [(f"A-{len(drawings) + 2:02d}", "Column & Footing Layout – details needed", lambda: need_page())]
+        _extra += 1
+    n0 += _extra
     sheet_list = [("A-01", "Title Sheet & Area Statement")] + [(no, t) for no, t, _ in drawings] + \
                  [(f"A-{n0 + 2:02d}", "Door & Window Schedule")]
     navy = colors.HexColor("#0F2350")
@@ -1180,6 +1322,56 @@ def sheet_set_pdf(plan: dict, project: dict, meta: dict, style: str = "paper") -
             c.line(x, y - rh, x + sum(widths), y - rh)
         return y - rh
 
+    def calc_page():
+        res = col_res
+        inp = res["inputs"]
+        c.setFont("Helvetica", 8.5)
+        c.setFillColor(colors.black)
+        c.drawString(M + 8 * mm, H - M - 19 * mm,
+                     f"Concrete M{inp['fck']}, steel Fe{inp['fy']}; safe bearing capacity {inp['sbc_kn_m2']:g} kN/m2 (as entered by the owner from the soil report); "
+                     f"seismic zone {inp['seismic_zone']}; foundation depth {inp['foundation_depth_m']:g} m.")
+        y = table(M + 8 * mm, H - M - 24 * mm, ["Col", "Size (mm)", "Main bars", "Ties", "Pu (kN)", "Nos"],
+                  [[r["mark"], f"{r['b_mm']} x {r['D_mm']}", r["bars"], r["ties"], r["Pu_kn"], r["count"]] for r in res["column_schedule"]],
+                  [14 * mm, 26 * mm, 24 * mm, 32 * mm, 18 * mm, 12 * mm], fs=8, rh=5.5 * mm)
+        y_ = table(M + 140 * mm, H - M - 24 * mm, ["Footing", "Size (m)", "Depth (mm)", "Steel (both ways)", "Column", "Nos"],
+              [[f["mark"], f"{f['B_m']} x {f['B_m']}", f["D_mm"], f["steel"], f["col"], f["count"]] for f in res["footing_schedule"]],
+              [16 * mm, 20 * mm, 20 * mm, 52 * mm, 20 * mm, 12 * mm], fs=8, rh=5.5 * mm)
+        yy = min(y, y_) - 8 * mm
+        c.setFont("Helvetica-Bold", 10)
+        c.setFillColor(navy)
+        c.drawString(M + 8 * mm, yy, "WORKED CHECKS (one column / footing of each mark; same formulas for the others)")
+        yy -= 6 * mm
+        for r in addons.calc_lines(res)[:5]:
+            if yy < M + 40 * mm:
+                break
+            c.setFont("Helvetica-Bold", 8.5)
+            c.setFillColor(colors.black)
+            c.drawString(M + 8 * mm, yy, f"{r['col']}  ({r['size']}) on footing {r['foot']}   -   {'OK' if r['ok'] else 'CHECK WITH ENGINEER'}")
+            c.setFont("Helvetica", 8)
+            for t in (f"Column: service load P = {r['P']} kN, factored Pu = 1.5P = {r['Pu']} kN; capacity 0.4 fck Ac + 0.67 fy Asc with {r['bars']} = {r['Pcap']} kN  (>= Pu).",
+                      f"Footing size: Pf = 1.1 P = {r['Pf']} kN; A required = Pf / SBC = {r['Pf']} / {inp['sbc_kn_m2']:g} = {r['A_req']} m2; provided {r['B']} x {r['B']} m, soil pressure {r['pressure']} kN/m2 (<= SBC).",
+                      f"Shear: qu = 1.5 P / B2 = {r['qu']} kN/m2, d = {r['d_mm']} mm (D = {r['D']} mm); punching {r['tp']} N/mm2 (<= {r['tp_all']}); one-way {r['t1']} N/mm2 (<= {r['t1_all']}).",
+                      f"Bending: Mu = {r['mu']} kN.m; Ast required {r['ast_r']} mm2/m, provided {r['ast_p']} mm2/m ({r['steel']})."):
+                yy -= 4.2 * mm
+                c.drawString(M + 12 * mm, yy, t.replace("²", "2")[:190])
+            yy -= 6 * mm
+        c.setFont("Helvetica-Oblique", 7.5)
+        c.setFillColor(colors.HexColor("#64748b"))
+        for i, t in enumerate(["Preliminary design for approval drawings: gravity loads only (IS 456, IS 875). Earthquake / wind effects, soil investigation and final member sizes",
+                               "are the responsibility of the licensed structural engineer, who must check and sign (signature box in the title block)."]):
+            c.drawString(M + 8 * mm, M + 10 * mm - i * 3.8 * mm, t)
+
+    def need_page():
+        c.setFont("Helvetica-Bold", 11)
+        c.setFillColor(colors.HexColor("#b91c1c"))
+        yy = H - M - 24 * mm
+        c.drawString(M + 8 * mm, yy, "This sheet cannot be made yet – these details must be entered (nothing is assumed):")
+        c.setFont("Helvetica", 10)
+        c.setFillColor(colors.black)
+        for q_ in col_q:
+            yy -= 8 * mm
+            c.drawString(M + 12 * mm, yy, ("- " + q_.replace("²", "2"))[:170])
+
     # A-01 title sheet
     frame("A-01", "Title Sheet & Area Statement", "-")
     c.setFont("Helvetica-Bold", 22)
@@ -1221,6 +1413,12 @@ def sheet_set_pdf(plan: dict, project: dict, meta: dict, style: str = "paper") -
     c.showPage()
 
     for no, title, dwg in drawings:
+        if callable(dwg):
+            frame(no, title, "-")
+            heading(title)
+            dwg()
+            c.showPage()
+            continue
         frame(no, title, "")
         heading(title)
         scale = _draw_pdf(c, dwg, *area_box, style=style)
@@ -1258,6 +1456,12 @@ def sheets_dxf(plan: dict, project: dict, meta: dict) -> bytes:
     from .stair import has_stair, stair_detail  # 1.18
     if has_stair(plan):
         dwgs.append(stair_detail(plan))
+    from . import addons
+    if (plan.get("keyplan") or {}).get("on"):
+        dwgs.append(addons.key_plan(plan))
+    _res, _q = addons.column_result(plan)
+    if _res:
+        dwgs += list(addons.column_dwgs(_res, plan))
     co = project.get("company") or {}
     return dwgs_dxf(dwgs, f"{co.get('name', '')} - {project.get('name', '')} - design v{meta.get('version', '')}")
 
@@ -1295,18 +1499,33 @@ def dwgs_dxf(dwgs: list, footer: str) -> bytes:
     return ("\r\n".join(out) + "\r\n").encode("ascii", "replace")
 
 
+def addon_keys(plan: dict) -> list[str]:
+    """1.27.9 optional sheets that are in the set (in order): key plan, column layout, footing layout, design calculation."""
+    from . import addons
+    keys = []
+    if (plan.get("keyplan") or {}).get("on"):
+        keys.append("keyplan")
+    res, _q = addons.column_result(plan)
+    if res:
+        keys += ["column", "footing", "calc"]
+    return keys
+
+
 def sheet_pages(plan: dict) -> dict:
     """1.13: preview key -> page number (1-based) in sheet_set_pdf, so each sheet can be downloaded alone."""
     from .stair import has_stair
     n = len(plan["levels"])
     k = 2 if plan.get("roof_sheets") else 0
     st = 1 if has_stair(plan) else 0
+    ak = addon_keys(plan)
     out = {"title": 1, "site": 2, **{f"plan_{i}": 3 + i for i in range(n)}, "elevation": 3 + n, "section": 4 + n,
-           "schedule": 5 + n + k + st}
+           "schedule": 5 + n + k + st + len(ak)}
     if k:
         out.update({"roof": 5 + n, "truss": 6 + n})
     if st:
         out["stair"] = 5 + n + k
+    for i, key in enumerate(ak):
+        out[key] = 5 + n + k + st + i
     return out
 
 
@@ -1336,7 +1555,14 @@ def sheet_previews(plan: dict) -> dict:
     from .stair import design as stair_design, has_stair, stair_detail  # 1.18
     if has_stair(plan):
         dw["stair"] = stair_detail(plan)
+    from . import addons
+    if (plan.get("keyplan") or {}).get("on"):
+        dw["keyplan"] = addons.key_plan(plan)
+    _res, _q = addons.column_result(plan)
+    if _res:
+        dw["column"], dw["footing"] = addons.column_dwgs(_res, plan)
     return {
+        "addon_questions": _q,
         "stair": stair_design(plan) if has_stair(plan) else None,
         "schedule": sched, "area": area_details(plan),
         "svgs": {k: to_svg(v) for k, v in dw.items()},

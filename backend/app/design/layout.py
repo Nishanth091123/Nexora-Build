@@ -1161,6 +1161,8 @@ def _generate(req: dict, _probe: bool = False) -> dict:
         "levels": out_levels, "notes": notes,
         "requirements": {**req, "levels": levels},
     }
+    if req.get("ugd"):   # 1.27.7 sewer connection instead of a septic tank on the site plan
+        plan["site"] = {"ugd": True, "sump": True, "rwh": True, "gate": True}
     if req.get("external_stair") and n == 1:   # 1.27.4: staircase outside the building (to the terrace)
         ft = sb.get("ft") or {}
         side = "right" if ft.get("right", 0) >= ft.get("left", 0) else "left"

@@ -130,6 +130,9 @@ def parse(text: str, defaults: dict | None = None) -> dict:
             understood.append(f"{d['common_count']} common toilet(s) – small, opens from the hall / passage")
         else:
             understood.append("Common toilet (small, opens from the hall / passage)")
+    if re.search(r"\bugd\b|under\s*ground\s+drain\w*|sewer\s+(?:line|connection)", t):
+        d["ugd"] = True
+        understood.append("Sewage: underground drainage (UGD) connection – no septic tank on the site plan")
     if re.search(r"(?:external|exterior|outside|outer|open)\s+(?:stair\w*|steps)|stair\w*\s+(?:outside|external|exterior)|வெளி\w*\s*(?:ஸ்டேர்|படிக்கட்டு)|veliya\s*stair", t):
         d["external_stair"] = True
         understand_ = "Staircase OUTSIDE the building (external, to the terrace) – no stair room inside"
@@ -288,7 +291,7 @@ def build_requirements(d: dict) -> dict:
         "floor_height_ft": float(d.get("floor_height_ft") or 10), "stilt": stilt,
         "staircase": (n > 1 or bool(d.get("staircase", True))) and not (d.get("external_stair") and n == 1), "levels": levels,
         "staircase_asked": bool(d.get("staircase_asked")) and not (d.get("external_stair") and n == 1),
-        "external_stair": bool(d.get("external_stair")) and n == 1,
+        "external_stair": bool(d.get("external_stair")) and n == 1, "ugd": bool(d.get("ugd")),
         "room_sizes": d.get("room_sizes") or {}, "explicit": list(dict.fromkeys(d.get("_explicit", []))),
         "assumptions": list(dict.fromkeys(d.get("_notes", []))),
     }

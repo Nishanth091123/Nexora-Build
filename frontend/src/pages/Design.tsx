@@ -245,6 +245,18 @@ export default function DesignPage() {
       catch (e: any) { toast(e.message, "err"); }
     })();
   };
+  /** 1.27.9 optional add-on drawings: key plan and column & footing layout (null = switched off) */
+  const setAddons = (a: { keyplan: any; column_addon: any }) => {
+    if (!plan) return;
+    const next = clone(plan) as any;
+    if (a.keyplan) next.keyplan = a.keyplan; else delete next.keyplan;
+    if (a.column_addon) next.column_addon = a.column_addon; else delete next.column_addon;
+    setPast((p) => [...p.slice(-40), JSON.stringify(plan)]); setFuture([]); setDirty(true); setPlan(next);
+    (async () => {
+      try { showPlan(await api<Plan>(`/api/projects/${pid}/design/recompute`, { body: { plan: next } }), "edit"); }
+      catch (e: any) { toast(e.message, "err"); }
+    })();
+  };
   const setSpecs = (specs: Record<string, { w_ft?: number; h_ft?: number; material?: string }>) => {
     if (!plan) return;
     const next = clone(plan);
@@ -728,7 +740,7 @@ export default function DesignPage() {
       ))}
 
       {tab === "sheets" && (!plan || !pid ? <Card><Empty text="Generate or open a plan first." /></Card> : (
-        <DrawingSheets pid={pid} plan={plan} saved={saved} dirty={dirty} code={currentProject?.code || "Nexora"} onSpecs={setSpecs} />
+        <DrawingSheets pid={pid} plan={plan} saved={saved} dirty={dirty} code={currentProject?.code || "Nexora"} onSpecs={setSpecs} onAddons={setAddons} />
       ))}
       {tab === "structural" && (!plan || !pid ? <Card><Empty text="Generate or open a plan first." /></Card> : (
         <StructuralPanel pid={pid} saved={saved} dirty={dirty} code={currentProject?.code || "Nexora"} />

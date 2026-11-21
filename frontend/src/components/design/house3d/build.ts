@@ -139,6 +139,15 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
   const gap = o.mode === "exploded" ? 6 : 0;
   const zOf = (li: number) => PLINTH + li * H + li * gap;
   const ov = MOD ? 2.25 : style === "contemporary" ? 1.4 : style === "traditional" ? 0.6 : 0.4;
+  // 1.27.8 staircase outside the building (plan.ext_stair, set in the site / side setback): geometry in plan feet
+  const ES = (() => {
+    const e: any = (plan as any).ext_stair;
+    if (!e || !e.on || (o.mode as string) === "structure") return null;
+    const ex = extent(levels[0].rooms);
+    const w = Number(e.w) || 3, len = Number(e.len) || 18.8, N = Math.max(8, Number(e.risers) || 20);
+    const right = e.side !== "left";
+    return { right, w, len, N, x: right ? ex.x1 + 0.05 : ex.x0 - 0.05 - w, y: ex.y0 + 2.0, top: PLINTH + levels.length * H, edgeX: right ? ex.x1 : ex.x0 };
+  })();
 
   // ---------------- plinth (exact outline of the ground floor)
   const g0 = new Grid(levels[0].rooms, 2);
@@ -149,6 +158,7 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
   const FP = furnPalette(style);
 
   let mainDoor: { op: Lv["openings"][number]; out: number } | null = null;
+  if (o.only == null || o.only === 0) externalStair();
 
   for (let li = 0; li < nShow; li++) {
     if (o.only != null && li !== o.only) continue;
@@ -787,8 +797,18 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
     const ph = MOD ? 3.3 : PARAPET;
     for (const ed of grid.edges()) {
       const inS = ed.out === -1 ? 0.25 : -0.25;  // parapet stands just inside the edge
-      wbox(ed.h, ed.s, ed.e, ed.c, 0, inS, zt, zt + ph, pm, g, "parapet");
-      wbox(ed.h, ed.s - 0.02, ed.e + 0.02, ed.c, -inS * 0.2, inS * 1.15, zt + ph, zt + ph + 0.18, copeM, g);
+      let pieces: [number, number][] = [[ed.s, ed.e]];
+      if (ES && !ed.h && Math.abs(ed.c - ES.edgeX) < 0.6 && levels.length - 1 === levels.indexOf(lv)) {  // gap in the parapet where the outside stair lands
+        const g0_ = ES.y + ES.len - 3.0 - 0.2, g1_ = ES.y + ES.len + 0.1;
+        pieces = [];
+        if (g0_ > ed.s) pieces.push([ed.s, Math.min(ed.e, g0_)]);
+        if (g1_ < ed.e) pieces.push([Math.max(ed.s, g1_), ed.e]);
+      }
+      for (const [ps, pe] of pieces) {
+        if (pe - ps < 0.05) continue;
+        wbox(ed.h, ps, pe, ed.c, 0, inS, zt, zt + ph, pm, g, "parapet");
+        wbox(ed.h, ps - 0.02, pe + 0.02, ed.c, -inS * 0.2, inS * 1.15, zt + ph, zt + ph + 0.18, copeM, g);
+      }
     }
     const st = lv.rooms.find((r) => r.type === "stair");
     if (st && levels.length > 1) {  // head room
@@ -887,6 +907,36 @@ export function build(plan: Plan, fin: Finishes, o: BuildOpts): Built {
     for (let k = 0; k < steps - half; k++) ub(uL - (k + 1) * run, Lv / 2, uL - k * run, Lv - 0.1, z + (half + k) * rh, z + (half + k + 1) * rh, sm, "step");
     rail(0.1 + vHalf, 0.5, uL, z, z + half * rh);
     rail(Lv / 2 + 0.05, uL, uL - (steps - half) * run, z + half * rh, z + H);
+  }
+
+  /** 1.27.8 RCC staircase outside the building: one straight flight along the depth, 3 ft landing at the terrace, steel railing both sides */
+  function externalStair() {
+    if (!ES) return;
+    const g = new THREE.Group(); g.name = "External staircase"; root.add(g);
+    const sm = style === "basic" ? std("#cfcac2") : std("#e1dbd0", { roughness: 0.5 });
+    const railM = std("#2a2c30", { metalness: 0.6, roughness: 0.35 }, "none");
+    const rh = ES.top / ES.N, run = (ES.len - 3.0) / (ES.N - 1);
+    for (let k = 0; k < ES.N - 1; k++) box(ES.x, ES.y + k * run, 0, ES.x + ES.w, ES.y + (k + 1) * run, (k + 1) * rh, sm, g, "ext step");
+    const ly0 = ES.y + ES.len - 3.0;
+    box(ES.x, ly0, ES.top - 0.45, ES.x + ES.w, ES.y + ES.len, ES.top, sm, g, "ext landing");
+    for (const cx of [ES.x + 0.1, ES.x + ES.w - 0.85]) box(cx, ES.y + ES.len - 0.85, 0, cx + 0.75, ES.y + ES.len - 0.1, ES.top - 0.45, std(fin.ext), g, "ext column");
+    box(ES.x, ly0, 0, ES.x + ES.w, ly0 + 0.1, ES.top - 0.45, std(fin.ext), g, "ext landing wall");
+    for (const xr of [ES.x + 0.12, ES.x + ES.w - 0.12]) {
+      const ya = ES.y, yb = ly0, za = rh, zb = ES.top;   // sloping handrail 3 ft above the nosing line
+      const L = Math.hypot(yb - ya, zb - za);
+      const m = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, L), railM);
+      m.position.set(b.x + xr, (za + zb) / 2 + 3, -(b.y + (ya + yb) / 2));
+      m.lookAt(new THREE.Vector3(b.x + xr, zb + 3, -(b.y + yb)));
+      g.add(m);
+      for (let k = 0; k < ES.N - 1; k += 2) {   // balusters
+        const yy = ES.y + (k + 0.5) * run, zz = (k + 1) * rh;
+        box(xr - 0.04, yy - 0.04, zz, xr + 0.04, yy + 0.04, zz + 3, railM, g, "baluster");
+      }
+      box(xr - 0.06, ly0, ES.top, xr + 0.06, ES.y + ES.len, ES.top + 0.12, railM, g);   // landing rail (top)
+      const hl = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 3.0), railM);
+      hl.position.set(b.x + xr, ES.top + 3, -(b.y + ly0 + 1.5)); hl.lookAt(new THREE.Vector3(b.x + xr, ES.top + 3, -(b.y + ly0 + 3.0)));
+      g.add(hl);
+    }
   }
 
   function ramp(r: Room, g: THREE.Object3D) {

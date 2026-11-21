@@ -118,6 +118,15 @@ def clean_plan(plan: dict) -> dict:
         plan["elev"] = _ev
     else:
         plan.pop("elev", None)
+    # 1.27.7 site items on the site plan (septic / UGD, sump, rain-water pit, gate)
+    _st = plan.get("site")
+    if isinstance(_st, dict):
+        plan["site"] = {k: bool(_st.get(k, True)) for k in ("sump", "rwh", "gate")} | {"ugd": bool(_st.get("ugd"))}
+        if _st.get("sump_l"):
+            try:
+                plan["site"]["sump_l"] = max(500, min(20000, int(_st["sump_l"])))
+            except (TypeError, ValueError):
+                pass
     # 1.27.4 external staircase (known values only)
     _es = plan.get("ext_stair")
     if isinstance(_es, dict) and _es.get("on"):
@@ -129,6 +138,14 @@ def clean_plan(plan: dict) -> dict:
             plan.pop("ext_stair", None)
     else:
         plan.pop("ext_stair", None)
+    # 1.27.9 optional add-on drawings (key plan, column & footing layout) – known values only
+    from .addons import clean_column, clean_keyplan
+    for _k, _fn in (("keyplan", clean_keyplan), ("column_addon", clean_column)):
+        _v = _fn(plan.get(_k))
+        if _v:
+            plan[_k] = _v
+        else:
+            plan.pop(_k, None)
     # 1.17 roofing sheets (full roof / on terrace / head room / part of a floor)
     from .roof import clean as clean_roof
     if "roof_sheets" in plan:

@@ -20,6 +20,8 @@ export type Plan = {
   compass: { up: [number, number]; right: [number, number] }; setbacks: Setbacks;
   building: { x: number; y: number; w: number; d: number }; floor_height_ft: number; levels: Level[];
   roof_sheets?: any[];
+  ext_stair?: { on: boolean; side: "left" | "right"; w: number; floors: number; risers: number; len: number };
+  keyplan?: any; column_addon?: any;
   notes: string[]; requirements: any; warnings: string[]; opening_specs?: Record<string, { w_ft?: number; h_ft?: number; material?: string }>; finishes?: Record<string, string>;
   summary: { levels: number; builtup_sqft: number; carpet_sqft: number; bedrooms: number; toilets: number; kitchens: number };
 };

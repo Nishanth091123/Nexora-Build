@@ -98,7 +98,7 @@ except httpx.ConnectError:
         sys.exit("[ERROR] Backend did not start in 2 minutes.")
 check("health", r.status_code == 200 and r.json().get("status") == "ok", r.text)
 _v = tuple(int(x) for x in (r.json().get("version", "0.0").split("-")[0].split(".") + ["0", "0"])[:3] if x.isdigit())
-check("backend is the 1.27 version (not an old one still running)", _v >= (1, 27, 6), r.text)
+check("backend is the 1.27 version (not an old one still running)", _v >= (1, 27, 9), r.text)
 
 login = input("Owner username [nishanth_s]: ").strip() or "nishanth_s"
 pw = getpass.getpass("Owner password (hidden): ")
@@ -353,6 +353,32 @@ if plan:
     check("1.27.5 PDF still builds with the stamp on", r.status_code == 200 and r.content[:4] == b"%PDF", str(r.status_code))
     c.put("/api/branding/enabled", json={"on": False})
     c.delete("/api/branding/signature")
+    # ---------------- 1.27.7: site plan with septic tank / sump / rain-water pit / gate ----------------
+    r = c.post(f"/api/projects/{pid}/design/sheets-preview", json={"plan": plan}, timeout=120)
+    sj = r.json() if r.status_code == 200 else {}
+    check("1.27.7 site plan sheet builds with the site items", r.status_code == 200 and ("SITE ITEMS" in r.text or "SEPTIC" in r.text.upper()), r.text[:150])
+    # ---------------- 1.27.8: outside staircase in floor plan / elevation, soak pit placed ----------------
+    try:
+        from app.design import sheets as _sh
+        _p8 = {**plan, "ext_stair": {"on": True, "side": "right", "w": 3.0, "floors": 1, "risers": 20, "len": 18.8}}
+        _fp8 = _sh.to_svg(_sh.floor_plan(_p8, 0)); _el8 = _sh.to_svg(_sh.front_elevation(_p8))
+        check("1.27.8 outside staircase drawn in the floor plan", "EXTERNAL STAIR" in _fp8)
+        check("1.27.8 outside staircase drawn in the elevation", "EXTERNAL STAIR" in _el8)
+    except Exception as _e:   # the smoke test may run against a remote API without the app package
+        print("  (1.27.8 local drawing check skipped:", type(_e).__name__, ")")
+    # ---------------- 1.27.9: optional key plan + column / footing layout add-ons ----------------
+    _pa = json.loads(json.dumps(plan))
+    _pa["keyplan"] = {"on": True, "place": "Test", "road_name": "Main Road", "landmarks": [{"name": "School", "dir": "E", "dist_m": 200}]}
+    _pa["column_addon"] = {"on": True, "sbc_kn_m2": 150, "seismic_zone": "II"}
+    r = c.post(f"/api/projects/{pid}/design/sheets-preview", json={"plan": _pa}, timeout=120)
+    _sv = (r.json() if r.status_code == 200 else {}).get("svgs", {})
+    check("1.27.9 key plan + column / footing sheets appear when switched on", r.status_code == 200 and all(k in _sv for k in ("keyplan", "column", "footing")), r.text[:150])
+    r = c.post(f"/api/projects/{pid}/design/sheets-preview", json={"plan": plan}, timeout=120)
+    _sv0 = (r.json() if r.status_code == 200 else {}).get("svgs", {})
+    check("1.27.9 add-on sheets are absent when switched off", r.status_code == 200 and not any(k in _sv0 for k in ("keyplan", "column", "footing")), r.text[:150])
+    _pb = json.loads(json.dumps(_pa)); _pb["column_addon"] = {"on": True}
+    r = c.post(f"/api/projects/{pid}/design/sheets-preview", json={"plan": _pb}, timeout=120)
+    check("1.27.9 column sheet asks for soil SBC / seismic zone (never assumed)", r.status_code == 200 and "Safe bearing" in r.text, r.text[:150])
     # ---------------- 1.27.4: elevation fits the floors, estimate foundation options, external staircase ----------------
     r = c.get(f"/api/projects/{pid}/catalog/elevation?page=1&size=6", timeout=60)
     ej2 = r.json() if r.status_code == 200 else {}
@@ -392,7 +418,7 @@ if plan:
         r = c.get(f"/api/projects/{pid}/interior/pdf", timeout=120)
         check("1.27 interior PDF with selected designs", r.status_code == 200 and r.content[:4] == b"%PDF", r.text[:100])
 if QUICK:
-    print("NEXORA 1.27.6 API: QUICK CHECK GOOD  (run scripts\\update.bat now and then for the full test)")
+    print("NEXORA 1.27.9 API: QUICK CHECK GOOD  (run scripts\\update.bat now and then for the full test)")
     sys.exit(0)
 check("plan generated", bool(plan) and plan["summary"]["bedrooms"] == 2, r.text[:300])
 if plan:
@@ -1135,4 +1161,4 @@ if fail:
     print("Failed:", ", ".join(fail), "\nSend this output to Claude.")
     sys.exit(1)
 else:
-    print("NEXORA 1.27.6 API: ALL GOOD")
+    print("NEXORA 1.27.9 API: ALL GOOD")

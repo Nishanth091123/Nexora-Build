@@ -227,6 +227,25 @@ export default function RenderedPlan({ plan, level, style, floorLook, plants, fl
     </g>;
   });
 
+  // ---- 1.27.8 staircase outside the building (ground floor only): flight rising towards the rear, landing at the terrace
+  const extStair = (() => {
+    const e: any = (plan as any).ext_stair;
+    if (!e || !e.on || level !== 0) return null;
+    const xs = lv.rooms.flatMap((r) => [r.x, r.x + r.w]), ys = lv.rooms.map((r) => r.y);
+    const sw = Number(e.w) || 3, sl = Number(e.len) || 18.8, N = Math.max(8, Number(e.risers) || 20);
+    const sx = e.side === "left" ? Math.min(...xs) - 0.05 - sw : Math.max(...xs) + 0.05, sy = Math.min(...ys) + 2.0;
+    const run = (sl - 3.0) / (N - 1), cx = sx + sw / 2;
+    return <g key="extstair">
+      <rect x={bx(sx)} y={by(sy + sl)} width={sw} height={sl} fill="#e6e0d5" stroke="rgba(0,0,0,0.5)" strokeWidth="0.1" />
+      {Array.from({ length: N - 1 }, (_, k) => <line key={k} x1={bx(sx)} x2={bx(sx + sw)} y1={by(sy + k * run)} y2={by(sy + k * run)} stroke="rgba(0,0,0,0.3)" strokeWidth="0.05" />)}
+      <rect x={bx(sx)} y={by(sy + sl)} width={sw} height={3.0} fill="#ebe6dc" stroke="rgba(0,0,0,0.5)" strokeWidth="0.1" />
+      <line x1={bx(sx + 0.12)} x2={bx(sx + 0.12)} y1={by(sy)} y2={by(sy + sl)} stroke="#2a2c30" strokeWidth="0.1" />
+      <line x1={bx(sx + sw - 0.12)} x2={bx(sx + sw - 0.12)} y1={by(sy)} y2={by(sy + sl)} stroke="#2a2c30" strokeWidth="0.1" />
+      <polyline points={`${bx(cx)},${by(sy + 0.6)} ${bx(cx)},${by(sy + sl - 3.4)}`} fill="none" stroke="#b45309" strokeWidth="0.12" markerEnd={`url(#${uid}arr)`} />
+      <text x={bx(cx)} y={by(sy - 0.7)} fontSize="0.72" fontWeight="800" textAnchor="middle" fill="#7c2d12" stroke="#ffffff" strokeWidth="0.18" paintOrder="stroke">EXTERNAL STAIR UP</text>
+    </g>;
+  })();
+
   // ---- outside (ground floor): lawn, driveway, path, compound wall + gate, trees & plants, garden lights
   const outside = () => {
     const g = site.gate, park = site.park, door = site.door;
@@ -307,6 +326,7 @@ export default function RenderedPlan({ plan, level, style, floorLook, plants, fl
       {/* contact shadows beside the walls */}
       <g clipPath={`url(#${uid}clip)`}><g filter={`url(#${uid}ao)`} opacity="0.4">{solid.map((w, i) => <rect key={i} {...wallBox(w, (WALL_T[w.kind] ?? 0.5) + 1.3, 0.4)} fill="#000" />)}</g></g>
       {stairs}
+      {extStair}
       {furn("flat")}
       <g filter={`url(#${uid}sh)`}>{furn("std")}</g>
       {furn("top")}

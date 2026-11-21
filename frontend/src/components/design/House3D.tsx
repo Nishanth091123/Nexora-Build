@@ -204,7 +204,7 @@ export default function House3D({ plan, finishes, onFinishes, pid, designId }: {
   const smooth = useRef({ x: 0, y: 0, h: 0, yaw: 0, pitch: 0 });
 
   // geometry key: the camera is reset only when the SHAPE of the plan changes (not on colour changes)
-  const planKey = useMemo(() => JSON.stringify({ l: plan.levels.map((l) => [l.rooms, l.openings, l.walls]), b: plan.building, p: plan.plot, h: plan.floor_height_ft, rs: (plan as any).roof_sheets, st: (plan as any).stair }), [plan]);
+  const planKey = useMemo(() => JSON.stringify({ l: plan.levels.map((l) => [l.rooms, l.openings, l.walls]), b: plan.building, p: plan.plot, h: plan.floor_height_ft, rs: (plan as any).roof_sheets, st: (plan as any).stair, es: (plan as any).ext_stair }), [plan]);
   const planRef = useRef(plan); planRef.current = plan;
   const lightRef = useRef(light); lightRef.current = light;
   const centre = useMemo(() => {
